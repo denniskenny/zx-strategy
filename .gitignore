@@ -1,0 +1,18 @@
+zxmap
+zxmap.tap
+zxmap_CODE.bin
+zxmap_data_user.bin
+zxmap_code.tap
+tests/fbprobe
+tests/fbprobe.tap
+tests/fbprobe_CODE.bin
+tests/fbprobe_data_user.bin
+tests/fbprobe_code.tap
+*.o
+*.map
+.DS_Store
+
+# generated music modules (built from assets/music/*.txt)
+assets/music/*_linkable.asm
+assets/music/lowlands.asm
+tools/__pycache__/

@@ -1,0 +1,217 @@
+---
+name: zesarux-test
+description: Launch ZEsarUX headless, inspect screen and variables, and simulate input via ZRCP for the ZX Map project. Use when testing, profiling, debugging rendering, or checking screen output.
+when_to_use: "test in emulator" or "check the screen" or "inspect attributes" or "profile the frame" or "screenshot"
+allowed-tools: Bash Read Write Edit
+effort: high
+---
+
+# ZEsarUX Testing & Screen Inspection — ZX Map
+
+ZEsarUX with ZRCP (remote control protocol) is used for automated inspection of the built `.tap`.
+
+## Environment
+
+- **ZEsarUX binary**: `/usr/local/bin/zesarux` — a symlink into the build tree at `~/projects/zesarux/src/zesarux`, currently **13.1-SN** (post-13.0 `main`)
+- **48K ROM**: `~/projects/zesarux/src/48.rom`
+- **ZRCP port**: TCP 10000 (localhost)
+- **Tap**: `/Users/Kennyd/projects/zx_map/zxmap.tap`
+
+To update the emulator (no install step needed — the symlink points at the build):
+
+```bash
+cp ~/projects/zesarux/src/zesarux /tmp/zesarux-backup   # keep a known-good copy
+git -C ~/projects/zesarux pull --ff-only
+cd ~/projects/zesarux/src && ./configure && make -j$(sysctl -n hw.ncpu)
+```
+
+On macOS it configures for cocoa + coreaudio with ZRCP and contended memory enabled; the `aalib.h`/`caca.h` errors in `config.log` are expected (optional drivers).
+
+**Floating bus fidelity improved noticeably in 13.1**: the demo syncs at ~25 fps where 13.0 managed roughly 1 fps. It is still slower than real hardware, so **Fuse (`make run`) remains the reference for visual/timing checks**.
+
+## 1. Launching headless
+
+```bash
+zesarux --vo null --ao null --enable-remoteprotocol --machine 48k \
+  --noconfigfile --quickexit \
+  --romfile ~/projects/zesarux/src/48.rom \
+  /Users/Kennyd/projects/zx_map/zxmap.tap &
+```
+
+Use **absolute paths**. Wait **6 seconds** before connecting. Add `--realvideo` for accurate per-scanline ULA emulation. Clean up with `pkill -f zesarux`.
+
+## 2. ZRCP connection
+
+```python
+import socket
+
+def connect():
+    s = socket.socket(); s.settimeout(20); s.connect(('localhost', 10000))
+    b = b''
+    while b'command>' not in b: b += s.recv(4096)
+    return s
+
+def cmd(s, c):
+    s.sendall((c + '\n').encode()); r = b''
+    while b'command>' not in r: r += s.recv(4096)
+    t = r.decode('latin-1')
+    return t[:t.rfind('command>')].strip()
+
+def rd(s, addr_decimal, n):
+    x = cmd(s, f'read-memory {addr_decimal} {n}')
+    x = x.replace(' ', '').replace('\n', '').replace('\r', '')
+    return bytes.fromhex(x[:n * 2])
+```
+
+After connecting, `smartload /abs/path/zxmap.tap` then wait **8–10 seconds** for the tape to autoload.
+
+### Key commands
+
+| Command | Purpose |
+|---------|---------|
+| `get-registers` | Dump Z80 registers |
+| `get-tstates-partial` / `reset-tstates-partial` | T-state profiling |
+| `read-memory <dec addr> <dec len>` | Read memory as hex |
+| `write-memory <dec addr> <dec byte>...` | Write bytes |
+| `hexdump <hex addr> <dec len>` | Hex + ASCII dump |
+| `set-breakpoint <idx> PC=<addr>h` / `enable-breakpoints` / `run` | Breakpoints |
+| `set-ui-io-ports <18 hex chars>` | Keyboard/joystick state |
+| `smartload <path>` | Load a .tap |
+| `save-screen <path>` | Save a .scr |
+
+`read-memory`/`write-memory` use **decimal**; `hexdump` uses a **hex** address with a decimal length.
+
+## 3. Symbols
+
+Build with a map file, then look up addresses (hex → decimal for ZRCP):
+
+```bash
+make map                          # = make clean && make USER_CFLAGS="-m"
+grep -E '^_(vsync_mode|frame|bar_col|sync_on|is_128k)\b' zxmap.map
+```
+
+Useful checks:
+- `_vsync_mode` → 0 HALT, 1 floating bus 0x40FF, 2 floating bus 0x0FFD
+- `_frame` (uint16) → sample twice a second apart to estimate frame rate
+
+## 4. Screen memory
+
+- **Pixels**: 0x4000–0x57FF → `read-memory 16384 6144`
+- **Attributes**: 0x5800–0x5AFF → `read-memory 22528 768`
+
+Address for column `col` (0-31) and pixel row `y` (0-191):
+```
+addr = 0x4000 | ((y >> 6) << 11) | ((y & 7) << 8) | (((y >> 3) & 7) << 5) | col
+```
+
+Attribute byte: bit7 flash, bit6 bright, bits5-3 paper, bits2-0 ink.
+Colours: 0 Black 1 Blue 2 Red 3 Magenta 4 Green 5 Cyan 6 Yellow 7 White.
+
+Expected in this app: row 0 = 0x45, rows 2-7 = 0x47, rows 9-17 = 0x46, row 22 = 0x03 (the sync marker), everything else 0x07.
+
+### Render to PNG
+
+```python
+from PIL import Image
+PAL = [(0,0,0),(0,0,0xCD),(0xCD,0,0),(0xCD,0,0xCD),(0,0xCD,0),(0,0xCD,0xCD),(0xCD,0xCD,0),(0xCD,0xCD,0xCD),
+       (0,0,0),(0,0,0xFF),(0xFF,0,0),(0xFF,0,0xFF),(0,0xFF,0),(0,0xFF,0xFF),(0xFF,0xFF,0),(0xFF,0xFF,0xFF)]
+
+def render(pix, attrs, path):
+    img = Image.new('RGB', (256, 192))
+    for py in range(192):
+        t, cr, pr = py >> 6, (py >> 3) & 7, py & 7
+        for col in range(32):
+            byte = pix[(t << 11) | (pr << 8) | (cr << 5) | col]
+            attr = attrs[(py >> 3) * 32 + col]
+            ink, paper = attr & 7, (attr >> 3) & 7
+            if attr & 0x40: ink += 8; paper += 8
+            for bit in range(8):
+                img.putpixel((col*8+bit, py), PAL[ink] if byte & (0x80 >> bit) else PAL[paper])
+    img.save(path)
+```
+
+(`pip3 install pillow` if PIL is missing.)
+
+## 5. Simulating input
+
+Prefer Kempston — `set-ui-io-ports` takes 8 keyboard half-rows (`ff` = nothing pressed) plus one Kempston byte (active-high: bit0 right, bit1 left, bit2 down, bit3 up, bit4 fire1, bit5 fire2):
+
+```
+set-ui-io-ports ffffffffffffffff01    # right → speed up the bar
+set-ui-io-ports ffffffffffffffff10    # fire1 → toggle sync
+set-ui-io-ports ffffffffffffffff20    # fire2 → reset the frame counter
+set-ui-io-ports ffffffffffffffff00    # release
+```
+
+`demo_run()` acts on *edges* of a combined keyboard+Kempston action byte, so always release between presses. Kempston is only polled when `has_kempston` is set by `hw_detect()`.
+
+Keyboard equivalents (half-rows, active low): O/P speed on `0xDFFE`, S sync on `0xFDFE` bit 1, G graphic on `0xFDFE` bit 4, R reset on `0xFBFE` bit 3, M music on `0x7FFE` bit 2. Nothing is bound to the CAPS SHIFT row.
+
+The byte order for `set-ui-io-ports` is `0xFEFE, 0xFDFE, 0xFBFE, 0xF7FE, 0xEFFE, 0xDFFE, 0xBFFE, 0x7FFE` then the joystick; each row uses only bits 0-4. So holding G is `set-ui-io-ports ffefffffffffffff00`.
+
+### Phantom keypresses = a Kempston false positive
+
+If the app appears to press its own keys (sync toggling, counters resetting with no input), check `has_kempston` first. With no joystick configured, port 0x1F is unattached and answers from the floating bus; a detector that accepts "any zero read" as proof of an interface will latch on and then feed random directions into `scan_input()`.
+
+`hw_detect()` therefore requires **all 16 samples** of `in a,(0x1F) & 0x1F` to be zero. After that fix, ZEsarUX reports `has_kempston = 0` and the demo runs for minutes with zero spurious actions.
+
+The demo also debounces: `demo_run()` needs an action bit in two consecutive frames before acting, and `wait_key()` samples once per frame with the same two-sample rule. Sampling once per frame matters — hammering the ULA port in a tight loop invites bus noise.
+
+## 6. Profiling
+
+`tools/profile_zrcp.py` breakpoints a list of symbols and measures T-states between them:
+
+```bash
+make map
+python3 tools/profile_zrcp.py --frames 5 --mapfile zxmap.map
+```
+
+Edit `FRAME_START` (default `_vsync_wait`) and `WAYPOINTS` at the top of the script to match the frame loop you're profiling. Options: `--frames`, `--tap`, `--settle`, `--motion HH` (held Kempston byte), `--screenshot PATH`.
+
+Audio (`*_play()` from `include/music.h`) cannot be verified here — ZEsarUX runs with `--ao null`. Use Fuse.
+
+## 7. Floating bus probe
+
+```bash
+make probe
+# load tests/fbprobe.tap, wait ~12s, then:
+#   read-memory 61440 256     → 256-entry histogram of bytes seen on port 0x40FF
+```
+
+Only 0xFF non-zero means no floating bus support; attribute values present means the bus works.
+
+### ZX0 decompression harness
+
+```bash
+make dzx0check
+# load tests/dzx0check.tap, wait ~12s, then:
+#   read-memory 61440 32      → 0xF000 = 0x5A on success, byte count, first 16 bytes
+```
+
+Compare those bytes against the host reference produced by `z88dk-dzx0`. A magic
+byte other than 0x5A means the decompressor crashed — usually a ZX0 v1/v2
+format mismatch (see `.claude/skills/compile-scr`).
+
+### Verifying a blitted graphic
+
+Because the Great Old One is blitted back to the position it was cropped from,
+the screen bytes must equal the source `.scr` exactly:
+
+```python
+def off(col, y):
+    return ((y >> 6) << 11) | ((y & 7) << 8) | (((y >> 3) & 7) << 5) | col
+
+src = open('assets/goo.scr', 'rb').read()[:6144]
+pix = read_bytes(s, 16384, 6144)
+same = sum(pix[off(c, y)] == src[off(c, y)]
+           for y in range(11, 168) for c in range(3, 27))
+# expect 3768/3768 while the graphic is on screen
+```
+
+## 8. Diagnosing common issues
+
+- **`_frame` never advances**: hung in `vsync_wait()` — see the `floating-bus-vsync` skill.
+- **PC stuck at 0x0038**: the ROM interrupt handler; expected while the program spins with interrupts enabled.
+- **Blank screen after smartload**: the tape hasn't finished loading; wait 10+ s and check `get-registers` (PC < 0x8000 means still in ROM).
+- **Screen looks right but the frame rate is bad**: verify in Fuse before optimising — ZEsarUX's floating bus emulation is sparser than real hardware, so `vsync_wait()` takes longer to lock (much improved in 13.1, but still not hardware-accurate).
+- **The app presses its own keys**: see the Kempston false positive above.

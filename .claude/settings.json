@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make)",
+      "Bash(make run:*)",
+      "Bash(make clean:*)",
+      "Bash(make assets:*)",
+      "Bash(make map:*)",
+      "Bash(make probe:*)",
+      "Bash(pkill -f Fuse)",
+      "Bash(pkill -f zesarux)",
+      "Bash(python3)",
+      "Read(//Users/Kennyd/z88dk/**)",
+      "Read(//Applications/Fuse.app/Contents/MacOS/**)",
+      "Read(//Users/Kennyd/projects/zx_point/**)"
+    ]
+  }
+}

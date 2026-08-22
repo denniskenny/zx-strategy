@@ -1,0 +1,60 @@
+================================================================================
+ Lowlands Away — Tritone arrangement (Level Summary screen)
+================================================================================
+Haunting sea shanty about a drowned sailor's ghost.  Source ABC: design.md
+"Level Completion: Lowlands Away".  Chords: Cm | Cm | Gm | Bb | F | Cm | Cm,
+looped.
+
+KEY / ARRANGEMENT
+  * Key: C dorian (Cdor) => E is E-flat, B is B-flat, A is natural.
+  * Meter: cut time (C|), L=1/8, so each bar = 8 eighth-notes -> 8 rows.
+  * Octaves (ABC -> pitch):  C, = octave 3,  C = octave 4,  c = octave 5.
+    Bass in octave 3, Harmony in octave 4, Lead in octaves 4-5.
+  * Notes ring until the next attack (Tritone sustain); this realises the
+    tied/held notes in the ABC without any extra markup.
+  * The 7-bar A-section is looped for the summary screen; no drums (haunting).
+
+TEMPO
+  Q:1/4 = 100 BPM.  Cut time, 8 rows/bar (1 row = 1/8 note).  One eighth at
+  100 BPM quarter = 0.3 s = 15 frames.
+rows  = 8
+speed = 15
+
+================================================================================
+ PER-BAR ATTACK TABLES        (row : note[@pulse-width][(duration in rows)])
+================================================================================
+
+BAR 1   c4 G4  | C,4 G,4
+  CH1 Lead :  0:C5(4)   4:G4(4)
+  CH2 Harm :  0:Eb4(4)  4:Eb4(4)
+  CH3 Bass :  0:C3(4)   4:G3(4)
+
+BAR 2   cded c2B2 | C,4 G,4
+  CH1 Lead :  0:C5(1)  1:D5(1)  2:Eb5(1)  3:D5(1)  4:C5(2)  6:Bb4(2)
+  CH2 Harm :  0:Eb4(2)  2:G4(2)  4:Eb4(2)  6:G4(2)
+  CH3 Bass :  0:C3(4)   4:G3(4)
+
+BAR 3   G6 F2 | G,4 D,4
+  CH1 Lead :  0:G4(6)   6:F4(2)
+  CH2 Harm :  0:D4(6)   6:D4(2)
+  CH3 Bass :  0:G3(4)   4:D3(4)
+
+BAR 4   B3c d2B2 | B,4 F,4
+  CH1 Lead :  0:Bb4(3)  3:C5(1)  4:D5(2)  6:Bb4(2)
+  CH2 Harm :  0:F4(3)   3:G4(1)  4:Bb4(2) 6:F4(2)
+  CH3 Bass :  0:Bb3(4)  4:F3(4)
+
+BAR 5   c2B2 F2BA | F,4 C,4
+  CH1 Lead :  0:C5(2)   2:Bb4(2) 4:F4(2)  6:Bb4(1)  7:A4(1)
+  CH2 Harm :  0:A4(2)   2:G4(2)  4:D4(2)  6:D4(1)   7:C4(1)
+  CH3 Bass :  0:F3(4)   4:C3(4)
+
+BAR 6   G4 F2E2 | C,4 G,4
+  CH1 Lead :  0:G4(4)   4:F4(2)  6:Eb4(2)
+  CH2 Harm :  0:Eb4(4)  4:D4(2)  6:C4(2)
+  CH3 Bass :  0:C3(4)   4:G3(4)
+
+BAR 7   C6 | C,8       (final Cm — rings, then loops to BAR 1)
+  CH1 Lead :  0:C4(8)
+  CH2 Harm :  0:Eb4(8)
+  CH3 Bass :  0:C3(8)
