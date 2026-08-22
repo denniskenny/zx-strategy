@@ -15,7 +15,7 @@ ZEsarUX with ZRCP (remote control protocol) is used for automated inspection of 
 - **ZEsarUX binary**: `/usr/local/bin/zesarux` — a symlink into the build tree at `~/projects/zesarux/src/zesarux`, currently **13.1-SN** (post-13.0 `main`)
 - **48K ROM**: `~/projects/zesarux/src/48.rom`
 - **ZRCP port**: TCP 10000 (localhost)
-- **Tap**: `/Users/Kennyd/projects/zx_map/zxmap.tap`
+- **Tap**: `/Users/Kennyd/projects/zx-strategy/zxmap.tap`
 
 To update the emulator (no install step needed — the symlink points at the build):
 
@@ -35,7 +35,7 @@ On macOS it configures for cocoa + coreaudio with ZRCP and contended memory enab
 zesarux --vo null --ao null --enable-remoteprotocol --machine 48k \
   --noconfigfile --quickexit \
   --romfile ~/projects/zesarux/src/48.rom \
-  /Users/Kennyd/projects/zx_map/zxmap.tap &
+  /Users/Kennyd/projects/zx-strategy/zxmap.tap &
 ```
 
 Use **absolute paths**. Wait **6 seconds** before connecting. Add `--realvideo` for accurate per-scanline ULA emulation. Clean up with `pkill -f zesarux`.
