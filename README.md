@@ -1,4 +1,4 @@
-# ZX Map
+# ZX Strategy
 
 A ZX Spectrum 48K/128K application written in C (z88dk + SDCC), built around a
 **floating bus vsync** so screen updates happen while the beam is off the
@@ -22,10 +22,10 @@ switched off, and a Tritone tune on the M key.
 ## Build & run
 
 ```bash
-make            # → zxmap.tap (builds assets + music as needed)
+make            # → zxstrategy.tap (builds assets + music as needed)
 make assets     # generated headers + music modules only
 make run        # build + launch Fuse (48K)
-make map        # rebuild with zxmap.map symbol map (for ZRCP debugging)
+make map        # rebuild with zxstrategy.map symbol map (for ZRCP debugging)
 make probe      # build tests/fbprobe.tap, the floating bus histogram probe
 make dzx0check  # build tests/dzx0check.tap, the ZX0 decompression harness
 make clean

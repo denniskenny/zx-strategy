@@ -192,8 +192,8 @@ TSTATES_PER_FRAME = 69888
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--frames", type=int, default=3)
-    parser.add_argument("--mapfile", default="zxmap.map")
-    parser.add_argument("--tap", default="zxmap.tap")
+    parser.add_argument("--mapfile", default="zxstrategy.map")
+    parser.add_argument("--tap", default="zxstrategy.tap")
     parser.add_argument("--settle", type=float, default=8.0)
     parser.add_argument("--motion", default=None,
                         help="Kempston joystick hex byte (R=01 L=02 D=04 U=08 Fire=10)")

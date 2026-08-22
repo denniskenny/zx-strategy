@@ -30,7 +30,7 @@ assets/music/NAME.asm                      (standalone Beepola-style Tritone)
    │  tools/gen_tritone_module.py --name NAME  (make rule)
    ▼
 assets/music/NAME_linkable.asm             (PUBLIC _NAME_play + song DATA only)
-   │  zcc links it + the ONE shared engine into zxmap.tap
+   │  zcc links it + the ONE shared engine into zxstrategy.tap
    ▼
 call  NAME_play()  from C on a static screen
 ```

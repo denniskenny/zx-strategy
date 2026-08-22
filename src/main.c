@@ -1,5 +1,5 @@
 /*
- * main.c — Entry point for ZX Map
+ * main.c — Entry point for ZX Strategy
  *
  * Detects hardware and the floating bus technique BEFORE locking
  * paging, then runs the demo loop.

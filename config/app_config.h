@@ -2,7 +2,7 @@
 #define _APP_CONFIG_H_
 
 /* ================================================================== */
-/* app_config.h — Configurable constants for ZX Map                   */
+/* app_config.h — Configurable constants for ZX Strategy                   */
 /* ================================================================== */
 
 #include <stdint.h>

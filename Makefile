@@ -5,7 +5,7 @@ ZCCCFG ?= $(Z88DK)/lib/config
 PYTHON ?= python3
 UNAME_S := $(shell uname -s)
 
-APP = zxmap
+APP = zxstrategy
 
 ifeq ($(UNAME_S),Darwin)
 FUSE ?= open -a Fuse

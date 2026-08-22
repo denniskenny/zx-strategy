@@ -1,12 +1,12 @@
 ---
 name: zesarux-test
-description: Launch ZEsarUX headless, inspect screen and variables, and simulate input via ZRCP for the ZX Map project. Use when testing, profiling, debugging rendering, or checking screen output.
+description: Launch ZEsarUX headless, inspect screen and variables, and simulate input via ZRCP for the ZX Strategy project. Use when testing, profiling, debugging rendering, or checking screen output.
 when_to_use: "test in emulator" or "check the screen" or "inspect attributes" or "profile the frame" or "screenshot"
 allowed-tools: Bash Read Write Edit
 effort: high
 ---
 
-# ZEsarUX Testing & Screen Inspection — ZX Map
+# ZEsarUX Testing & Screen Inspection — ZX Strategy
 
 ZEsarUX with ZRCP (remote control protocol) is used for automated inspection of the built `.tap`.
 
@@ -15,7 +15,7 @@ ZEsarUX with ZRCP (remote control protocol) is used for automated inspection of 
 - **ZEsarUX binary**: `/usr/local/bin/zesarux` — a symlink into the build tree at `~/projects/zesarux/src/zesarux`, currently **13.1-SN** (post-13.0 `main`)
 - **48K ROM**: `~/projects/zesarux/src/48.rom`
 - **ZRCP port**: TCP 10000 (localhost)
-- **Tap**: `/Users/Kennyd/projects/zx-strategy/zxmap.tap`
+- **Tap**: `/Users/Kennyd/projects/zx-strategy/zxstrategy.tap`
 
 To update the emulator (no install step needed — the symlink points at the build):
 
@@ -35,7 +35,7 @@ On macOS it configures for cocoa + coreaudio with ZRCP and contended memory enab
 zesarux --vo null --ao null --enable-remoteprotocol --machine 48k \
   --noconfigfile --quickexit \
   --romfile ~/projects/zesarux/src/48.rom \
-  /Users/Kennyd/projects/zx-strategy/zxmap.tap &
+  /Users/Kennyd/projects/zx-strategy/zxstrategy.tap &
 ```
 
 Use **absolute paths**. Wait **6 seconds** before connecting. Add `--realvideo` for accurate per-scanline ULA emulation. Clean up with `pkill -f zesarux`.
@@ -63,7 +63,7 @@ def rd(s, addr_decimal, n):
     return bytes.fromhex(x[:n * 2])
 ```
 
-After connecting, `smartload /abs/path/zxmap.tap` then wait **8–10 seconds** for the tape to autoload.
+After connecting, `smartload /abs/path/zxstrategy.tap` then wait **8–10 seconds** for the tape to autoload.
 
 ### Key commands
 
@@ -87,7 +87,7 @@ Build with a map file, then look up addresses (hex → decimal for ZRCP):
 
 ```bash
 make map                          # = make clean && make USER_CFLAGS="-m"
-grep -E '^_(vsync_mode|frame|bar_col|sync_on|is_128k)\b' zxmap.map
+grep -E '^_(vsync_mode|frame|bar_col|sync_on|is_128k)\b' zxstrategy.map
 ```
 
 Useful checks:
@@ -163,7 +163,7 @@ The demo also debounces: `demo_run()` needs an action bit in two consecutive fra
 
 ```bash
 make map
-python3 tools/profile_zrcp.py --frames 5 --mapfile zxmap.map
+python3 tools/profile_zrcp.py --frames 5 --mapfile zxstrategy.map
 ```
 
 Edit `FRAME_START` (default `_vsync_wait`) and `WAYPOINTS` at the top of the script to match the frame loop you're profiling. Options: `--frames`, `--tap`, `--settle`, `--motion HH` (held Kempston byte), `--screenshot PATH`.

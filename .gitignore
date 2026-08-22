@@ -1,8 +1,8 @@
-zxmap
-zxmap.tap
-zxmap_CODE.bin
-zxmap_data_user.bin
-zxmap_code.tap
+zxstrategy
+zxstrategy.tap
+zxstrategy_CODE.bin
+zxstrategy_data_user.bin
+zxstrategy_code.tap
 tests/fbprobe
 tests/fbprobe.tap
 tests/fbprobe_CODE.bin
@@ -16,3 +16,6 @@ tests/fbprobe_code.tap
 assets/music/*_linkable.asm
 assets/music/lowlands.asm
 tools/__pycache__/
+
+# generated asset headers (rebuilt by make assets)
+include/goo_data.h
