@@ -17,6 +17,8 @@ The global starting values for each unit type are defined in `config/game_config
 
 A populate_map() function creates a friendly base and an enemy base at opposite corners of the map. It takes the level as a parameter, reads that level's roster from `config/game_config.h`, and places the created units within N tiles of the base (N = `UNITS_PLACE_RADIUS`, currently 4) but not on impassable tiles.
 
+That block does not always hold enough land: level 8's enemy corner is most of a lake, leaving 10 free cells for a 15-unit roster. The overflow is then placed on the nearest free land outward from the base rather than dropped, because **both sides always field the same army** — the map is meant to decide the advantage, not the roster. A corner with no land at all is impossible, since the converter already requires both corners passable.
+
 Because the bases sit in opposite corners, every map has to keep those corners passable and joined by a land path — otherwise a base is unreachable and the level cannot be won. The map converter checks both.
 
 Each subsequent odd-numbered level will have an additional unit of each type.
@@ -29,6 +31,13 @@ Movement range is calculated using a simple pathfinding algorithm that calculate
 steps, so a tile's movement cost is the whole cost of entering it and no step
 needs a different price from any other. This applies to the cursor as well as
 to units.
+
+**The cursor is not a unit and terrain does not stop it.** It crosses water and
+every other `impassable` tile freely, and it costs nothing to move — it is
+where the player is looking, not something standing on the board. Passability
+and movement cost constrain *units*, and they are checked when an order is
+issued, not when the cursor is moved. The one thing the cursor cannot do is
+leave the map.
 
 ### Tiles
 
@@ -257,13 +266,20 @@ Consequences the design has to respect:
 ### ST_PLAY
 
 - **Shows**: an **8x4 page** of the world in 4x4-character tiles (rows 1-16,
-  full screen width), the party as `@` on its terrain tile, and a status panel:
-  turn number, party position, terrain under the party. A page that runs off
-  the edge of the world — the right and bottom pages of a 14x7 map — blanks the
-  cells beyond it with `ATTR_VOID`.
-- **Per frame**: move the party (held directions repeat), repaint the two cells
-  a step changed, advance a page flip if one is in progress, refresh the status
-  panel when dirty.
+  full screen width), the units standing on it, the cursor, and a four-line
+  status panel on rows 17-20: the unit under the cursor, the turn number, the
+  cursor's cell, and its terrain with that terrain's cover. A page that runs
+  off the edge of the world — the right and bottom pages of a 14x7 map — blanks
+  the cells beyond it with `ATTR_VOID`.
+- **Per frame**: move the cursor (held directions repeat), repaint the two
+  cells a step changed, advance a page flip if one is in progress, refresh the
+  status panel when dirty.
+- **Selection**: `SPACE` picks up the unit under the cursor and `SPACE` again
+  (or `X`) puts it down. Only the player's own units can be selected; an enemy
+  unit under the cursor still reports its stats, because knowing what is about
+  to shoot you is not a privilege. A selected unit keeps its highlight while
+  the cursor wanders, which is what lets the player look at the ground before
+  committing to a move.
 - **Paging, not scrolling**: a full page repaint is ~4 KB of screen writes —
   several frames' work — so the view holds a fixed page and flips only when it
   has to. A flip repaints `PAGE_CELLS` tiles per frame and freezes movement
@@ -274,23 +290,24 @@ Consequences the design has to respect:
   — and the cursor is the only thing that moves freely. A unit ordered to move
   never leaves the page it was selected on, because its movement range is at
   most 3 tiles.
-- **Movement**: one cell per step in the four cardinal directions, blocked by
-  terrain whose Tiled tile carries `impassable` (currently water) and by any
-  tile that already holds a unit.
+- **Cursor movement**: one cell per step in the four cardinal directions,
+  stopped only by the edge of the map. Terrain and units do not block it (see
+  § Movement Range) — those constrain the unit being *ordered*, and are checked
+  when the order is given.
 - **Exits**: `SELECT` ends the turn (turn counter only, for now), `M` →
   `ST_MAP`, `G` → gallery, `X` → title.
 
 ### ST_MAP
 
-- **Shows**: the **whole world** in 2x2-character tiles, the party's cell
-  highlighted (yellow + `@`), and a free cursor with the same status panel
-  reporting the cursor's cell instead of the party's.
+- **Shows**: the **whole world** in 2x2-character tiles, every unit on it, the
+  play cursor's cell highlighted in yellow, and a second free cursor with the
+  same status panel reporting whatever it is over.
 - **Per frame**: move the cursor, repaint the two cells it left and entered,
   refresh the status panel.
 - **Read-only by design**: the overview exists to plan, not to act. Issuing
   orders from here is a candidate for the first rules pass.
-- **Exits**: `SPACE` (also `X` or fire) returns to `ST_PLAY`. The cursor is
-  seeded at the party's cell each time it opens.
+- **Exits**: `SPACE` (also `X` or fire) returns to `ST_PLAY`. The overview
+  cursor is seeded at the play cursor's cell each time it opens.
 
 ### ST_OVER
 

@@ -164,7 +164,7 @@ board teleporting.
 Each phase ends in a working, playable-to-that-point build, verified in the
 emulator with `.claude/skills/zesarux-test`.
 
-### P0 — Walk every state (no rules)  ✱ highest priority
+### P0 — Walk every state (no rules)  ✓ done
 
 `ST_OVER` and `ST_WON` are implemented but unreachable. Add a temporary
 `DEBUG_STATE_WALK` in `config/app_config.h` that, in `ST_PLAY`, maps two keys
@@ -176,25 +176,37 @@ to "win this level" and "lose this level" (set `player_won`, enter `ST_OVER`).
   and confirm each matches its `.tmx`; confirm `ST_WON` only appears after 10.
 - **Removed in P4**, when real win detection replaces it.
 
-### P1 — Units as data
+### P1 — Units as data  ✓ done
 
 `config/game_config.h` army composition → the SoA arrays → `populate_map(level)`
 → both renderers draw units.
 
 - Bases at opposite corners, others within `UNITS_PLACE_RADIUS`, skipping
-  impassable and occupied cells.
+  impassable and occupied cells — and spilling outward when that block holds
+  less land than the roster needs, which level 8's enemy corner does. Dropping
+  the overflow instead cost that side four units and all of its cannons.
+- `src/game.c` picks up `config/game_config.h` for the first time, so it also
+  gains the guard the other generated tables have: `#if (TER_TYPES != TER_COUNT)`
+  catches a terrain type added to the tileset but not to the cost/cover tables.
+- `u_hp[i]` is seeded from `unit_health[type]`; the rest of the stats table is
+  unread until P2's status panel and P3's movement.
 - `draw_view_cell()` / `draw_cell()` gain a unit layer: blit the terrain tile,
   then the unit sprite from `units_view`/`units_map`, then set the cell
   attribute by side (cyan player, red enemy — the sheets' 0x47 is a neutral
   default that the runtime overrides).
-- **Acceptance**: 6 units per side visible on level 1 in both views; a
-  screenshot per view; no cell shows two units.
+- **Acceptance**: **7** units per side visible on level 1 in both views
+  (3 infantry + 2 tanks + 1 cannon + 1 base — `UNITS_AT_LEVEL` at level 1 is
+  just the start counts); a screenshot per view; no cell shows two units.
 
-### P2 — Selection and information
+### P2 — Selection and information  ✓ done
 
 Cursor replaces the `@` party; SPACE selects the unit under it; the status
 panel shows type / HP / range / movement. Cursor movement drives page flips.
 
+- The panel grows a fourth line above the existing three (`ROW_UNIT` = 17), so
+  both renderers now have to fit above `PANEL_TOP` rather than above `ROW_TURN`.
+- The cursor is not the party: terrain no longer blocks it, only the edge of
+  the map (`docs/DESIGN.md` § Movement Range).
 - **Acceptance**: select and deselect every unit on the board; the panel
   matches the config table; walking the cursor off a page flips it.
 

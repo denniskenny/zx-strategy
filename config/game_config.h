@@ -6,9 +6,10 @@
 /* ================================================================== */
 /* The tunable side of the game rules, kept out of the code so a
  * balance change is a header edit and a rebuild.  Hardware and screen
- * constants live in app_config.h; unit stats (range, damage, health,
- * movement) and terrain costs are specified in docs/DESIGN.md and are
- * not here yet — this file currently owns the ARMY COMPOSITION only.
+ * constants live in app_config.h.  This file owns the ARMY
+ * COMPOSITION, the per-type UNIT STATS and the per-terrain COSTS AND
+ * COVER; all three are transcribed from docs/DESIGN.md, which stays
+ * the source of truth for the numbers and the reasoning behind them.
  *
  * populate_map() reads these to build both sides at level start: one
  * base per side at opposite corners, the rest placed within
@@ -91,6 +92,52 @@ static const uint8_t unit_level_gain[UNIT_TYPES] = {
     UNITS_CANNON_PER_LEVEL,
     UNITS_BASE_PER_LEVEL
 };
+
+/* --- Unit stats ------------------------------------------------------
+ * docs/DESIGN.md, "Units".  One row per UNIT_* id, in that order, so a
+ * stat is unit_range[u_type[i]] with no search.  Every column is a
+ * byte: health tops out at the Base's 255 by design, which is why
+ * u_hp[] is uint8_t and damage subtracts straight from it.
+ *
+ * Cannon and Base have Movement 0 — they are placed and never move,
+ * which is what makes the stalemate rule in docs/DESIGN.md necessary. */
+static const uint8_t unit_range[UNIT_TYPES]    = { 3, 2, 4, 0 };
+static const uint8_t unit_damage[UNIT_TYPES]   = { 10, 20, 30, 0 };
+static const uint8_t unit_health[UNIT_TYPES]   = { 100, 150, 200, 255 };
+static const uint8_t unit_movement[UNIT_TYPES] = { 3, 2, 0, 0 };
+
+/* The widest movement budget in the roster, which is the number of
+ * buckets Dial's algorithm needs (docs/PLAN.md, "Movement range").
+ * Raising any unit's Movement past this grows q[]/bucket_end[]. */
+#define MAX_MOVE        3
+
+/* The longest attack range, which bounds the Manhattan disc the enemy
+ * threat map stamps per player unit. */
+#define MAX_RANGE       4
+
+/* --- Terrain ---------------------------------------------------------
+ * docs/DESIGN.md, "Tiles".  Terrain id = GID - firstgid = the tile
+ * column in both .zxp sheets, so this order is load-bearing in exactly
+ * the same way UNIT_* is: append, never insert.
+ *
+ * Passability is NOT repeated here — the map converter emits it per
+ * level as level_N_terrain_blocked[] from the Tiled "impassable"
+ * property, and duplicating it would let the two disagree.  Water's
+ * movement cost is a placeholder for that reason: nothing may enter it,
+ * so the cost is never read. */
+#define TER_PLAIN       0
+#define TER_FOREST      1
+#define TER_WATER       2
+#define TER_HILLS       3
+#define TER_CITY        4
+#define TER_TYPES       5
+
+static const uint8_t terrain_move_cost[TER_TYPES] = { 1, 2, 0, 2, 1 };
+
+/* Percent of incoming damage cancelled by standing here.  The formula
+ * is (damage * (100 - cover) + 99) / 100 — rounding up, so cover under
+ * 100 never makes a unit unkillable. */
+static const uint8_t terrain_cover[TER_TYPES]     = { 0, 50, 0, 25, 75 };
 
 /* --- Placement -------------------------------------------------------
  * populate_map() puts the non-base units within this many tiles of

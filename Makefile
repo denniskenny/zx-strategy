@@ -98,15 +98,20 @@ include/tiles_view.h: assets/tiles_view.zxp tools/zxp_tiles_zx0.py
 
 # Unit sprite sheets: same strip format and converter as the terrain tiles,
 # one sheet per renderer, sprite column order = INFANTRY, TANK, CANNON, BASE
-# (the unit table in docs/DESIGN.md).  The sheet attribute is a neutral
-# default; the runtime recolours a sprite per side when it blits it.
+# (the unit table in docs/DESIGN.md).  Unlike the terrain sheets these are
+# built with --attr: a unit is drawn cyan or red by side, so the runtime picks
+# the colour and whatever ZX-Paintbrush saved with the art is ignored rather
+# than being a build error every time a sprite is redrawn.
 UNIT_COUNT = 4
+UNIT_ATTR = 47
 
 include/units_map.h: assets/units_map.zxp tools/zxp_tiles_zx0.py
-	$(ZXP_TILES_ZX0) $< $@ --name units_map --tiles $(UNIT_COUNT) --zx0 $(ZX0)
+	$(ZXP_TILES_ZX0) $< $@ --name units_map --tiles $(UNIT_COUNT) \
+	    --attr $(UNIT_ATTR) --zx0 $(ZX0)
 
 include/units_view.h: assets/units_view.zxp tools/zxp_tiles_zx0.py
-	$(ZXP_TILES_ZX0) $< $@ --name units_view --tiles $(UNIT_COUNT) --zx0 $(ZX0)
+	$(ZXP_TILES_ZX0) $< $@ --name units_view --tiles $(UNIT_COUNT) \
+	    --attr $(UNIT_ATTR) --zx0 $(ZX0)
 
 # List generated headers here so `make assets` and `make clean` know them.
 GENERATED_HEADERS = include/goo_data.h $(LEVEL_HEADERS) \

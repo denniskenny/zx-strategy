@@ -12,9 +12,17 @@ are authored in ZX-Paintbrush alongside the art: NAME_attr[i] is tile i's
 attribute.  All cells of a tile must share one attribute (the ZX can only
 give a whole character cell one colour anyway).
 
+--attr HH overrides that for sheets whose colour the runtime decides:
+every tile is emitted with the given attribute and the sheet's own
+attribute cells are ignored.  The unit sheets use it, because a unit
+sprite is drawn cyan or red by side and the colour ZX-Paintbrush saved is
+just whatever the art was drawn in.  Terrain sheets do NOT: there the
+sheet attribute is the tile's colour on screen, so a stray cell is a real
+mistake and the strict check catches it.
+
 Usage:
     python3 tools/zxp_tiles_zx0.py IN.zxp OUT.h --name NAME --tiles N
-                                   [--zx0 /path/to/zx0]
+                                   [--attr HH] [--zx0 /path/to/zx0]
 
 Refuses attribute 0x03 (and 0x02, which becomes 0x03 when ORed with 1):
 that value is the floating bus sync marker — see
@@ -103,8 +111,17 @@ def main():
     ap.add_argument("--name", required=True, help="C identifier prefix")
     ap.add_argument("--tiles", type=int, required=True,
                     help="number of tiles, side by side in the sheet")
+    ap.add_argument("--attr", type=lambda v: int(v, 16), default=None,
+                    help="hex attribute for every tile; ignores the sheet's "
+                         "own attribute cells (for sheets the runtime "
+                         "recolours, e.g. the unit sprites)")
     ap.add_argument("--zx0", default=os.environ.get("ZX0", "/tmp/ZX0/src/zx0"))
     args = ap.parse_args()
+
+    if args.attr is not None and args.attr in (VSYNC_MARKER,
+                                               VSYNC_MARKER & 0xFE):
+        die(f"--attr 0x{args.attr:02X} collides with the floating bus sync "
+            f"marker 0x{VSYNC_MARKER:02X}")
 
     pixels, attrs = parse_zxp(args.input)
     h = len(pixels)
@@ -120,8 +137,11 @@ def main():
         die(f"tile size {tw}x{h} must be a whole number of 8x8 characters")
 
     tiles = [tile_bytes(pixels, t * tw, tw, h) for t in range(args.tiles)]
-    tile_attrs = [tile_attr(attrs, w // 8, t, tw // 8, h // 8, args.name)
-                  for t in range(args.tiles)]
+    if args.attr is None:
+        tile_attrs = [tile_attr(attrs, w // 8, t, tw // 8, h // 8, args.name)
+                      for t in range(args.tiles)]
+    else:
+        tile_attrs = [args.attr] * args.tiles
 
     blob = b"".join(tiles)
     raw = "/tmp/%s_tiles.bin" % args.name
@@ -151,7 +171,10 @@ def main():
                 f"   /* bytes per tile    */\n")
         f.write(f"#define {upper}_RAW_SIZE  {len(blob)}"
                 f"   /* decompressed size */\n\n")
-        f.write("/* Tile attributes, authored in ZX-Paintbrush. */\n")
+        f.write("/* Tile attributes, authored in ZX-Paintbrush. */\n"
+                if args.attr is None else
+                "/* Tile attributes: fixed by --attr, not read from the "
+                "sheet — the runtime picks the colour. */\n")
         f.write(f"static const uint8_t {args.name}_attr[{args.tiles}] = {{\n    ")
         f.write(", ".join(f"0x{a:02X}" for a in tile_attrs))
         f.write("\n};\n\n")
