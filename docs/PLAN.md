@@ -2,11 +2,23 @@
 
 How to get from the scaffold to the game in `docs/DESIGN.md`.
 
-**Where we are: P0–P3 are done. Next is P4 (combat and the real win
-condition), then P7 (the scrolling view) before P5 picks it up.** The game today places two armies on any of the ten maps, lets the
-player select a unit, shows what it can reach, moves it, spends its action and
-ends the turn — but nothing can shoot, so nothing can win except by the
+**Where we are: P0–P3 and P7 are done, and the +3 crash is fixed. P4 —
+combat and the real win condition — is next, with nothing blocking it.**
+
+The game today places two armies on any of the ten maps, scrolls a pinned-cursor
+view over the board, lets the player pick a unit up, shows what it can reach,
+moves it, spends its action and ends the turn. It runs on 48K, 128K and +3.
+What it cannot do is shoot — so nothing can win except through the
 `DEBUG_STATE_WALK` keys, and the enemy never moves.
+
+Two smaller things remain open and neither blocks P4:
+
+- **No +3 coverage in the tests.** ZEsarUX will not run the tap on
+  `--machine P341`; a `.sna` snapshot bypasses the ROM menu on every model.
+  The +3 bug survived a fully green suite for a whole session because of this.
+- **A tear-free scroll.** The 128K shadow screen is armed and state changes
+  flip cleanly, but scroll sub-steps still write to the displayed screen.
+  Flipping those needs the chrome in both buffers.
 
 Two things drove the ordering:
 
@@ -501,42 +513,34 @@ writing the assembly, because it changes what the assembly looks like.
    - **Verified the strong way**: after a scroll in each of the four
      directions, the screen is *byte-identical* to a from-scratch recompose
      at the same origin.
-4. **128K shadow screen.**  ✓ **armed, and self-disabling.** `shadow_ok` is set
-   only after `screens_init()` proves a page-in survives — `is_128k` alone is
-   not enough, because `main()` may have locked `0x7FFD` and every write to it
-   then fails silently. Without that proof the flag stays set while nothing
-   works, and the title screen vanishes: it cost two separate debugging
-   sessions before being caught properly.
-   - **The shadow screen is off on every machine, and a +3 is why.** Clearing
-     the paging lock in `main()` does arm it on a 128K — verified, `shadow_ok`
-     went to 1 and the flip worked — but the same writes then reach a +2A/+3
-     and drop it into BASIC with *"Nonsense in BASIC"*. The lock had been
-     protecting those machines silently. Reverted.
-   - **The blocker is +2A/+3 detection**, not the shadow screen. `vsync_mode
-     == VSYNC_MODE_128K` only identifies one when the mode-2 bus was detected;
-     a +3 on HALT sync looks exactly like a 128K. Port `0x1FFD` is decoded on
-     a +2A/+3 and not on a 128K, so probing it is the obvious next move — and
-     it needs a +3 to validate, because getting it wrong crashes that machine
-     and nothing in CI would notice.
-   - Two guards now stand between here and that crash: `main()` keeps the
-     lock, and `screens_init()` refuses to touch paging when mode 2 is active.
-     Deliberately redundant.
-   - `tests/render_paths.py` now reports the detected vsync mode per machine,
-     checks the marker only when a mode that uses one is active, and checks it
-     is written to the screen being DISPLAYED rather than merely somewhere.
+4. **128K shadow screen.**  ✓ **done and armed.** A 128K now composes each
+   whole screen into the display file the ULA is not showing and reveals it
+   with one write to `0x7FFD`.
+   - **The blocker was the memory map, not the chrome.** The view buffer sat
+     at 0xC000, which is exactly where page 7 must appear. Page 7 is 16 KB and
+     the shadow screen only uses its bottom 6 912 bytes, so the buffers moved
+     to **0xDB00** — inside the same page, above the screen. Page 7 is banked
+     in once at startup and never moved; the flip is bit 3, which does not
+     change the bank. On a 48K there is no page 7 and 0xDB00 is plain RAM:
+     one layout, both machines.
+   - **The chrome problem never materialised.** Flips only happen on state
+     entry, and every `render_*()` repaints the whole screen — header, panel
+     and legend included. Verified on a 128K: header 0x45, hint 0x46, panel
+     0x47 intact across title -> play -> map -> play, with `page_reg`
+     alternating 0x1F/0x17 on each flip and holding steady through cursor
+     movement.
+   - `main()` no longer locks paging (bit 5). That crashed a +3 once, but the
+     lock was never the cause — `hw_detect()` was clearing **bit 4, the ROM
+     select**, with interrupts on. Fixed at source, so the port can be left
+     open. Both writes keep bit 4 set.
+   - `screens_init()` still proves the page-in survived before arming, so a
+     locked port degrades to the 48K path instead of composing into a bank
+     nobody is looking at.
+   - **The scroll itself still tears.** Flipping per sub-step would fix that,
+     and now that the buffers are out of the way it is finally possible — but
+     the chrome would have to be painted into both buffers first, which is the
+     thing this step turned out not to need for state changes.
 
-   The old note: `shadow_ok` was `is_128k`. The
-   blocker was never the shadow screen itself — it was `ST_PLAY` drawing
-   incrementally after a flip and diverging the buffers, which P7 removed by
-   composing the whole window per repaint.
-   - **Flips are confined to state changes.** Verified on a 128K: `page_reg`
-     holds at 0x17 across cursor movement in all four directions, with the
-     header, hint row and panel intact.
-   - The scroll itself still tears, on both machines. Flipping per sub-step
-     would fix that, but the chrome lives only in the buffer it was painted
-     into, so the other would show a board with no panel and the movement
-     would strobe. Painting the chrome into both buffers is the remaining
-     work, and it is the last thing between here and a tear-free scroll.
 5. **Assembly.**  ✓ **done for the present.** `present_pixels()` is now Z80:
    128 rows of 32 unrolled `LDI`, with the screen offset per row read from
    `VIEW_OFF[]`.

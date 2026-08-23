@@ -129,6 +129,7 @@ uint8_t sel_x, sel_y;
 uint8_t level;
 uint16_t turn;
 uint8_t player_won;
+uint8_t outcome_ready;
 
 /* --- Locators for the hand-placed arrays -----------------------------
    terrain[], occupancy[], cost[], cell_cost[] and the unit arrays live
@@ -451,9 +452,92 @@ static void populate_map(void)
    in the tileset — which is also its column in both .zxp sheets.  This
    is the only place that conversion happens, and out-of-range GIDs fall
    back to terrain 0. */
+/* How far the selected unit can reach RIGHT NOW.  A unit that has
+   already acted has moved, and a move only earns an adjacent strike. */
+uint8_t attack_reach(uint8_t u)
+{
+    if (u_flags[u] & U_ACTED) return 1;
+    return unit_range[u_type[u]];
+}
+
+/* Can the held unit hit whatever stands here?  Manhattan distance, no
+   line of sight, no pathfinding — terrain neither blocks nor bends an
+   attack, so this is arithmetic rather than a search. */
+uint8_t is_target(uint8_t cell)
+{
+    uint8_t v, dx, dy, from;
+
+    if (selected == NO_UNIT) return 0;
+    v = occupancy[cell];
+    if (v == NO_UNIT) return 0;
+    if (((u_flags[v] ^ u_flags[selected]) & U_SIDE) == 0) return 0;
+
+    from = u_cell[selected];
+    dx = col_of[cell] > col_of[from] ? (uint8_t)(col_of[cell] - col_of[from])
+                                     : (uint8_t)(col_of[from] - col_of[cell]);
+    dy = cell > from ? (uint8_t)((cell - from) / GRID_COLS)
+                     : (uint8_t)((from - cell) / GRID_COLS);
+    return (uint8_t)(dx + dy) <= attack_reach(selected);
+}
+
+/* Has the side that just lost a unit lost the game?  A base counts as a
+   unit, so "base destroyed" and "no units left" are one scan over the
+   loser's roster (docs/DESIGN.md § Win Conditions). */
+static void check_win(uint8_t loser_side)
+{
+    uint8_t i, alive = 0, base = 0;
+
+    for (i = 0; i < unit_count; i++) {
+        if (u_type[i] == NO_UNIT) continue;
+        if ((u_flags[i] & U_SIDE) != loser_side) continue;
+        alive = 1;
+        if (u_type[i] == UNIT_BASE) base = 1;
+    }
+    if (alive && base) return;
+
+    player_won = (uint8_t)(loser_side == SIDE_ENEMY ? 1 : 0);
+    outcome_ready = 1;
+}
+
+/* Strike whoever is on this cell.  Cover is a percentage off the
+   attacker's damage and ROUNDS UP, so an attack that lands always takes
+   at least one point while cover is under 100% — no unit is ever
+   unkillable by standing somewhere good. */
+void attack(uint8_t cell)
+{
+    uint8_t v = occupancy[cell];
+    uint8_t cover = terrain_cover[terrain[cell]];
+    uint16_t raw = unit_damage[u_type[selected]];
+    uint8_t dmg = (uint8_t)((raw * (100u - cover) + 99u) / 100u);
+    uint8_t side;
+
+    if (dmg == 0) dmg = 1;
+
+    u_flags[selected] |= U_ACTED;
+
+    if (u_hp[v] > dmg) {
+        u_hp[v] = (uint8_t)(u_hp[v] - dmg);
+        side = 0xFF;
+    } else {
+        /* Dead.  The slot is marked free in place and occupancy cleared;
+           it is never compacted out, because occupancy[] holds indices
+           into these arrays (docs/PLAN.md § Data structures). */
+        side = (uint8_t)(u_flags[v] & U_SIDE);
+        u_type[v] = NO_UNIT;
+        u_hp[v] = 0;
+        occupancy[cell] = NO_UNIT;
+        mark_dirty(col_of[cell], (uint8_t)(cell / GRID_COLS));
+    }
+
+    deselect();
+    recolour_page();
+    if (side != 0xFF) check_win(side);
+}
+
 void load_map(void)
 {
     buckets_init();
+    outcome_ready = 0;
 
     uint8_t i, t;
 

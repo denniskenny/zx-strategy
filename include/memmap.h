@@ -9,7 +9,7 @@
  * in for the shadow screen (docs/DESIGN.md § Two machines).  That is
  * 16 KB for code, rodata, data and bss together, and it is not enough.
  *
- * They go ABOVE the program, from 0xC000.  Not below it: 0x6000-0x7FFF
+ * They go at 0xDB00, and that address is chosen, not free-form.  Not below it: 0x6000-0x7FFF
  * looks free, and is on a 48K, but with the loader's CLEAR 32767 that
  * region holds BASIC's program, its variables and the machine stack.
  * Putting 7 KB of buffers there survived on a 48K and a 128K by luck and
@@ -17,10 +17,16 @@
  * +3 reserves more of it.  0xC000-0xFFFF is above RAMTOP and belongs to
  * nobody once the program is loaded.
  *
- * The cost of that choice: page 7 cannot be banked in at 0xC000 while
- * these live there, so the 128K shadow screen is off the table for as
- * long as this layout stands.  Correct on every machine beats faster on
- * one.
+ * 0xC000-0xDAFF is where the 128K's SHADOW SCREEN appears when RAM page
+ * 7 is banked in — 6 144 pixels plus 768 attributes.  Page 7 is 16 KB
+ * though, and the screen only uses the bottom 6 912 bytes of it, so
+ * these buffers sit in the rest of the same page, above the screen and
+ * out of its way.
+ *
+ * That is what lets both exist at once.  Page 7 is banked in at startup
+ * and never moved again: the flip between screens is bit 3 of 0x7FFD,
+ * which does not change the bank.  On a 48K there is no page 7 and no
+ * shadow screen, and 0xDB00 is simply RAM — same addresses, same code.
  *
  * Placing by hand means overlaps are possible, so every block is sized
  * from the thing that lives in it and the total is checked below.  Add a
@@ -38,7 +44,7 @@
  */
 
 /* --- src/render.c: the play-view buffer --- */
-#define MEM_VBUF        0xC000          /* 128 rows x 32 bytes  = 4096 */
+#define MEM_VBUF        0xDB00          /* 128 rows x 32 bytes  = 4096 */
 #define MEM_VATTR       (MEM_VBUF  + 4096)      /* 16 x 32      =  512 */
 #define MEM_VIEW_OFF    (MEM_VATTR + 512)       /* 128 x uint16 =  256 */
 
@@ -73,8 +79,8 @@
 #if MEM_END > 0x10000
 #error "the hand-placed buffers have outgrown the RAM above 0xC000"
 #endif
-#if MEM_VBUF < 0xC000
-#error "the buffers must stay above BASIC's RAMTOP; see the note above"
+#if MEM_VBUF < 0xDB00
+#error "the buffers must clear the 128K shadow screen at 0xC000-0xDAFF"
 #endif
 
 #endif /* _MEMMAP_H_ */

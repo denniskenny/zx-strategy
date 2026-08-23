@@ -61,6 +61,11 @@
    terrain and unit colour, all of which use black paper. */
 #define ATTR_RANGE  0x4F    /* bright white ink, blue paper   */
 
+/* An enemy the held unit can hit.  Red paper, distinct from the blue of
+   ground it can walk to — one glance separates "go there" from "shoot
+   that". */
+#define ATTR_TARGET 0x57    /* bright white ink, red paper    */
+
 /* The "working" banner, deliberately not the hint line's yellow. */
 #define ATTR_BUSY   0x42    /* bright red ink, black paper    */
 

@@ -416,10 +416,18 @@ static void handle_input(void)
                     if (u != NO_UNIT &&
                         (u_flags[u] & (U_SIDE | U_ACTED)) == SIDE_PLAYER)
                         select_unit(u);
-                } else if (u == NO_UNIT && cost[cell] != NO_COST) {
+                } else if (is_target(cell)) {
+                    /* An enemy in reach, washed red.  Checked before the
+                       move, because an occupied cell is never in the
+                       movement set anyway — the two can never both be
+                       true for the same cell. */
+                    attack(cell);
+                } else if (u == NO_UNIT && cost[cell] != NO_COST &&
+                           !(u_flags[selected] & U_ACTED)) {
                     move_selected();
                 } else {
-                    /* The unit's own cell, or ground it cannot reach. */
+                    /* Its own cell, ground it cannot reach, or a unit
+                       that has already moved and has nothing adjacent. */
                     deselect();
                 }
                 redraw_status = 1;
@@ -443,6 +451,13 @@ static void handle_input(void)
             if (edge & ACT_BACK) {
                 if (selected != NO_UNIT) deselect();
                 else                     set_state(ST_TITLE);
+            }
+            /* A base or an army was destroyed.  logic.c raised the flag
+               and set player_won; turning it into a state change is the
+               loop's job, not its. */
+            if (outcome_ready) {
+                outcome_ready = 0;
+                set_state(ST_OVER);
             }
 #if DEBUG_STATE_WALK
             /* Stand in for the win check until P4 gives us one. */

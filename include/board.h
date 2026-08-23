@@ -103,6 +103,23 @@ extern uint8_t player_won;      /* the outcome ST_OVER is reporting     */
 /* --- Orders ----------------------------------------------------------
  * These change the board and ask the renderer to catch up; none of them
  * draws anything itself. */
+/* --- Combat ----------------------------------------------------------
+ * Attack range is a DISTANCE, not a path: terrain does not block it and
+ * no search is needed (docs/DESIGN.md § Attack Range).
+ *
+ * A unit that has already moved this turn may still strike, but only at
+ * an ADJACENT enemy — the "move into contact" exception. attack_reach()
+ * is what encodes that: full range while the unit is fresh, 1 once it
+ * has spent its action moving. */
+uint8_t attack_reach(uint8_t u);
+uint8_t is_target(uint8_t cell);   /* selected can hit whoever is here  */
+void attack(uint8_t cell);         /* ...so do it, and spend the action */
+
+/* Set when a side has lost its base or its last unit.  logic.c cannot
+   change game state — that belongs to the loop — so it raises this and
+   src/game.c turns it into ST_OVER on the next pass. */
+extern uint8_t outcome_ready;
+
 void load_map(void);            /* terrain + costs + both armies        */
 void select_unit(uint8_t u);    /* pick up, and flood its range         */
 void deselect(void);            /* put down                             */
