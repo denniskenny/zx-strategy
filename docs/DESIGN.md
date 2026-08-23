@@ -467,9 +467,16 @@ fails the build if the top symbol reaches `0xC000`. The stack is not part of
 that check; z88dk leaves it near `0x7FA0`, in the page-5 RAM that is always
 mapped.
 
-When space runs short, the region to move into is `0x6000-0x7FFF`. It is
-contended RAM, but contention only bites while the ULA is drawing, and drawing
-happens in the vblank window — so for anything this program touches it is free.
+Run **`make memmap`** to see the whole picture. The linker knows where code,
+rodata, data and bss went; `include/memmap.h` knows where the buffers went; and
+neither view is complete on its own, which is how this has gone wrong before.
+
+The hand-placed buffers sit *above* 0xC000, which on a 128K-class machine is a
+paged bank. They survive because bank 0 is selected and then left alone —
+`hw_detect()` ends by selecting it, and `main()` locks paging on every machine
+that does not need the +2A/+3 floating bus. **That is a real dependency, not a
+coincidence to rely on quietly**: if anything ever pages again, these move
+first. It is also the leading suspect in § The +3 problem.
 
 ## Long operations
 

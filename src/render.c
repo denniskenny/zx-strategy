@@ -18,6 +18,17 @@
  * spread it.
  */
 
+/* This file OWNS the tile sheets and level 1's terrain tables: the
+   generated headers declare their data extern unless the including unit
+   claims it, so exactly one copy reaches the binary.  These must come
+   before ANY include — board.h reaches level_1.h, and a claim made
+   after that arrives too late to have any effect. */
+#define TILES_MAP_DEFINE_DATA
+#define TILES_VIEW_DEFINE_DATA
+#define UNITS_MAP_DEFINE_DATA
+#define UNITS_VIEW_DEFINE_DATA
+#define LEVEL_1_DEFINE_DATA
+
 #include <string.h>
 
 #include "../config/app_config.h"
@@ -33,6 +44,25 @@
 #include "../include/tiles_view.h"
 #include "../include/units_map.h"
 #include "../include/units_view.h"
+
+/* Cell geometry, taken from the sheets themselves.  Here rather than in
+   render.h so the sheets are included by ONE translation unit: their
+   blobs are `static const` and were otherwise duplicated per includer. */
+#define CELL_W      TILES_MAP_TILE_W
+#define CELL_ROWS   TILES_MAP_TILE_ROWS
+#define VIEW_CW     TILES_VIEW_TILE_W
+#define VIEW_CH     TILES_VIEW_TILE_ROWS
+#define VIEW_COL    ((32 - VIEW_COLS * VIEW_CW) / 2)
+
+/* Both renderers must fit above the status panel. */
+#if (MAP_COL + GRID_COLS * CELL_W > 32) \
+ || (MAP_ROW + GRID_ROWS * CELL_ROWS > PANEL_TOP)
+#error "level_1.tmx is too large for the campaign overview"
+#endif
+#if (VIEW_COL < 0) || (VIEW_ROW + VIEW_ROWS * VIEW_CH > PANEL_TOP)
+#error "the play view does not fit on screen; shrink the page or the tiles"
+#endif
+
 #include "../include/vsync.h"
 
 /* The sheets and the tileset have to agree on how many tiles there are
@@ -533,20 +563,46 @@ static void compose_attr(uint8_t vx, uint8_t vy, uint8_t flat,
    per row, then a straight 32-byte run, because VIEW_COL is 0 and the
    view spans the full width. */
 
+/* The cursor, straight onto the screen, over whatever the buffer says.
+
+   It belongs here rather than in the buffer because it is anchored to
+   the SCREEN, not to the world: it sits on view cell CURSOR_VX/VY and
+   stays there while the board slides underneath.  Composing it into the
+   buffer meant every push dragged it along with the art, so it could
+   only be put right after the last sub-step of a scroll — it smeared
+   for four frames and then snapped back.  Sixteen bytes at present time
+   instead, and it holds still for every character of the scroll. */
+static void stamp_cursor(void)
+{
+    uint8_t *d = gfx_attr + (uint16_t)(VIEW_ROW + CURSOR_VY * VIEW_CH) * 32
+                 + CURSOR_VX * VIEW_CW;
+    uint8_t r = VIEW_CH;
+
+    while (r--) {
+        d[0] = d[1] = d[2] = d[3] = ATTR_CURSOR;
+        d += 32;
+    }
+}
+
 static void present_all(void)
 {
     uint8_t r;
     const uint8_t *sp = VBUF;
-    const uint8_t *sa = VATTR;
 
+    /* Pixels go row by row because the display is interleaved: each
+       row needs its own address, which is what VIEW_OFF[] holds. */
     for (r = 0; r < VIEW_PX_ROWS; r++) {
         memcpy(gfx_pix + VIEW_OFF[r], sp, 32);
         sp += 32;
     }
-    for (r = 0; r < VIEW_AT_ROWS; r++) {
-        memcpy(gfx_attr + (uint16_t)(VIEW_ROW + r) * 32, sa, 32);
-        sa += 32;
-    }
+
+    /* Attributes are NOT interleaved — they are 768 flat bytes — and
+       VATTR's rows are contiguous too.  So the whole block is one copy,
+       not sixteen.  This was sixteen memcpy calls for no reason but
+       symmetry with the loop above. */
+    memcpy(gfx_attr + VIEW_ROW * 32, VATTR, VIEW_AT_ROWS * 32);
+
+    stamp_cursor();
 }
 
 /* Just one cell, for the two ends of a move.  Four bytes a row rather
@@ -572,6 +628,7 @@ static void present_cell(uint8_t vx, uint8_t vy)
 
         d[0] = sa[0]; d[1] = sa[1]; d[2] = sa[2]; d[3] = sa[3];
     }
+    if (vx == CURSOR_VX && vy == CURSOR_VY) stamp_cursor();
 }
 
 /* --- What a cell looks like ------------------------------------------ */
@@ -581,8 +638,8 @@ static void present_cell(uint8_t vx, uint8_t vy)
    *mask is ORed over a block, which is how a unit's side ink combines
    with the shading the sheet authored.
 
-   Order matters.  The cursor wins over everything, because the player
-   has to be able to find it.  A unit outranks the range highlight, but
+   The cursor is NOT here — it is stamped at present time, see
+   stamp_cursor().  A unit outranks the range highlight, but
    only nominally: the flood fill refuses occupied cells, so no cell is
    ever both.  Bare ground gets the terrain sheet's own block, which is
    the only path that paints authored per-cell colour rather than a flat
@@ -601,11 +658,6 @@ static const uint8_t *cell_attr(uint8_t vx, uint8_t vy,
     *mask = 0;
     if (wx < 0 || wx >= GRID_COLS || wy < 0 || wy >= GRID_ROWS)
         return view_attr_of(TER_SEA);
-
-    if (wx == (int8_t)cursor_x && wy == (int8_t)cursor_y) {
-        *flat = ATTR_CURSOR;
-        return 0;
-    }
 
     cell = cell_of((uint8_t)wx, (uint8_t)wy);
     u = occupancy[cell];
@@ -814,32 +866,13 @@ static void slice_attr_row(uint8_t vy, uint8_t sub, uint8_t drow)
     }
 }
 
-/* The cursor is the one thing pinned to the SCREEN rather than the
-   world, so the push drags its flood along with the art.  Repaint the
-   cell it belongs in and the one it slid into.
-
-   ONCE, after the last push — never between them.  Doing it per
-   sub-step writes the cell's final colours into a buffer that is still
-   mid-slide, and the remaining pushes then carry those bytes further
-   along and overwrite the cell beyond: the symptom was view cell (1,1)
-   coming out with the wrong terrain's colours after every horizontal
-   step.  The flood slides with the world for the four frames of the
-   scroll and lands back on the cursor at the end. */
-static void fix_cursor_attr(int8_t dx, int8_t dy)
-{
-    int8_t tx = (int8_t)(CURSOR_VX - dx);
-    int8_t ty = (int8_t)(CURSOR_VY - dy);
-
-    compose_view_attr(CURSOR_VX, CURSOR_VY);
-    if (tx >= 0 && tx < VIEW_COLS && ty >= 0 && ty < VIEW_ROWS)
-        compose_view_attr((uint8_t)tx, (uint8_t)ty);
-}
-
 /* Scroll the window one cell, in VIEW_CW sub-steps, presenting each.
 
    Colour arrives with the art, a character at a time — the incoming
    attribute column is sliced in alongside the pixels rather than the
-   whole view being recomposed once the tile has landed. */
+   whole view being recomposed once the tile has landed.  The cursor
+   does not move at all: present_all() stamps it after every sub-step,
+   so it stays put while the board slides under it. */
 void scroll_view(int8_t dx, int8_t dy)
 {
     uint8_t sub;
@@ -865,9 +898,6 @@ void scroll_view(int8_t dx, int8_t dy)
         }
         present_all();
     }
-
-    fix_cursor_attr(dx, dy);
-    present_all();
 }
 
 /* Queue a world cell for a full redraw next frame.  Orders are given

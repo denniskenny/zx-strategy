@@ -119,6 +119,27 @@ def parse_start(root, tw, th):
     return None
 
 
+GUARD = """
+/* --- Data: defined once, declared everywhere else -------------------
+   These arrays were `static const`, which means every .c file that
+   included this header got its OWN copy in the binary.  Three copies of
+   the same compressed map, silently, visible only in the link map.
+   Exactly one translation unit defines them now:
+
+       #define %s_DEFINE_DATA
+       #include "%s.h"
+
+   Everyone else links against that one.  An undefined symbol at link
+   time means nobody claimed it; a duplicate means two files did. */
+#ifdef %s_DEFINE_DATA
+#define %s_DATA
+#else
+#define %s_DATA extern
+#endif
+
+"""
+
+
 def main():
     args = [a for a in sys.argv[1:]]
     name = None
@@ -177,6 +198,7 @@ def main():
         f.write(f"#ifndef {guard}\n#define {guard}\n\n")
         f.write("#include <stdint.h>\n\n")
         f.write(f"/* Generated from {src} by tools/tmx2header.py — do not edit. */\n\n")
+        f.write(GUARD % (upper, name, upper, upper, upper))
         f.write(f"#define {upper}_COLS {cols}\n")
         f.write(f"#define {upper}_ROWS {rows}\n")
         if start is not None:
@@ -198,29 +220,35 @@ def main():
         else:
             f.write(f"\n/* Status-panel labels, padded to {LABEL_W}"
                     " characters. */\n")
-            f.write(f"static const char *const {name}_terrain_names"
-                    f"[{len(terrains)}] = {{\n")
+            f.write(f"#ifndef {upper}_DEFINE_DATA\n"
+                    f"extern const char *const {name}_terrain_names[{len(terrains)}];\n"
+                    f"#else\n"
+                    f"const char *const {name}_terrain_names[{len(terrains)}] = {{\n")
             for gid in sorted(terrains):
                 label = terrains[gid][0][:LABEL_W].ljust(LABEL_W)
                 f.write(f"    \"{label}\",\n")
-            f.write("};\n")
+            f.write("};\n#endif\n")
             f.write("\n/* 1 = the party cannot enter (Tiled property"
                     " \"impassable\"). */\n")
-            f.write(f"static const uint8_t {name}_terrain_blocked"
-                    f"[{len(terrains)}] = {{\n    ")
+            f.write(f"#ifndef {upper}_DEFINE_DATA\n"
+                    f"extern const uint8_t {name}_terrain_blocked[{len(terrains)}];\n"
+                    f"#else\n"
+                    f"const uint8_t {name}_terrain_blocked[{len(terrains)}] = {{\n    ")
             f.write(", ".join("1" if terrains[g][1] else "0"
                               for g in sorted(terrains)))
-            f.write("\n};\n")
+            f.write("\n};\n#endif\n")
         if zdata is None:
             f.write(f"\n/* Layer \"{layer_name}\": {cols}x{rows} GIDs,"
                     " row major. */\n")
-            f.write(f"static const uint8_t {name}_gids[{cols} * {rows}]"
-                    " = {\n")
+            f.write(f"#ifndef {upper}_DEFINE_DATA\n"
+                    f"extern const uint8_t {name}_gids[{cols} * {rows}];\n"
+                    f"#else\n"
+                    f"const uint8_t {name}_gids[{cols} * {rows}] = {{\n")
             for r in range(rows):
                 row = gids[r * cols:(r + 1) * cols]
                 f.write("    " + ", ".join(str(g) for g in row))
                 f.write(",\n" if r + 1 < rows else "\n")
-            f.write("};\n\n")
+            f.write("};\n#endif\n\n")
         else:
             f.write(f"\n/* Layer \"{layer_name}\": {cols}x{rows} GIDs,"
                     f" row major, ZX0\n   ({len(zdata)} <-"
@@ -228,13 +256,15 @@ def main():
                     " straight\n   into terrain[] and converts the GIDs"
                     " in place. */\n")
             f.write(f"#define {upper}_RAW_SIZE ({cols} * {rows})\n")
-            f.write(f"static const uint8_t {name}_gids_zx0[{len(zdata)}]"
-                    " = {\n")
+            f.write(f"#ifndef {upper}_DEFINE_DATA\n"
+                    f"extern const uint8_t {name}_gids_zx0[{len(zdata)}];\n"
+                    f"#else\n"
+                    f"const uint8_t {name}_gids_zx0[{len(zdata)}] = {{\n")
             for i in range(0, len(zdata), 16):
                 chunk = zdata[i:i + 16]
                 f.write("    " + ", ".join(f"0x{b:02X}" for b in chunk))
                 f.write(",\n" if i + 16 < len(zdata) else "\n")
-            f.write("};\n\n")
+            f.write("};\n#endif\n\n")
         f.write(f"#endif /* {guard} */\n")
 
     size = (f"ZX0 {len(zdata)} B <- {cols * rows} B" if zdata is not None

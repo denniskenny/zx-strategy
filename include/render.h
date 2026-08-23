@@ -19,8 +19,13 @@
 #include <stdint.h>
 
 #include "board.h"
-#include "tiles_map.h"
-#include "tiles_view.h"
+
+/* Deliberately does NOT include the tile headers.  They define their
+   ZX0 blobs as `static const`, so every translation unit that includes
+   this file would emit its own copy — tiles_view_zx0 alone is 380 bytes
+   and was being carried three times.  The cell-size macros that came
+   from them now live in src/render.c, which is the only place that ever
+   needed them.  Same trap as include/memmap.h; see the note there. */
 
 /* --- Attributes (never 0x02 or 0x03: the vsync marker owns those) --- */
 #define ATTR_TITLE  0x45    /* bright cyan ink, black paper   */
@@ -59,9 +64,9 @@
 /* The "working" banner, deliberately not the hint line's yellow. */
 #define ATTR_BUSY   0x42    /* bright red ink, black paper    */
 
-/* --- Campaign overview: the whole world in tiles_map.zxp cells ------- */
-#define CELL_W      TILES_MAP_TILE_W
-#define CELL_ROWS   TILES_MAP_TILE_ROWS
+/* --- Campaign overview: the whole world in tiles_map.zxp cells -------
+       CELL_W / CELL_ROWS are in src/render.c, with the sheet they come
+       from. */
 #define MAP_COL     2
 #define MAP_ROW     3
 
@@ -73,10 +78,8 @@
 #define VIEW_COLS   8
 #define VIEW_ROWS   4
 #define VIEW_CELLS  (VIEW_COLS * VIEW_ROWS)
-#define VIEW_CW     TILES_VIEW_TILE_W
-#define VIEW_CH     TILES_VIEW_TILE_ROWS
-#define VIEW_COL    ((32 - VIEW_COLS * VIEW_CW) / 2)
 #define VIEW_ROW    1
+/* VIEW_CW / VIEW_CH / VIEW_COL are in src/render.c, with the sheet. */
 
 /* --- Where the cursor sits on screen ---------------------------------
    The cursor does not move in the play view: a direction pushes the
@@ -128,14 +131,6 @@
 #endif
 #define TITLE_HINT  "                               "
 
-/* Both renderers must fit above the status panel. */
-#if (MAP_COL + GRID_COLS * CELL_W > 32) \
- || (MAP_ROW + GRID_ROWS * CELL_ROWS > PANEL_TOP)
-#error "level_1.tmx is too large for the campaign overview"
-#endif
-#if (VIEW_COL < 0) || (VIEW_ROW + VIEW_ROWS * VIEW_CH > PANEL_TOP)
-#error "the play view does not fit on screen; shrink the page or the tiles"
-#endif
 
 /* --- Repaint queues --------------------------------------------------
  * What the renderer owes the screen, paid off a few cells per frame by

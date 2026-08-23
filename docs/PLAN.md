@@ -571,7 +571,7 @@ writing the assembly, because it changes what the assembly looks like.
 |------|------------|
 | The present is too slow and the scroll crawls | Step 1 leaves a working jump-scroll to fall back to; measure at step 2 before committing to the assembly |
 | Tearing on 48K | Accepted by decision; the 128K shadow screen path is the real answer and step 4 puts the seam in the right place |
-| RAM for the buffer | Settled: everything hand-placed in 0x6000-0x7FFF via `include/memmap.h`, which now also holds the tile sheets and the logic scratch. The linker-placed part clears 0xC000 by only **55 bytes**, so the next thing added has to move down there too |
+| RAM for the buffer | Hand-placed in 0xC000-0xDC48 via `include/memmap.h`. **`make memmap` prints the whole picture** — linker-placed and hand-placed together, which neither the map file nor the header shows on its own. Today: 85 bytes free below 0xC000, 9 144 above. The squeeze is on *code*, not data, so moving more arrays up buys almost nothing |
 | The board reads as tiny once surrounded by sea | An 8x4 window on a 14x7 island shows a lot of water. If it looks wrong, the answer is bigger maps, which is a `.tmx` change and not a code one |
 
 ### The +3 problem  — OPEN, and blocking

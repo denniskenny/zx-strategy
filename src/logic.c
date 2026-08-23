@@ -15,12 +15,35 @@
  * Everything shared is declared in include/board.h and defined here.
  */
 
+/* logic.c owns the campaign maps 2-10; render.c owns the tile sheets
+   and level 1.  One definer each, and the claims must precede every
+   include — see the note in any generated header. */
+#define LEVEL_2_DEFINE_DATA
+#define LEVEL_3_DEFINE_DATA
+#define LEVEL_4_DEFINE_DATA
+#define LEVEL_5_DEFINE_DATA
+#define LEVEL_6_DEFINE_DATA
+#define LEVEL_7_DEFINE_DATA
+#define LEVEL_8_DEFINE_DATA
+#define LEVEL_9_DEFINE_DATA
+#define LEVEL_10_DEFINE_DATA
+
 #include <string.h>
 
 #include "../config/app_config.h"
 #include "../config/game_config.h"
 #include "../include/board.h"
 #include "../include/dzx0.h"
+#define LEVEL_2_DEFINE_DATA
+#define LEVEL_3_DEFINE_DATA
+#define LEVEL_4_DEFINE_DATA
+#define LEVEL_5_DEFINE_DATA
+#define LEVEL_6_DEFINE_DATA
+#define LEVEL_7_DEFINE_DATA
+#define LEVEL_8_DEFINE_DATA
+#define LEVEL_9_DEFINE_DATA
+#define LEVEL_10_DEFINE_DATA
+
 #include "../include/level_1.h"
 #include "../include/memmap.h"
 #include "../include/level_2.h"

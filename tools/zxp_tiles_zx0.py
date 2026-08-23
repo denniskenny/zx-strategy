@@ -199,12 +199,27 @@ def main():
                 f" + t * {upper}_ATTR_SIZE]. */\n\n")
         f.write(f"/* {args.tiles} tiles of {tw}x{h} + {len(attr_bytes)} attribute"
                 f" bytes, ZX0 ({len(zdata)} <- {len(blob)}). */\n")
-        f.write(f"static const uint8_t {args.name}_zx0[{len(zdata)}] = {{\n")
+        U = args.name.upper()
+        f.write(f"/* --- Data: defined once, declared everywhere else ---\n"
+                f"   This blob was `static const`, so every .c file that\n"
+                f"   included this header got its OWN copy — 380 bytes of\n"
+                f"   tiles_view carried three times before anyone noticed.\n"
+                f"   Exactly one translation unit defines it:\n"
+                f"\n"
+                f"       #define {U}_DEFINE_DATA\n"
+                f"       #include \"{args.name}.h\"\n"
+                f"\n"
+                f"   Undefined symbol at link time means nobody claimed it;\n"
+                f"   duplicate means two files did. */\n")
+        f.write(f"#ifndef {U}_DEFINE_DATA\n"
+                f"extern const uint8_t {args.name}_zx0[{len(zdata)}];\n"
+                f"#else\n"
+                f"const uint8_t {args.name}_zx0[{len(zdata)}] = {{\n")
         for i in range(0, len(zdata), 16):
             chunk = zdata[i:i + 16]
             f.write("    " + ", ".join(f"0x{b:02X}" for b in chunk))
             f.write(",\n" if i + 16 < len(zdata) else "\n")
-        f.write("};\n\n")
+        f.write("};\n#endif\n\n")
         f.write(f"#endif /* {guard} */\n")
 
     distinct = sorted({a for b in blocks for a in b})

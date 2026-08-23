@@ -167,8 +167,14 @@ map:
 	$(MAKE) USER_CFLAGS="-m"
 	$(PYTHON) tools/checkmem.py $(APP).map
 
-.PHONY: checkmem
+.PHONY: checkmem memmap
 checkmem: map
+
+# The whole memory picture: what the linker placed, what memmap.h placed
+# by hand, and how much room is left in each.  Neither half is visible
+# from the other, which is how the layout has gone wrong before.
+memmap: map
+	@$(PYTHON) tools/checkmem.py $(APP).map --layout
 
 # --- Compile, link & package ---
 $(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE)
