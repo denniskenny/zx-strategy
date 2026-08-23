@@ -34,6 +34,22 @@ void set_attr_rect(uint8_t col, uint8_t row, uint8_t w, uint8_t h,
     }
 }
 
+void blit_attr_rect(uint8_t col, uint8_t row, uint8_t w, uint8_t h,
+                    const uint8_t *src, uint8_t or_mask)
+{
+    uint8_t r, c;
+    uint8_t *base = ATTR;
+
+    for (r = 0; r < h; r++) {
+        if (row + r >= 24) { src += w; continue; }
+        for (c = 0; c < w; c++) {
+            if (col + c < 32)
+                base[(row + r) * 32 + col + c] = (uint8_t)(*src | or_mask);
+            src++;
+        }
+    }
+}
+
 void screen_clear(uint8_t attr)
 {
     uint16_t i;

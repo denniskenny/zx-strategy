@@ -27,12 +27,19 @@ terrain sheets into RAM once at startup, and `draw_cell()` / `draw_view_cell()`
 blit out of them.
 
 ```
-assets/tiles_map.zxp  ──zxp_tiles_zx0.py──▶ include/tiles_map.h  (tiles_map_zx0[], tiles_map_attr[])
-assets/tiles_view.zxp ──zxp_tiles_zx0.py──▶ include/tiles_view.h (tiles_view_zx0[], tiles_view_attr[])
-assets/units_map.zxp  ──zxp_tiles_zx0.py──▶ include/units_map.h  (units_map_zx0[],  units_map_attr[])
-assets/units_view.zxp ──zxp_tiles_zx0.py──▶ include/units_view.h (units_view_zx0[], units_view_attr[])
+assets/tiles_map.zxp  ──zxp_tiles_zx0.py──▶ include/tiles_map.h  (tiles_map_zx0[])
+assets/tiles_view.zxp ──zxp_tiles_zx0.py──▶ include/tiles_view.h (tiles_view_zx0[])
+assets/units_map.zxp  ──zxp_tiles_zx0.py──▶ include/units_map.h  (units_map_zx0[])   --attr-mode bright
+assets/units_view.zxp ──zxp_tiles_zx0.py──▶ include/units_view.h (units_view_zx0[])  --attr-mode bright
 assets/maps/level_1.tmx ──tmx2header.py──▶ include/level_1.h  (names, blocked, GIDs)
 ```
+
+**Colour travels inside the blob, per character cell.** Each `NAME_zx0[]` is
+the pixels for every tile followed by one attribute block per tile, compressed
+as a single ZX0 stream, so a sheet costs one decompression and tile *t*'s
+colours sit at `NAME_ATTR_OFF + t * NAME_ATTR_SIZE` in the unpacked buffer. A
+32x32 tile therefore carries its own 4x4 block of attributes, not one flat
+colour: a terrain tile can be several colours at once.
 
 Everything the game needs about a terrain type is data: **art + colour** from
 the `.zxp`, **name + passability** from the `.tmx`. Adding a type needs no C.
@@ -76,19 +83,28 @@ Units are simpler — there is no `.tmx` side, so it is draw + count:
 
 Two differences from terrain worth knowing:
 
-- **Colour is not authored.** Both sides share one sprite, so `units_*_attr[]`
-  holds a neutral default (0x47) and the runtime picks the attribute per side
-  when it blits. Recolouring the sheet changes nothing on screen.
+- **Only BRIGHT is authored.** Both sides share one sprite and its ink is set
+  by whose it is, so the unit sheets are converted with `--attr-mode bright`:
+  the converter keeps bit 6 of each cell and throws ink and paper away.
+  Changing a unit cell between `0x07` and `0x47` in the sheet *does* change the
+  screen — that is the sprite's shading — but changing `0x47` to `0x46` does
+  nothing.
+- **The enemy is always bright, whatever the sheet says.** Non-bright red on
+  black is `0x02`, which the floating bus sync marker reserves, so enemy ink
+  already carries BRIGHT and ORing the sheet's flag over it cannot dim
+  anything. Shading shows on player units only. A spent player unit is
+  deliberately flattened to dim as its "already moved" signal.
 - **Sprites are opaque**, like tiles: blitting one over a terrain cell replaces
   the whole cell rather than compositing. Masked or XOR'd units over terrain
   need `gfx.c`'s XOR sprite path plus a second mask strip — decide that before
   the art gets detailed, because it changes how the sheets are drawn.
 
-Nothing in `src/game.c` includes the unit headers yet (there is no unit system,
-see the open questions in `docs/DESIGN.md`), so today the sheets cost zero bytes
-in the binary. Wiring them up means `unit_tiles[]` buffers alongside
-`map_tiles[]` / `view_tiles[]`, two more `dzx0_decompress()` calls in
-`load_tiles()`, and a side attribute in the two draw functions.
+`load_tiles()` unpacks all four sheets into `map_tiles[]`, `view_tiles[]`,
+`unit_map_tiles[]` and `unit_view_tiles[]`, pixels and attributes together.
+`attr_view_cell()` and `attr_map_cell()` are the only places that decide a
+cell's colour: bare ground gets the terrain block copied straight in, a unit
+gets `blit_attr_rect(..., ATTR_UNIT_P)` over its BRIGHT block, and the cursor,
+selection and movement range flood the cell with one colour.
 
 ## The .zxp format
 
@@ -105,9 +121,11 @@ ZX-Paintbrush image
 44 44 04 04 45 45 47 47
 ```
 
-The attribute block is `height/8` lines of `width/8` hex bytes. Every cell of a
-tile must carry the **same** attribute — the converter rejects mixed tiles,
-because a ZX character cell can only have one ink/paper anyway.
+The attribute block is `height/8` lines of `width/8` hex bytes, one per
+character cell. **Cells within a tile may differ** — the converter keeps each
+one, so a 32x32 terrain tile can be four colours down its height, or sixteen
+different cells if you like. Colour a tile by editing its cells here; nothing
+else needs to change.
 
 Patch or preview a sheet like this:
 
@@ -124,13 +142,16 @@ PY
 
 - Sheet width must divide evenly by `--tiles`, and the tile size must be a
   whole number of 8x8 characters.
-- Every tile needs attribute cells, all equal within the tile.
-- **No attribute 0x03 or 0x02** — 0x03 is the floating bus sync marker and 0x02
-  becomes 0x03 when the +2A/+3 bus ORs it with 1. See
+- Every tile needs attribute cells; they may vary freely within a tile.
+- **No attribute 0x03 or 0x02** in `--attr-mode full` — 0x03 is the floating
+  bus sync marker and 0x02 becomes 0x03 when the +2A/+3 bus ORs it with 1. The
+  converter names the offending tile *and cell*. See
   `.claude/skills/floating-bus-vsync`, and update the attribute inventory there
-  when you introduce a new colour.
+  when you introduce a new colour. `--attr-mode bright` cannot trip this,
+  since only bit 6 survives.
 - Tiles are stored row-major, `tile_w/8` bytes per pixel row, concatenated in
-  sheet order, then ZX0'd (the 4 view tiles compress 512 → ~177 bytes).
+  sheet order, then the attribute blocks in the same order, then the lot is
+  ZX0'd as one stream.
 
 ## Changing tile *size*
 
@@ -158,9 +179,9 @@ tiles (2x2 chars) — that is the only way a whole window fits in a frame.
 ## Verifying
 
 ```bash
-make assets     # prints tile count, size, ZX0 size and each tile's attribute
+make assets     # tile count, size, pixel/attribute split, ZX0 size, colours used
 make            # #error catches sheet/tileset count mismatches
-make run        # Fuse: ENTER for the field view, M for the overview
+make run        # Fuse: SPACE for the field view, M for the overview
 ```
 
 If a tile looks shifted or mirrored, check the sheet width and `--tiles`: the

@@ -17,6 +17,13 @@ void plot(uint8_t *buf, uint8_t x, uint8_t y);
 void set_attr_rect(uint8_t col, uint8_t row, uint8_t w, uint8_t h,
                    uint8_t attr);
 
+/* Copy a w x h block of attribute cells from row-major `src`, ORing
+ * each with `or_mask`.  With or_mask 0 that is a straight copy of an
+ * authored colour block; with src holding only BRIGHT flags it paints
+ * a sprite in `or_mask`'s ink while keeping the artist's shading. */
+void blit_attr_rect(uint8_t col, uint8_t row, uint8_t w, uint8_t h,
+                    const uint8_t *src, uint8_t or_mask);
+
 /* Zero all pixel RAM and fill all attributes with attr */
 void screen_clear(uint8_t attr);
 

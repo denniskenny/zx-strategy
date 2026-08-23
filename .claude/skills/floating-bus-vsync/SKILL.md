@@ -86,7 +86,11 @@ This project uses **0x03** (black paper, magenta ink — invisible on the blank 
 #define VSYNC_PRELOAD_ADDR 0x5AE0   /* attr row 23, col 0 */
 ```
 
-Attributes used elsewhere by `src/game.c` are 0x00, 0x04, 0x07, 0x44, 0x45, 0x46, 0x47 and 0x78 — none of them (nor `| 1`) equals 0x03. The art sheets are the other source: the terrain tiles (`tiles_*_attr[]`) and unit sprites (`units_*_attr[]`, currently 0x47 throughout) carry attributes authored in ZX-Paintbrush, which `tools/zxp_tiles_zx0.py` rejects if they are 0x02 or 0x03. **Re-verify this whenever you add new attribute values.**
+The full inventory on screen is 0x00, 0x04, 0x05, 0x07, 0x42, 0x44, 0x45, 0x46, 0x47, 0x4F and 0x78 — `src/game.c`'s `ATTR_*` defines plus the terrain sheets' authored cells. None of them (nor `| 1`) equals 0x03. `make assets` prints each sheet's colours, which is the quickest way to re-check after editing art.
+
+The art sheets are the other source. Terrain tiles carry a **per-character-cell** attribute block authored in ZX-Paintbrush, and `tools/zxp_tiles_zx0.py` rejects any cell that is 0x02 or 0x03, naming the tile and cell. Unit sheets are converted with `--attr-mode bright`, which keeps only bit 6, so they cannot introduce a bad value at all.
+
+This constraint is also why **enemy units cannot be dimmed**: non-bright red on black is 0x02. The enemy's ink carries BRIGHT permanently and `src/game.c` says so where `ATTR_UNIT_E` is defined. **Re-verify this whenever you add new attribute values.**
 
 ## Marker Placement — use a full row
 

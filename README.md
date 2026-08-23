@@ -125,10 +125,14 @@ the Makefile pattern rules do the rest:
 - `assets/NAME.zxp` → `include/NAME.h` — ZX-Paintbrush sprite, row-major
 - `assets/maps/NAME.tmx` → `include/NAME.h` — Tiled map, raw GIDs as
   `NAME_gids[]`
-- `assets/tiles_*.zxp` → `include/tiles_*.h` — terrain tile strip, ZX0 blob as
-  `tiles_*_zx0[]` plus per-tile attributes
-- `assets/units_*.zxp` → `include/units_*.h` — unit sprite strip, same format
-  and converter as the terrain strips
+- `assets/tiles_*.zxp` → `include/tiles_*.h` — terrain tile strip: one ZX0
+  stream holding the pixels for every tile followed by a **per-character-cell**
+  attribute block per tile, so colour is authored with the art and a tile can
+  be several colours at once
+- `assets/units_*.zxp` → `include/units_*.h` — unit sprite strip, same
+  converter but built with `--attr-mode bright`: ink and paper are discarded
+  (a unit is cyan or red by side) and only the BRIGHT flags survive, which is
+  the sprite's shading
 
 At runtime: `dzx0_decompress(NAME_zx0, SCREEN);`. The compressor is
 `$Z88DK/bin/z88dk-zx0` by default (`make ZX0=/path/to/zx0` to override).
@@ -199,11 +203,13 @@ Two tile strips hold the terrain art, one per renderer:
 | `assets/tiles_view.zxp` | 32x32 px (4x4 chars) | `ST_PLAY` field view |
 
 Each sheet holds the tiles side by side **in tileset order** — column *i* is
-terrain *i*. `tools/zxp_tiles_zx0.py` slices them, ZX0-compresses the tile blob
-(512 → ~177 bytes for the view sheet) and emits the per-tile attribute table
-read from the sheet's own attribute cells, so **ink/paper is authored in
-ZX-Paintbrush** next to the art. `load_tiles()` decompresses both blobs into RAM
-once at startup and the renderers blit tiles out of them.
+terrain *i*. `tools/zxp_tiles_zx0.py` slices them and ZX0-compresses the pixels
+and the attributes together as one stream (720 → 348 bytes for the view sheet),
+so **ink/paper is authored in ZX-Paintbrush** next to the art and arrives with
+it. Each tile keeps its own block of attributes, one byte per character cell,
+at `NAME_ATTR_OFF + t * NAME_ATTR_SIZE` in the unpacked buffer — a 32x32 tile
+can be up to sixteen colours. `load_tiles()` decompresses all four sheets into
+RAM once at startup and the renderers blit out of them.
 
 Tile size drives the layout: `CELL_W`, `VIEW_CW` and friends in `src/game.c`
 come from the generated headers.

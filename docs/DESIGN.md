@@ -50,6 +50,13 @@ The order below is load-bearing: it is the tileset order in
 inserted — renumbering an existing tile silently reinterprets every map that
 uses it.
 
+A terrain tile's **colour is authored per character cell** and travels with its
+art: a 32x32 play tile carries a 4x4 block of attributes, so a tile can be
+several colours at once — a city with a lit window, a hill with a pale crown.
+The runtime copies that block straight to the screen for bare ground. It is
+overridden wholesale, not blended, when something is standing on the cell or
+the cursor or a movement range is over it.
+
 1. Plain
   impassable: false
   movement cost : 1
@@ -104,8 +111,20 @@ recalculated per unit, at the moment it is selected, not cached for the turn.
 
 Art: `assets/units_view.zxp` (32x32 sprites, `ST_PLAY`) and
 `assets/units_map.zxp` (16x16, `ST_MAP`), one sprite column per unit in the
-order below. Both sides share a sprite; the runtime picks the attribute per
-side.
+order below. Both sides share a sprite; the runtime picks the ink per side.
+
+**What the sheet contributes to a unit's colour is its BRIGHT flags, and
+nothing else.** Ink and paper are not the artist's to choose — a unit is cyan
+or red according to whose it is — but *which character cells are lit* is, and
+that is the sprite's shading. The build strips ink and paper at conversion
+(`--attr-mode bright`) and the runtime ORs the side's colour over what is left.
+
+One asymmetry falls out of the hardware: **enemy units are always flat.**
+Non-bright red on black is `0x02`, and `0x02 | 1` is the floating bus sync
+marker, so the enemy's ink has to carry BRIGHT already and the sheet cannot dim
+it. Shading therefore reads on the player's units only — which is no loss,
+since it is the player's units the player has to tell apart. A spent player
+unit is flattened to dim for the same reason it always was.
 
 #### Infantry
 

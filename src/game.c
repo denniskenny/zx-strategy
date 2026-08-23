@@ -82,16 +82,24 @@
 #define ATTR_VOID   0x00    /* off-world cells: black on black */
 
 /* Units share one sprite per type; the side is carried by the cell
-   attribute, so these two are the only thing telling the armies apart
-   (docs/DESIGN.md: "Enemy units are red, player units are cyan"). */
-#define ATTR_UNIT_P 0x45    /* bright cyan ink, black paper   */
-#define ATTR_UNIT_E 0x42    /* bright red ink, black paper    */
+   attribute, so these are the only thing telling the armies apart
+   (docs/DESIGN.md: "Enemy units are red, player units are cyan").
+   The sheets supply a BRIGHT flag per character cell — the sprite's
+   shading — which is ORed over the side's ink. */
+#define ATTR_UNIT_P 0x05    /* cyan ink, black paper; sheet adds BRIGHT */
+#define ATTR_UNIT_E 0x42    /* bright red ink, black paper             */
+#define ATTR_BRIGHT 0x40    /* the BRIGHT bit the unit sheets carry     */
 
-/* A player unit that has spent its action loses its brightness, which
-   is how the board shows what is left to move.  The enemy has no
-   matching dim form: non-bright red is 0x02, one of the two values the
-   floating bus sync marker reserves.  It does not need one — the
-   player never waits on an enemy unit's remaining action. */
+/* The enemy is always bright, and cannot be otherwise: non-bright red
+   on black is 0x02, and 0x02 | 1 is the floating bus sync marker.  Its
+   ink therefore carries BRIGHT already, so ORing the sheet's flag over
+   it is a no-op and enemy sprites are drawn flat.  Only the player's
+   shading survives.  This is the same collision that stops a spent
+   enemy unit from being dimmed. */
+
+/* A player unit that has spent its action goes uniformly dim — the
+   sheet's shading is dropped, which is what makes "used" legible at a
+   glance against an otherwise shaded sprite. */
 #define ATTR_UNIT_P_DONE 0x05   /* cyan ink, black paper, not bright */
 
 /* Ground the selected unit can reach: the terrain art stays, its paper
@@ -301,11 +309,24 @@ static uint8_t level;       /* 1-based; selects level_maps[] */
 static uint8_t player_won;  /* outcome of the level ST_OVER is reporting */
 static uint16_t turn;
 
-/* Tile pixels, decompressed once from the ZX0 blobs in the headers. */
+/* Tile pixels AND their attribute blocks, decompressed once from the
+   ZX0 blobs in the headers.  Each blob is pixels for every tile
+   followed by one attribute block per tile, so a sheet costs a single
+   decompression and tile t's colours live at a fixed offset. */
 static uint8_t map_tiles[TILES_MAP_RAW_SIZE];
 static uint8_t view_tiles[TILES_VIEW_RAW_SIZE];
 static uint8_t unit_map_tiles[UNITS_MAP_RAW_SIZE];
 static uint8_t unit_view_tiles[UNITS_VIEW_RAW_SIZE];
+
+/* Tile t's attribute block within each sheet. */
+#define map_attr_of(t) \
+    (map_tiles + TILES_MAP_ATTR_OFF + (uint16_t)(t) * TILES_MAP_ATTR_SIZE)
+#define view_attr_of(t) \
+    (view_tiles + TILES_VIEW_ATTR_OFF + (uint16_t)(t) * TILES_VIEW_ATTR_SIZE)
+#define unit_map_attr_of(t) \
+    (unit_map_tiles + UNITS_MAP_ATTR_OFF + (uint16_t)(t) * UNITS_MAP_ATTR_SIZE)
+#define unit_view_attr_of(t) \
+    (unit_view_tiles + UNITS_VIEW_ATTR_OFF + (uint16_t)(t) * UNITS_VIEW_ATTR_SIZE)
 
 /* --- The armies ------------------------------------------------------
    Structure of arrays, not an array of structs: SDCC pays a multiply
@@ -876,47 +897,72 @@ static void load_map(void)
     populate_map();
 }
 
-/* A unit's own colour: its side, dimmed once it has spent its action
-   for the turn.  This is the board's only record of what the player
-   still has left to move, so it has to survive every repaint — which
-   is why it is computed here rather than painted once at the moment
-   the unit acts. */
-static uint8_t unit_attr(uint8_t u)
+/* The status panel's colour for a unit: side, dimmed once spent.  One
+   flat byte, because that line is text — the sheet's per-cell shading
+   belongs to the sprite, not to a row of characters. */
+static uint8_t unit_line_attr(uint8_t u)
 {
     if (u_flags[u] & U_SIDE)   return ATTR_UNIT_E;
-    return (u_flags[u] & U_ACTED) ? ATTR_UNIT_P_DONE : ATTR_UNIT_P;
+    return (u_flags[u] & U_ACTED) ? ATTR_UNIT_P_DONE
+                                  : (uint8_t)(ATTR_UNIT_P | ATTR_BRIGHT);
 }
 
-/* The colour a cell wears when the cursor is not on it: yellow if it
-   holds the selected unit, otherwise the occupant's side colour, and
-   otherwise the terrain's own attribute from the tile sheet. */
-static uint8_t map_cell_attr(uint8_t cell)
+/* Colour a unit's cell in its side's ink, keeping the shading the
+   artist put in the sheet: `bright` is that tile's block of BRIGHT
+   flags, ORed over the side colour.
+   
+   Two cases come out flat rather than shaded, both for reasons that
+   are not about taste.  An ENEMY unit's ink already carries BRIGHT
+   because non-bright red on black is 0x02, which the floating bus sync
+   marker reserves — ORing the sheet's flag over it cannot dim
+   anything.  A SPENT player unit is dimmed deliberately: dropping the
+   shading is what makes "this one has moved" readable next to a
+   sprite that is otherwise lit. */
+static void attr_unit_cell(uint8_t col, uint8_t row, uint8_t w, uint8_t h,
+                           uint8_t u, const uint8_t *bright)
 {
+    if (u_flags[u] & U_SIDE)
+        set_attr_rect(col, row, w, h, ATTR_UNIT_E);
+    else if (u_flags[u] & U_ACTED)
+        set_attr_rect(col, row, w, h, ATTR_UNIT_P_DONE);
+    else
+        blit_attr_rect(col, row, w, h, bright, ATTR_UNIT_P);
+}
+
+/* Paint one campaign-overview cell's own colours: the selected unit's
+   yellow, an occupant's side colour, or the terrain's authored
+   attribute block straight from the sheet.  Attributes only — the
+   pixels beneath are unchanged by any of it. */
+static void attr_map_cell(uint8_t cx, uint8_t cy)
+{
+    uint8_t col = (uint8_t)(MAP_COL + cx * CELL_W);
+    uint8_t row = (uint8_t)(MAP_ROW + cy * CELL_ROWS);
+    uint8_t cell = cell_of(cx, cy);
     uint8_t u = occupancy[cell];
 
-    if (u == NO_UNIT) return tiles_map_attr[terrain[cell]];
-    if (u == selected) return ATTR_HINT;
-    return unit_attr(u);
+    if (u == NO_UNIT)
+        blit_attr_rect(col, row, CELL_W, CELL_ROWS,
+                       map_attr_of(terrain[cell]), 0);
+    else if (u == selected)
+        set_attr_rect(col, row, CELL_W, CELL_ROWS, ATTR_HINT);
+    else
+        attr_unit_cell(col, row, CELL_W, CELL_ROWS, u,
+                       unit_map_attr_of(u_type[u]));
 }
 
-/* As above, plus the movement range: the play view is where orders are
-   given, so it is the only view that shows the ground a held unit can
-   reach.  cost[] is only meaningful while something is selected, hence
-   the guard.  Reachable cells are never occupied — the fill refuses
-   them — so testing the occupant first cannot hide a highlight. */
-static uint8_t view_cell_attr(uint8_t cell)
+/* Flood one overview cell with a single colour — the cursor, or the
+   marker showing where the play cursor is.  Pixels untouched. */
+static void solid_map_cell(uint8_t cx, uint8_t cy, uint8_t attr)
 {
-    uint8_t u = occupancy[cell];
-
-    if (u != NO_UNIT) return (u == selected) ? ATTR_HINT : unit_attr(u);
-    if (selected != NO_UNIT && cost[cell] != NO_COST) return ATTR_RANGE;
-    return tiles_view_attr[terrain[cell]];
+    set_attr_rect((uint8_t)(MAP_COL + cx * CELL_W),
+                  (uint8_t)(MAP_ROW + cy * CELL_ROWS),
+                  CELL_W, CELL_ROWS, attr);
 }
 
-/* Terrain, then the unit standing on it.  The sprites are opaque, so a
-   unit hides its tile rather than sitting over it — masked sprites are
-   a later pass (docs/PLAN.md, Risks). */
-static void draw_cell(uint8_t cx, uint8_t cy, uint8_t attr)
+/* Terrain, then the unit standing on it, then the cell's colours.  The
+   sprites are opaque, so a unit hides its tile rather than sitting over
+   it — masked sprites are a later pass (docs/PLAN.md, Risks). */
+static void draw_cell(uint8_t cx, uint8_t cy)
 {
     uint8_t col = (uint8_t)(MAP_COL + cx * CELL_W);
     uint8_t row = (uint8_t)(MAP_ROW + cy * CELL_ROWS);
@@ -930,7 +976,7 @@ static void draw_cell(uint8_t cx, uint8_t cy, uint8_t attr)
         write_blit((int8_t)col, (uint8_t)(row << 3),
                    unit_map_tiles + (uint16_t)u_type[u] * UNITS_MAP_TILE_SIZE,
                    UNITS_MAP_TILE_W, UNITS_MAP_TILE_H);
-    set_attr_rect(col, row, CELL_W, CELL_ROWS, attr);
+    attr_map_cell(cx, cy);
 }
 
 static void draw_map(void)
@@ -939,7 +985,7 @@ static void draw_map(void)
 
     for (y = 0; y < GRID_ROWS; y++)
         for (x = 0; x < GRID_COLS; x++)
-            draw_cell(x, y, map_cell_attr(cell_of(x, y)));
+            draw_cell(x, y);
 }
 
 /* Row 17: the unit under the cursor — type, HP against its type's
@@ -971,9 +1017,10 @@ static void draw_unit_line(uint8_t cell)
     print_char(30, ROW_UNIT, 'M');
     print_num(31, ROW_UNIT, unit_movement[t], 1);
 
-    /* Same colour rule as the sprite, so a spent unit reads as spent in
-       the panel too. */
-    set_attr_rect(0, ROW_UNIT, 32, 1, unit_attr(u));
+    /* Same side/spent rule as the sprite, but one flat colour: this is
+       a row of text, and the sheet's per-cell shading means nothing
+       here. */
+    set_attr_rect(0, ROW_UNIT, 32, 1, unit_line_attr(u));
 }
 
 /* Unit / turn / coordinate / terrain panel, shared by the play and map
@@ -1010,10 +1057,56 @@ static void set_page(void)
     page_y = (uint8_t)(cursor_y - cursor_y % VIEW_ROWS);
 }
 
+/* The colours of one play-view cell, and the single place that decides
+   them.  Attributes only: laying a movement range down or taking it
+   away changes up to 25 cells' colour and not one pixel of their art,
+   so this costs 16 bytes a cell where draw_view_cell() costs 144 —
+   the difference between recolouring the page in four frames and
+   repainting it in thirteen.
+
+   Order matters.  The cursor wins over everything, because the player
+   has to be able to find it.  A unit outranks the range highlight, but
+   only nominally: the flood fill refuses occupied cells, so no cell is
+   ever both.  Bare ground gets the terrain sheet's own block, which is
+   the only path that paints authored per-cell colour rather than a
+   flat wash. */
+static void attr_view_cell(uint8_t vx, uint8_t vy)
+{
+    uint8_t col = (uint8_t)(VIEW_COL + vx * VIEW_CW);
+    uint8_t row = (uint8_t)(VIEW_ROW + vy * VIEW_CH);
+    uint8_t wx = (uint8_t)(page_x + vx);
+    uint8_t wy = (uint8_t)(page_y + vy);
+    uint8_t cell, u;
+
+    if (wx >= GRID_COLS || wy >= GRID_ROWS) {
+        set_attr_rect(col, row, VIEW_CW, VIEW_CH, ATTR_VOID);
+        return;
+    }
+    if (wx == cursor_x && wy == cursor_y) {
+        set_attr_rect(col, row, VIEW_CW, VIEW_CH, ATTR_CURSOR);
+        return;
+    }
+
+    cell = cell_of(wx, wy);
+    u = occupancy[cell];
+
+    if (u != NO_UNIT) {
+        if (u == selected)
+            set_attr_rect(col, row, VIEW_CW, VIEW_CH, ATTR_HINT);
+        else
+            attr_unit_cell(col, row, VIEW_CW, VIEW_CH, u,
+                           unit_view_attr_of(u_type[u]));
+    } else if (selected != NO_UNIT && cost[cell] != NO_COST) {
+        set_attr_rect(col, row, VIEW_CW, VIEW_CH, ATTR_RANGE);
+    } else {
+        blit_attr_rect(col, row, VIEW_CW, VIEW_CH,
+                       view_attr_of(terrain[cell]), 0);
+    }
+}
+
 /* One cell of the play view: a terrain tile from tiles_view.zxp with
-   its occupant blitted over it, or blank for cells outside the world.
-   The cursor's cell keeps its picture and inverts, so the cursor reads
-   over terrain and over a unit sprite alike. */
+   its occupant blitted over it, or blank for cells outside the world,
+   then the colours from attr_view_cell(). */
 static void draw_view_cell(uint8_t vx, uint8_t vy)
 {
     uint8_t col = (uint8_t)(VIEW_COL + vx * VIEW_CW);
@@ -1024,14 +1117,9 @@ static void draw_view_cell(uint8_t vx, uint8_t vy)
     if (wx >= GRID_COLS || wy >= GRID_ROWS) {
         clear_blit((int8_t)col, (uint8_t)(row << 3),
                    VIEW_CW, TILES_VIEW_TILE_H);
-        set_attr_rect(col, row, VIEW_CW, VIEW_CH, ATTR_VOID);
-        return;
-    }
-
-    {
+    } else {
         uint8_t cell = cell_of(wx, wy);
         uint8_t u = occupancy[cell];
-        uint8_t at_cursor = (wx == cursor_x && wy == cursor_y);
 
         write_blit((int8_t)col, (uint8_t)(row << 3),
                    view_tiles + (uint16_t)terrain[cell] * TILES_VIEW_TILE_SIZE,
@@ -1041,28 +1129,8 @@ static void draw_view_cell(uint8_t vx, uint8_t vy)
                        unit_view_tiles +
                            (uint16_t)u_type[u] * UNITS_VIEW_TILE_SIZE,
                        UNITS_VIEW_TILE_W, UNITS_VIEW_TILE_H);
-        set_attr_rect(col, row, VIEW_CW, VIEW_CH,
-                      at_cursor ? ATTR_CURSOR : view_cell_attr(cell));
     }
-}
-
-/* The same cell, colour only.  Laying a movement range down or taking
-   it away changes up to 25 cells' attributes and not one pixel of their
-   art, so this costs 16 bytes a cell where draw_view_cell() costs 144.
-   That is the difference between recolouring the page in four frames
-   and repainting it in thirteen. */
-static void attr_view_cell(uint8_t vx, uint8_t vy)
-{
-    uint8_t wx = (uint8_t)(page_x + vx);
-    uint8_t wy = (uint8_t)(page_y + vy);
-    uint8_t a;
-
-    if (wx >= GRID_COLS || wy >= GRID_ROWS)     a = ATTR_VOID;
-    else if (wx == cursor_x && wy == cursor_y)  a = ATTR_CURSOR;
-    else                                        a = view_cell_attr(cell_of(wx, wy));
-
-    set_attr_rect((uint8_t)(VIEW_COL + vx * VIEW_CW),
-                  (uint8_t)(VIEW_ROW + vy * VIEW_CH), VIEW_CW, VIEW_CH, a);
+    attr_view_cell(vx, vy);
 }
 
 static void draw_view(void)
@@ -1154,8 +1222,8 @@ static void enter_map(void)
 {
     draw_header("CAMPAIGN MAP");
     draw_map();
-    draw_cell(cursor_x, cursor_y, ATTR_HINT);   /* where the play cursor is */
-    draw_cell(cur_x, cur_y, ATTR_CURSOR);
+    solid_map_cell(cursor_x, cursor_y, ATTR_HINT);  /* the play cursor */
+    solid_map_cell(cur_x, cur_y, ATTR_CURSOR);
     draw_status("CURSOR :", cur_x, cur_y);
 
     print_at(1, ROW_HINT, "QAOP LOOK AROUND  SPACE CLOSE");
@@ -1246,13 +1314,16 @@ static void move_cursor(void)
 
     if (!nav_step(cur_x, cur_y, &nx, &ny)) return;
 
-    draw_cell(cur_x, cur_y,
-              (cur_x == cursor_x && cur_y == cursor_y)
-                  ? ATTR_HINT                       /* the play cursor */
-                  : map_cell_attr(cell_of(cur_x, cur_y)));
+    /* Only colours change as the cursor moves, so the tiles underneath
+       are left alone: put the vacated cell's own attributes back, then
+       flood the new one. */
+    if (cur_x == cursor_x && cur_y == cursor_y)
+        solid_map_cell(cur_x, cur_y, ATTR_HINT);    /* the play cursor */
+    else
+        attr_map_cell(cur_x, cur_y);
     cur_x = nx;
     cur_y = ny;
-    draw_cell(cur_x, cur_y, ATTR_CURSOR);
+    solid_map_cell(cur_x, cur_y, ATTR_CURSOR);
     redraw_status = 1;
 }
 
@@ -1318,7 +1389,7 @@ static void select_unit(uint8_t u)
 
 /* Put the held unit down.  Only colours change — the unit has not
    moved — so the page is recoloured rather than redrawn, and
-   view_cell_attr() stops reporting the range the moment `selected`
+   attr_view_cell() stops reporting the range the moment `selected`
    clears. */
 static void deselect(void)
 {
