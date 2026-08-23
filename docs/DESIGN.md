@@ -307,10 +307,16 @@ Consequences the design has to respect:
 
 - **Drawing belongs in the vblank window. Thinking does not.** The window is a
   hardware fact: after `vsync_wait()` returns, roughly 256 bytes can be written
-  to the screen before the raster catches up and the write tears. That is what
-  `PAGE_CELLS` is set for, and why anything larger than a couple of cells is
-  spread across frames. **Computation has no such limit** — this is the whole
-  reason for the file split; see § Logic and rendering.
+  to the screen before the raster catches up and the write tears. Anything
+  larger is either spread across frames or accepted as a tear — a scroll step
+  is 4 608 bytes and takes the second option. **Computation has no such
+  limit** — this is the whole reason for the file split; see § Logic and
+  rendering.
+- **The border flashes green only when a state repaints its screen**, which is
+  what SPACE and ENTER cause. It used to wrap `update_state()` as a CPU-budget
+  meter, from when a frame's work was one or two cells. A cursor step is now a
+  five-frame scroll, so the meter strobed green on every step: an honest
+  reading of the budget and an unusable thing to look at.
 - **One state is active at a time.** There is no state stack, and every state
   has a single caller, so each just names its destination — `ST_MAP` returns to
   `ST_PLAY` and says so. Nothing needs to remember where it came from. If a
@@ -389,15 +395,57 @@ is not on show; `render_show()` flips. On a 48K both are no-ops and the code
 below them never learns which machine it is on — the whole difference is two
 functions and a flag.
 
-> **Currently disarmed.** The path is built and verified, but `shadow_ok` in
-> `src/render.c` holds it off, so both machines take the 48K path today. It
-> collides with the vertical blank: `vsync_wait()` writes its floating bus sync
-> marker to `0x5AC0`, attribute row 22 of the page-5 screen, and waits to see
-> that byte come back off the bus. The bus carries what the ULA is *fetching*,
-> so with page 7 on display the marker is never fetched and `vsync_wait()`
-> spins for ever — the game hangs on the title with the input dead. Switching
-> it on means teaching `src/vsync.c` which screen is live and writing the
-> marker to `0xDAC0` when it is page 7. That is P7 work; see `docs/PLAN.md`.
+**The 128K path arms itself only if it can prove paging works.**
+`is_128k` is not sufficient: `main()` locks port `0x7FFD` (bit 5) whenever the
++2A/+3 floating bus is not in use, and after that every write to it is ignored
+*silently*. The page-in does nothing, the flip does nothing, and the flag is
+still set — so a whole screen gets composed into a bank the ULA never shows and
+the title screen simply fails to appear, with no other symptom. That has
+happened twice. `screens_init()` now writes a sentinel into page 7, pages
+something else in, writes a different value, pages back and checks which
+survived; only then does it arm. If paging is locked it falls back to the 48K
+path and the game renders correctly, just without the shadow screen.
+
+**The shadow screen is therefore off on every machine today**, and the reason
+is a +3, not a 128K. `main()` locks paging (`0x7FFD` bit 5), which makes
+`screens_init()`'s page-in a no-op, which the sentinel test detects, so the
+48K path is used everywhere.
+
+Clearing that lock does give a 128K its shadow screen — verified — but it also
+lets those same writes reach a **+2A/+3**, where banking page 7 in behind the
+loader's back drops the machine into BASIC with *"Nonsense in BASIC"*. The
+lock had been protecting those machines silently all along; removing it looked
+free precisely because nothing here tests a +3.
+
+The missing piece is **detecting a +2A/+3 reliably**. `vsync_mode ==
+VSYNC_MODE_128K` identifies one only if the mode-2 floating bus was detected;
+a +3 that falls back to HALT is indistinguishable from a 128K by anything this
+program currently knows. Until there is a real test for it — the +3 decodes
+port `0x1FFD`, which is the obvious probe — the lock stays and the shadow
+screen with it. A tear-free scroll on one model is not worth a crash on
+another.
+
+**A flip only happens on a state change.** `render_compose()` and
+`render_show()` bracket the whole-screen painters and nothing else, so the
+buffers swap on the keys that move between screens and never while the cursor
+is moving. A cursor step presents into the screen already on show — that
+tears on both machines, but it does not strobe, which flipping would: the
+header, status panel and key legend live only in the buffer they were painted
+into, so the other one would come up with a board and no chrome. Making the
+scroll itself tear-free means painting the chrome into both buffers, and that
+is not done.
+
+Two things had to be fixed before this could be switched on at all, and both
+are worth remembering because each failed silently:
+
+- `vsync_wait()` writes its floating bus sync marker to attribute row 22 and
+  waits to see that byte come back off the bus. The bus carries what the ULA
+  is *fetching*, so with page 7 on display a marker in page 5 is never fetched
+  and the wait never ends — the game hung on the title with the input dead.
+  `vsync_marker_addr` now follows the live screen.
+- `ST_PLAY` used to draw incrementally after a flip, which diverged the two
+  buffers and brought the board back unpainted. P7 composes the whole window
+  per repaint, so that cannot happen any more.
 
 Composing off-display is not merely tidier, it is **free of the frame budget**:
 nobody is looking at the back buffer, so a full repaint there has no deadline
@@ -467,10 +515,18 @@ blocking call `ST_TITLE` makes, which is what § Long operations is for.
 
 **`SPACE` is the key that moves you on**, everywhere: it starts a game, closes
 the overview and takes the level-end screen on, and inside `ST_PLAY` it is also
-what picks a unit up and orders its move. Fire 1 is accepted wherever a
-joystick would otherwise be stranded, since a Kempston stick has no space bar.
-The single exception is **ending a turn, which is `ENTER`** — `SPACE` is
-already spoken for on that screen.
+what picks a unit up and orders its move. **Fire 1 and `Z` mean the same
+thing**, so a Kempston stick can play the game without reaching for the
+keyboard.
+
+The single exception is **ending a turn, which is `ENTER` and only `ENTER`**.
+Fire 1 used to end the turn as well, which was wrong twice over: a joystick
+could never pick a unit up, and any setup mapping fire onto the space bar
+selected a unit and ended the turn in the same frame — `end_turn()` deselects,
+so SPACE appeared to do nothing but advance the counter. Ending a turn is
+therefore the one thing a joystick alone cannot do; it is also the one action
+that throws away everything you have not used, so needing a deliberate reach
+for it is no bad thing.
 
 ```
             ┌──────────┐  SPACE/FIRE   ┌──────────┐   M    ┌──────────┐
@@ -538,18 +594,21 @@ already spoken for on that screen.
   to move is readable at a glance. The enemy has no dim form — non-bright red
   is `0x02`, which the floating bus sync marker reserves — and does not need
   one.
-- **Ending the turn**: `ENTER` (or fire 1) returns every unit's action and
+- **Ending the turn**: `ENTER` — and not fire 1, which acts — returns every unit's action and
   advances the turn counter. This is the one screen where the "go on" key is
   not `SPACE`, because `SPACE` is busy giving orders here.
-- **The view scrolls, the cursor does not** — see § Cursor and movement for the
-  rule and `docs/PLAN.md` § P7 for how it is built. The cursor sits at a fixed
-  screen cell and directions push the world past it, one tile per step, with
-  input locked for the length of the scroll. Off the edge of the board is sea.
+- **The view moves, the cursor does not.** The cursor is pinned to a fixed
+  screen cell and a direction pushes the world past it, one tile per step. Off
+  the edge of the board is sea, which is what lets the cursor reach a corner —
+  the window is never clamped to the map. See § Cursor and movement.
 
-  *Until P7 lands this is still a paging view*: the cursor moves inside a fixed
-  8x4 page and the page flips when it steps off the edge, repainting
-  `PAGE_CELLS` tiles a frame. The design below describes the destination; the
-  plan describes the road.
+  The window is composed in a linear off-screen buffer and pushed one
+  character at a time, four sub-steps to a tile. Composing there costs no
+  screen-address arithmetic at all, which is most of why it is quick; see
+  `docs/PLAN.md` § P7. It still tears on a 48K, because presenting is 4 608
+  bytes against a ~256-byte window — the 128K shadow screen is what removes
+  that, and now that the whole window is composed per repaint, nothing stands
+  in its way but `shadow_ok`.
 - **Exits**: `ENTER` ends the turn, `M` → `ST_MAP`, `X` → title.
 
 ### ST_MAP

@@ -78,10 +78,24 @@
 #define VIEW_COL    ((32 - VIEW_COLS * VIEW_CW) / 2)
 #define VIEW_ROW    1
 
-/* Cells repainted per frame during a page flip.  Two 4x4 tiles is ~256
-   bytes of screen writes, which fits the post-vsync_wait() budget with
-   room to spare; the whole page takes VIEW_CELLS / this many frames. */
-#define PAGE_CELLS  2
+/* --- Where the cursor sits on screen ---------------------------------
+   The cursor does not move in the play view: a direction pushes the
+   WORLD past it (docs/DESIGN.md § Cursor and movement).  These are the
+   view cell it is pinned to.  An 8x4 window has no exact centre, so
+   they are a tuning choice rather than arithmetic — they decide how
+   much board the player sees ahead of the cursor against behind it. */
+#define CURSOR_VX   3
+#define CURSOR_VY   1
+
+#if (CURSOR_VX >= VIEW_COLS) || (CURSOR_VY >= VIEW_ROWS)
+#error "the pinned cursor must be inside the view"
+#endif
+
+/* Off the edge of the board is sea, not blank: a pinned cursor has to be
+   able to reach the corners, so the window must be allowed to leave the
+   map, and what it shows out there is the water tile.  Scenery only —
+   the sea has no cell index and no unit can be ordered onto it. */
+#define TER_SEA     (LEVEL_1_GID_WATER - LEVEL_1_GID_FIRST)
 
 /* Cells RECOLOURED per frame, when a movement range goes on or comes
    off.  An attribute-only cell is 16 bytes against a full repaint's
@@ -126,12 +140,11 @@
 /* --- Repaint queues --------------------------------------------------
  * What the renderer owes the screen, paid off a few cells per frame by
  * render_tick().  Ask for a repaint through the calls below rather than
- * setting these; they are exposed because the frame loop has to be able
- * to SEE the debt — `cells_left` non-zero means a page flip is mid-way
- * and both cursor movement and new orders hold until it finishes. */
-extern uint8_t page_x, page_y;  /* top-left world cell of the page      */
-extern uint8_t cells_left;      /* cells still to repaint on a flip     */
-extern uint8_t attrs_left;      /* page cells still to recolour         */
+ * setting these. */
+/* Top-left world cell of the window.  SIGNED, and not tile-aligned: the
+   window follows the cursor and runs off the board at the edges. */
+extern int8_t page_x, page_y;
+extern uint8_t attrs_left;      /* view cells still to recolour         */
 extern uint8_t dirty_n;         /* cells whose picture is stale         */
 
 /* --- Setup ----------------------------------------------------------- */
@@ -156,6 +169,7 @@ void draw_status(const char *label, uint8_t x, uint8_t y);
 /* --- The play view ---------------------------------------------------- */
 void set_page(void);            /* page the view onto the cursor        */
 void draw_view(void);           /* every cell, pixels and colour        */
+void scroll_view(int8_t dx, int8_t dy);  /* push the window one cell    */
 void draw_view_cell(uint8_t vx, uint8_t vy);
 void attr_view_cell(uint8_t vx, uint8_t vy);    /* colour only          */
 
@@ -169,8 +183,7 @@ void solid_map_cell(uint8_t cx, uint8_t cy, uint8_t attr);
  * Orders are given outside the vblank window, so nothing there may draw
  * its own result: it marks the cell and render_tick() pays it off. */
 void mark_dirty(uint8_t x, uint8_t y);
-void start_page_flip(void);     /* repaint the whole page, N per frame  */
-void recolour_page(void);       /* re-attribute the whole page          */
+void recolour_page(void);       /* re-attribute the whole window        */
 void render_discard(void);      /* forget what is owed; about to redraw */
 void render_tick(void);         /* one frame's worth of owed repaints   */
 

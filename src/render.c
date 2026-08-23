@@ -18,6 +18,8 @@
  * spread it.
  */
 
+#include <string.h>
+
 #include "../config/app_config.h"
 #include "../config/game_config.h"
 #include "../include/board.h"
@@ -25,6 +27,7 @@
 #include "../include/gfx.h"
 #include "../include/hw.h"
 #include "../include/level_1.h"
+#include "../include/memmap.h"
 #include "../include/render.h"
 #include "../include/tiles_map.h"
 #include "../include/tiles_view.h"
@@ -108,28 +111,25 @@ static uint8_t shadow_ok;   /* 0 = the 128K path is not usable yet     */
    its keep (docs/PLAN.md).  Until then both machines take the 48K path
    and this costs nothing but the branch. */
 
-/* Bank page 7 in for good, so the shadow screen is addressable without
-   paging around every repaint.  48K does nothing here and keeps
-   drawing where it always did. */
+/* The shadow screen is not in use, and this touches nothing.
+
+   It used to bank page 7 in at 0xC000 and prove it worked by writing a
+   sentinel there.  Both of those are now impossible AND unwanted: the
+   view buffer lives at 0xC000 (include/memmap.h), so there is nowhere to
+   bank page 7 into, and every one of those writes — to port 0x7FFD and
+   to 0xC000 itself — was a poke at a +2A/+3 whose paging this program
+   does not understand and cannot detect.  A +3 crashes back into BASIC
+   and nothing here could see why.
+
+   So it does nothing, deliberately, and the two calls below become
+   no-ops on every machine.  The seam stays because the 128K shadow
+   screen is still the right answer once two things exist: a reliable
+   +2A/+3 probe (port 0x1FFD is decoded there and not on a 128K), and
+   somewhere other than 0xC000 for the view buffer. */
 static void screens_init(void)
 {
     back = 0;
-    /* Still 0: the vsync collision below is fixed, but ST_PLAY does
-       INCREMENTAL drawing after the flip (render_tick's page flips and
-       dirty cells) and that diverges the two buffers — the board comes
-       back unpainted on the next entry.  Alternating buffers only works
-       once the whole view is composed per repaint, which is P7's scroll
-       model.  tests/render_paths.py fails on 128K ST_PLAY when this is
-       set to is_128k, which is how it was caught. */
     shadow_ok = 0;
-    if (!shadow_ok) return;
-
-    page_reg = PAGE_7FFD;
-    __asm
-        ld  bc, #0x7FFD
-        ld  a, (_page_reg)
-        out (c), a
-    __endasm;
 }
 
 /* Start a full-screen repaint.  On a 128K that means aiming at the
@@ -141,7 +141,17 @@ void render_compose(void)
     gfx_target(back ? SCREEN_0 : SCREEN_1);
 }
 
-/* Show what render_compose() built.  One port write on a 128K. */
+/* Show what render_compose() built.  One port write on a 128K.
+
+   Only whole-screen painters call this pair, so a FLIP ONLY HAPPENS ON A
+   STATE CHANGE — the SPACE and ENTER that move between screens.  Cursor
+   movement deliberately does not flip: it presents into the screen
+   already on show.  Flipping per scroll sub-step would be tear-free, but
+   the header, status panel and key legend live only in the screen they
+   were painted into, so the other buffer would show the board with no
+   chrome and the movement would strobe.  Fixing that means painting the
+   chrome into both buffers, which is a bigger change than the tear is
+   worth today. */
 void render_show(void)
 {
     if (!shadow_ok) return;
@@ -167,8 +177,7 @@ void render_show(void)
 
 /* ------------------------------------------------------------- state */
 
-uint8_t page_x, page_y;
-uint8_t cells_left;
+int8_t page_x, page_y;
 uint8_t attrs_left;
 uint8_t dirty_n;
 
@@ -184,10 +193,28 @@ static uint8_t dirty_x[DIRTY_MAX], dirty_y[DIRTY_MAX];
    ZX0 blobs in the headers.  Each blob is pixels for every tile
    followed by one attribute block per tile, so a sheet costs a single
    decompression and tile t's colours live at a fixed offset. */
-static uint8_t map_tiles[TILES_MAP_RAW_SIZE];
-static uint8_t view_tiles[TILES_VIEW_RAW_SIZE];
-static uint8_t unit_map_tiles[UNITS_MAP_RAW_SIZE];
-static uint8_t unit_view_tiles[UNITS_VIEW_RAW_SIZE];
+/* Laid out by hand in the 0x6000-0x7FFF region rather than left to the
+   linker, for the same reason as the view buffer: everything the linker
+   places sits above 0x8000, and the 128K path needs the program to stay
+   under 0xC000 (tools/checkmem.py enforces it).  1 620 bytes of unpacked
+   sheets is the difference between fitting and not.
+
+   Contended memory, which costs nothing here — the sheets are read
+   while composing, and composing happens in the vblank window. */
+#define MEM_MAP_TILES   (MEM_TILES)
+#define MEM_VIEW_TILES  (MEM_MAP_TILES  + TILES_MAP_RAW_SIZE)
+#define MEM_UMAP_TILES  (MEM_VIEW_TILES + TILES_VIEW_RAW_SIZE)
+#define MEM_UVIEW_TILES (MEM_UMAP_TILES + UNITS_MAP_RAW_SIZE)
+
+#define map_tiles       ((uint8_t *)MEM_MAP_TILES)
+#define view_tiles      ((uint8_t *)MEM_VIEW_TILES)
+#define unit_map_tiles  ((uint8_t *)MEM_UMAP_TILES)
+#define unit_view_tiles ((uint8_t *)MEM_UVIEW_TILES)
+
+#if (TILES_MAP_RAW_SIZE + TILES_VIEW_RAW_SIZE + UNITS_MAP_RAW_SIZE \
+     + UNITS_VIEW_RAW_SIZE) > MEM_TILES_SIZE
+#error "the unpacked sheets have outgrown MEM_TILES_SIZE in memmap.h"
+#endif
 
 /* Tile t's attribute block within each sheet. */
 #define map_attr_of(t) \
@@ -198,6 +225,37 @@ static uint8_t unit_view_tiles[UNITS_VIEW_RAW_SIZE];
     (unit_map_tiles + UNITS_MAP_ATTR_OFF + (uint16_t)(t) * UNITS_MAP_ATTR_SIZE)
 #define unit_view_attr_of(t) \
     (unit_view_tiles + UNITS_VIEW_ATTR_OFF + (uint16_t)(t) * UNITS_VIEW_ATTR_SIZE)
+
+/* --- The view buffer -------------------------------------------------
+   The play view is composed here and then presented in one pass, which
+   is both what makes a scroll possible and, on its own, most of the
+   speed (docs/PLAN.md § P7).
+
+   Composing straight to the screen cost 1 024 scr_off() calls for a full
+   repaint — one per pixel row per cell — because the ZX display is
+   interleaved and every row needs its address worked out.  The buffer is
+   LINEAR: row r starts at r * 32, so composing needs no address
+   arithmetic whatsoever, and presenting needs 128 table lookups instead
+   of 1 024 computations.
+
+   VIEW_COL is 0 and a tile is a whole number of characters wide, so
+   every copy is byte-aligned and nothing is ever shifted.  The #error
+   below is what keeps that true.
+
+   These live at 0x6000, in the free RAM below the program: 4 608 bytes
+   would not fit under the 0xC000 ceiling the 128K path needs (see
+   tools/checkmem.py).  It is contended memory, but contention only bites
+   while the ULA is drawing and this all happens in the vblank window. */
+#define VIEW_PX_ROWS  (VIEW_ROWS * VIEW_CH * 8)     /* 128 */
+#define VIEW_AT_ROWS  (VIEW_ROWS * VIEW_CH)         /*  16 */
+
+#define VBUF     ((uint8_t *)MEM_VBUF)
+#define VATTR    ((uint8_t *)MEM_VATTR)
+#define VIEW_OFF ((uint16_t *)MEM_VIEW_OFF)
+
+#if VIEW_COL != 0 || (VIEW_COLS * VIEW_CW) != 32
+#error "the view buffer assumes a full-width, byte-aligned play view"
+#endif
 
 /* Status-panel labels, padded to 8 characters like the terrain names
    the map converter generates. */
@@ -243,7 +301,15 @@ void draw_header(const char *title)
    ~500 bytes of ZX0 in the binary and one decompression at startup. */
 void load_tiles(void)
 {
+    uint8_t r;
+
     screens_init();
+
+    /* Screen offset of each buffer row, worked out once.  This is the
+       table that replaces 1 024 scr_off() calls per repaint with 128
+       array reads. */
+    for (r = 0; r < VIEW_PX_ROWS; r++)
+        VIEW_OFF[r] = scr_off(0, (uint8_t)(VIEW_ROW * 8 + r));
 
     dzx0_decompress(tiles_map_zx0, map_tiles);
     dzx0_decompress(tiles_view_zx0, view_tiles);
@@ -405,86 +471,213 @@ void draw_status(const char *label, uint8_t x, uint8_t y)
 
 /* Page the view onto whichever VIEW_COLS x VIEW_ROWS block of the world
    holds the cursor. */
+/* Put the window where the pinned cursor lands on CURSOR_VX/VY.  No
+   clamping to the board: that is the whole point of the sea, and without
+   it the cursor could never reach a corner — which is where both bases
+   are. */
 void set_page(void)
 {
-    page_x = (uint8_t)(cursor_x - cursor_x % VIEW_COLS);
-    page_y = (uint8_t)(cursor_y - cursor_y % VIEW_ROWS);
+    page_x = (int8_t)(cursor_x - CURSOR_VX);
+    page_y = (int8_t)(cursor_y - CURSOR_VY);
 }
 
-/* The colours of one play-view cell, and the single place that decides
-   them.  Attributes only: laying a movement range down or taking it
-   away changes up to 25 cells' colour and not one pixel of their art,
-   so this costs 16 bytes a cell where draw_view_cell() costs 144 —
-   the difference between recolouring the page in four frames and
-   repainting it in thirteen.
+/* --- Composing into the buffer ---------------------------------------
+   Everything below writes to VBUF/VATTR, never to the screen.  Nothing
+   here computes a screen address: a tile row is four bytes at a fixed
+   offset, which is the whole reason this is faster than drawing
+   directly. */
+
+/* One 4x4-character tile's pixels.  Unrolled to four byte moves per
+   row: the width is a compile-time 4, so a loop would spend more on the
+   counter than on the copy. */
+static void compose_tile(uint8_t vx, uint8_t vy, const uint8_t *src)
+{
+    uint8_t *d = VBUF + (uint16_t)vy * (VIEW_CH * 8) * 32 + vx * VIEW_CW;
+    uint8_t r = VIEW_CH * 8;
+
+    while (r--) {
+        d[0] = src[0]; d[1] = src[1]; d[2] = src[2]; d[3] = src[3];
+        src += VIEW_CW;
+        d += 32;
+    }
+}
+
+#if VIEW_CW != 4
+#error "compose_tile() is unrolled for 4-character-wide tiles"
+#endif
+
+/* One cell's attributes, either flooded with a single colour or copied
+   from a sheet block with the side's ink ORed over it. */
+static void compose_attr(uint8_t vx, uint8_t vy, uint8_t flat,
+                         const uint8_t *src, uint8_t or_mask)
+{
+    uint8_t *d = VATTR + (uint16_t)vy * VIEW_CH * 32 + vx * VIEW_CW;
+    uint8_t r = VIEW_CH;
+
+    while (r--) {
+        if (src) {
+            d[0] = (uint8_t)(src[0] | or_mask);
+            d[1] = (uint8_t)(src[1] | or_mask);
+            d[2] = (uint8_t)(src[2] | or_mask);
+            d[3] = (uint8_t)(src[3] | or_mask);
+            src += VIEW_CW;
+        } else {
+            d[0] = d[1] = d[2] = d[3] = flat;
+        }
+        d += 32;
+    }
+}
+
+/* --- Presenting ------------------------------------------------------
+   The only place the play view touches screen memory.  One table read
+   per row, then a straight 32-byte run, because VIEW_COL is 0 and the
+   view spans the full width. */
+
+static void present_all(void)
+{
+    uint8_t r;
+    const uint8_t *sp = VBUF;
+    const uint8_t *sa = VATTR;
+
+    for (r = 0; r < VIEW_PX_ROWS; r++) {
+        memcpy(gfx_pix + VIEW_OFF[r], sp, 32);
+        sp += 32;
+    }
+    for (r = 0; r < VIEW_AT_ROWS; r++) {
+        memcpy(gfx_attr + (uint16_t)(VIEW_ROW + r) * 32, sa, 32);
+        sa += 32;
+    }
+}
+
+/* Just one cell, for the two ends of a move.  Four bytes a row rather
+   than thirty-two: a dirty cell must not cost a whole view. */
+static void present_cell(uint8_t vx, uint8_t vy)
+{
+    uint8_t col = (uint8_t)(vx * VIEW_CW);
+    uint16_t r = (uint16_t)vy * (VIEW_CH * 8);
+    uint8_t n = VIEW_CH * 8;
+    uint8_t ar;
+
+    while (n--) {
+        uint8_t *d = gfx_pix + VIEW_OFF[r] + col;
+        const uint8_t *sp = VBUF + r * 32 + col;
+
+        d[0] = sp[0]; d[1] = sp[1]; d[2] = sp[2]; d[3] = sp[3];
+        r++;
+    }
+    for (ar = 0; ar < VIEW_CH; ar++) {
+        uint8_t *d = gfx_attr + (uint16_t)(VIEW_ROW + vy * VIEW_CH + ar) * 32
+                     + col;
+        const uint8_t *sa = VATTR + (uint16_t)(vy * VIEW_CH + ar) * 32 + col;
+
+        d[0] = sa[0]; d[1] = sa[1]; d[2] = sa[2]; d[3] = sa[3];
+    }
+}
+
+/* --- What a cell looks like ------------------------------------------ */
+
+/* What colour a view cell is.  Returns the sheet's 4x4 attribute block,
+   or NULL when the cell is a flat wash — *flat then holds the colour.
+   *mask is ORed over a block, which is how a unit's side ink combines
+   with the shading the sheet authored.
 
    Order matters.  The cursor wins over everything, because the player
    has to be able to find it.  A unit outranks the range highlight, but
    only nominally: the flood fill refuses occupied cells, so no cell is
    ever both.  Bare ground gets the terrain sheet's own block, which is
-   the only path that paints authored per-cell colour rather than a
-   flat wash. */
-void attr_view_cell(uint8_t vx, uint8_t vy)
+   the only path that paints authored per-cell colour rather than a flat
+   wash.  Off the board is sea.
+
+   Split out from the compose below so the scroll can ask the same
+   question about a single character column without duplicating the
+   rules. */
+static const uint8_t *cell_attr(uint8_t vx, uint8_t vy,
+                                uint8_t *flat, uint8_t *mask)
 {
-    uint8_t col = (uint8_t)(VIEW_COL + vx * VIEW_CW);
-    uint8_t row = (uint8_t)(VIEW_ROW + vy * VIEW_CH);
-    uint8_t wx = (uint8_t)(page_x + vx);
-    uint8_t wy = (uint8_t)(page_y + vy);
+    int8_t wx = (int8_t)(page_x + vx);
+    int8_t wy = (int8_t)(page_y + vy);
     uint8_t cell, u;
 
-    if (wx >= GRID_COLS || wy >= GRID_ROWS) {
-        set_attr_rect(col, row, VIEW_CW, VIEW_CH, ATTR_VOID);
-        return;
-    }
-    if (wx == cursor_x && wy == cursor_y) {
-        set_attr_rect(col, row, VIEW_CW, VIEW_CH, ATTR_CURSOR);
-        return;
+    *mask = 0;
+    if (wx < 0 || wx >= GRID_COLS || wy < 0 || wy >= GRID_ROWS)
+        return view_attr_of(TER_SEA);
+
+    if (wx == (int8_t)cursor_x && wy == (int8_t)cursor_y) {
+        *flat = ATTR_CURSOR;
+        return 0;
     }
 
-    cell = cell_of(wx, wy);
+    cell = cell_of((uint8_t)wx, (uint8_t)wy);
     u = occupancy[cell];
 
     if (u != NO_UNIT) {
-        if (u == selected)
-            set_attr_rect(col, row, VIEW_CW, VIEW_CH, ATTR_HINT);
-        else
-            attr_unit_cell(col, row, VIEW_CW, VIEW_CH, u,
-                           unit_view_attr_of(u_type[u]));
-    } else if (selected != NO_UNIT && cost[cell] != NO_COST) {
-        set_attr_rect(col, row, VIEW_CW, VIEW_CH, ATTR_RANGE);
-    } else {
-        blit_attr_rect(col, row, VIEW_CW, VIEW_CH,
-                       view_attr_of(terrain[cell]), 0);
+        if (u == selected)            *flat = ATTR_HINT;
+        else if (u_flags[u] & U_SIDE) *flat = ATTR_UNIT_E;
+        else if (u_flags[u] & U_ACTED) *flat = ATTR_UNIT_P_DONE;
+        else {
+            *mask = ATTR_UNIT_P;
+            return unit_view_attr_of(u_type[u]);
+        }
+        return 0;
     }
+    if (selected != NO_UNIT && cost[cell] != NO_COST) {
+        *flat = ATTR_RANGE;
+        return 0;
+    }
+    return view_attr_of(terrain[cell]);
 }
 
-/* One cell of the play view: a terrain tile from tiles_view.zxp with
-   its occupant blitted over it, or blank for cells outside the world,
-   then the colours from attr_view_cell(). */
+/* Colour, into the buffer. */
+static void compose_view_attr(uint8_t vx, uint8_t vy)
+{
+    uint8_t flat = 0, mask = 0;
+    const uint8_t *blk = cell_attr(vx, vy, &flat, &mask);
+
+    compose_attr(vx, vy, flat, blk, mask);
+}
+
+/* The art a view cell shows: sea off the board, the unit if one stands
+   here, the terrain otherwise.
+
+   Returning the unit sprite INSTEAD of the terrain, not on top of it.
+   Sprites are opaque and cover the whole cell, so the terrain underneath
+   was being composed and then completely overwritten — half the work for
+   every occupied cell, and there are 14 of them on a starting board. */
+static const uint8_t *cell_art(uint8_t vx, uint8_t vy)
+{
+    int8_t wx = (int8_t)(page_x + vx);
+    int8_t wy = (int8_t)(page_y + vy);
+    uint8_t cell, u;
+
+    if (wx < 0 || wx >= GRID_COLS || wy < 0 || wy >= GRID_ROWS)
+        return view_tiles + (uint16_t)TER_SEA * TILES_VIEW_TILE_SIZE;
+
+    cell = cell_of((uint8_t)wx, (uint8_t)wy);
+    u = occupancy[cell];
+    if (u != NO_UNIT)
+        return unit_view_tiles + (uint16_t)u_type[u] * UNITS_VIEW_TILE_SIZE;
+    return view_tiles + (uint16_t)terrain[cell] * TILES_VIEW_TILE_SIZE;
+}
+
+/* Art, into the buffer. */
+static void compose_view_cell(uint8_t vx, uint8_t vy)
+{
+    compose_tile(vx, vy, cell_art(vx, vy));
+    compose_view_attr(vx, vy);
+}
+
+/* --- The public draw calls ------------------------------------------- */
+
+void attr_view_cell(uint8_t vx, uint8_t vy)
+{
+    compose_view_attr(vx, vy);
+    present_cell(vx, vy);
+}
+
 void draw_view_cell(uint8_t vx, uint8_t vy)
 {
-    uint8_t col = (uint8_t)(VIEW_COL + vx * VIEW_CW);
-    uint8_t row = (uint8_t)(VIEW_ROW + vy * VIEW_CH);
-    uint8_t wx = (uint8_t)(page_x + vx);
-    uint8_t wy = (uint8_t)(page_y + vy);
-
-    if (wx >= GRID_COLS || wy >= GRID_ROWS) {
-        clear_blit((int8_t)col, (uint8_t)(row << 3),
-                   VIEW_CW, TILES_VIEW_TILE_H);
-    } else {
-        uint8_t cell = cell_of(wx, wy);
-        uint8_t u = occupancy[cell];
-
-        write_blit((int8_t)col, (uint8_t)(row << 3),
-                   view_tiles + (uint16_t)terrain[cell] * TILES_VIEW_TILE_SIZE,
-                   TILES_VIEW_TILE_W, TILES_VIEW_TILE_H);
-        if (u != NO_UNIT)
-            write_blit((int8_t)col, (uint8_t)(row << 3),
-                       unit_view_tiles +
-                           (uint16_t)u_type[u] * UNITS_VIEW_TILE_SIZE,
-                       UNITS_VIEW_TILE_W, UNITS_VIEW_TILE_H);
-    }
-    attr_view_cell(vx, vy);
+    compose_view_cell(vx, vy);
+    present_cell(vx, vy);
 }
 
 void draw_view(void)
@@ -492,7 +685,189 @@ void draw_view(void)
     uint8_t i;
 
     for (i = 0; i < VIEW_CELLS; i++)
-        draw_view_cell((uint8_t)(i % VIEW_COLS), (uint8_t)(i / VIEW_COLS));
+        compose_view_cell((uint8_t)(i % VIEW_COLS), (uint8_t)(i / VIEW_COLS));
+    present_all();
+}
+
+/* --- The push scroll -------------------------------------------------
+   A cursor step moves the world one whole tile, but the buffer is pushed
+   one CHARACTER at a time and presented between each — four sub-steps
+   per step.  A character at a time because attributes have character
+   granularity: shifting by pixels would slide the ink out from under its
+   colour.
+
+   Shifting a linear buffer is a memmove per row and nothing else, which
+   is the second reason the buffer earns its keep.  A vertical push is
+   better still: rows are contiguous, so the whole thing is one move. */
+
+/* Push the buffer one character sideways.  d > 0 moves the world LEFT,
+   which is what happens when the cursor goes right. */
+static void push_h(int8_t d)
+{
+    uint8_t r;
+
+    for (r = 0; r < VIEW_PX_ROWS; r++) {
+        uint8_t *p = VBUF + (uint16_t)r * 32;
+
+        if (d > 0) memmove(p, p + 1, 31);
+        else       memmove(p + 1, p, 31);
+    }
+    for (r = 0; r < VIEW_AT_ROWS; r++) {
+        uint8_t *p = VATTR + (uint16_t)r * 32;
+
+        if (d > 0) memmove(p, p + 1, 31);
+        else       memmove(p + 1, p, 31);
+    }
+}
+
+/* Push the buffer one character row.  d > 0 moves the world UP. */
+static void push_v(int8_t d)
+{
+    if (d > 0) {
+        memmove(VBUF, VBUF + 8 * 32, (VIEW_PX_ROWS - 8) * 32);
+        memmove(VATTR, VATTR + 32, (VIEW_AT_ROWS - 1) * 32);
+    } else {
+        memmove(VBUF + 8 * 32, VBUF, (VIEW_PX_ROWS - 8) * 32);
+        memmove(VATTR + 32, VATTR, (VIEW_AT_ROWS - 1) * 32);
+    }
+}
+
+/* The character column arriving at the edge: sub-column `sub` of the
+   cells in view column `vx`, written to buffer column `dcol`.  A strided
+   read — every fourth byte of the tile — which is why the incoming edge
+   needs its own path and cannot reuse compose_tile(). */
+static void slice_col(uint8_t vx, uint8_t sub, uint8_t dcol)
+{
+    uint8_t vy;
+
+    for (vy = 0; vy < VIEW_ROWS; vy++) {
+        const uint8_t *sp = cell_art(vx, vy) + sub;
+        uint8_t *d = VBUF + (uint16_t)vy * (VIEW_CH * 8) * 32 + dcol;
+        uint8_t r = VIEW_CH * 8;
+
+        while (r--) {
+            *d = *sp;
+            sp += VIEW_CW;
+            d += 32;
+        }
+    }
+}
+
+/* The character row arriving at the edge: sub-row `sub` of the cells in
+   view row `vy`.  Contiguous in the tile, unlike a column. */
+static void slice_row(uint8_t vy, uint8_t sub, uint8_t drow)
+{
+    uint8_t vx;
+
+    for (vx = 0; vx < VIEW_COLS; vx++) {
+        const uint8_t *sp = cell_art(vx, vy) + (uint16_t)sub * 8 * VIEW_CW;
+        uint8_t *d = VBUF + (uint16_t)drow * 32 + vx * VIEW_CW;
+        uint8_t r = 8;
+
+        while (r--) {
+            d[0] = sp[0]; d[1] = sp[1]; d[2] = sp[2]; d[3] = sp[3];
+            sp += VIEW_CW;
+            d += 32;
+        }
+    }
+}
+
+/* The attribute column arriving with slice_col()'s pixels: sub-column
+   `sub` of the cells in view column `vx`.  Sixteen bytes.
+
+   Without this the incoming column kept whatever push_h() smeared into
+   it and only came right when the whole tile had arrived, so colour
+   trailed the art by up to four characters and then snapped.  Doing it
+   per character is not merely better looking, it is CHEAPER: it costs
+   16 bytes a sub-step against recomposing all 32 cells at the end. */
+static void slice_attr_col(uint8_t vx, uint8_t sub, uint8_t dcol)
+{
+    uint8_t vy;
+
+    for (vy = 0; vy < VIEW_ROWS; vy++) {
+        uint8_t flat = 0, mask = 0;
+        const uint8_t *blk = cell_attr(vx, vy, &flat, &mask);
+        uint8_t *d = VATTR + (uint16_t)vy * VIEW_CH * 32 + dcol;
+        uint8_t r;
+
+        for (r = 0; r < VIEW_CH; r++) {
+            *d = blk ? (uint8_t)(blk[r * VIEW_CW + sub] | mask) : flat;
+            d += 32;
+        }
+    }
+}
+
+/* The same for a row arriving top or bottom: sub-row `sub` of the cells
+   in view row `vy`.  Thirty-two bytes, contiguous. */
+static void slice_attr_row(uint8_t vy, uint8_t sub, uint8_t drow)
+{
+    uint8_t vx;
+
+    for (vx = 0; vx < VIEW_COLS; vx++) {
+        uint8_t flat = 0, mask = 0;
+        const uint8_t *blk = cell_attr(vx, vy, &flat, &mask);
+        uint8_t *d = VATTR + (uint16_t)drow * 32 + vx * VIEW_CW;
+        uint8_t c;
+
+        for (c = 0; c < VIEW_CW; c++)
+            d[c] = blk ? (uint8_t)(blk[sub * VIEW_CW + c] | mask) : flat;
+    }
+}
+
+/* The cursor is the one thing pinned to the SCREEN rather than the
+   world, so the push drags its flood along with the art.  Repaint the
+   cell it belongs in and the one it slid into.
+
+   ONCE, after the last push — never between them.  Doing it per
+   sub-step writes the cell's final colours into a buffer that is still
+   mid-slide, and the remaining pushes then carry those bytes further
+   along and overwrite the cell beyond: the symptom was view cell (1,1)
+   coming out with the wrong terrain's colours after every horizontal
+   step.  The flood slides with the world for the four frames of the
+   scroll and lands back on the cursor at the end. */
+static void fix_cursor_attr(int8_t dx, int8_t dy)
+{
+    int8_t tx = (int8_t)(CURSOR_VX - dx);
+    int8_t ty = (int8_t)(CURSOR_VY - dy);
+
+    compose_view_attr(CURSOR_VX, CURSOR_VY);
+    if (tx >= 0 && tx < VIEW_COLS && ty >= 0 && ty < VIEW_ROWS)
+        compose_view_attr((uint8_t)tx, (uint8_t)ty);
+}
+
+/* Scroll the window one cell, in VIEW_CW sub-steps, presenting each.
+
+   Colour arrives with the art, a character at a time — the incoming
+   attribute column is sliced in alongside the pixels rather than the
+   whole view being recomposed once the tile has landed. */
+void scroll_view(int8_t dx, int8_t dy)
+{
+    uint8_t sub;
+
+    for (sub = 0; sub < VIEW_CW; sub++) {
+        if (dx) {
+            uint8_t vx   = dx > 0 ? (VIEW_COLS - 1) : 0;
+            uint8_t src  = dx > 0 ? sub : (uint8_t)(VIEW_CW - 1 - sub);
+            uint8_t dcol = dx > 0 ? 31 : 0;
+
+            push_h(dx);
+            slice_col(vx, src, dcol);
+            slice_attr_col(vx, src, dcol);
+        } else {
+            uint8_t vy   = dy > 0 ? (VIEW_ROWS - 1) : 0;
+            uint8_t src  = dy > 0 ? sub : (uint8_t)(VIEW_CH - 1 - sub);
+            uint8_t drow = dy > 0 ? (VIEW_PX_ROWS - 8) : 0;
+            uint8_t arow = dy > 0 ? (VIEW_AT_ROWS - 1) : 0;
+
+            push_v(dy);
+            slice_row(vy, src, drow);
+            slice_attr_row(vy, src, arow);
+        }
+        present_all();
+    }
+
+    fix_cursor_attr(dx, dy);
+    present_all();
 }
 
 /* Queue a world cell for a full redraw next frame.  Orders are given
@@ -509,13 +884,6 @@ void mark_dirty(uint8_t x, uint8_t y)
 
 /* --------------------------------------------------------- repainting */
 
-/* Repaint the whole page, PAGE_CELLS tiles a frame. */
-void start_page_flip(void)
-{
-    cells_left = VIEW_CELLS;
-    attrs_left = 0;         /* the flip rewrites every attribute itself */
-}
-
 /* Recolour the whole page, RANGE_CELLS cells a frame: a movement range
    going on or coming off changes colour and not one pixel. */
 void recolour_page(void)
@@ -528,42 +896,29 @@ void recolour_page(void)
    draw the previous level's board. */
 void render_discard(void)
 {
-    cells_left = 0;
     attrs_left = 0;
     dirty_n = 0;
 }
 
-/* One frame's worth of what the renderer owes the screen, in the order
-   that keeps each frame inside its budget.
-   
-   The three are mutually exclusive per frame on purpose.  A flip is
-   PAGE_CELLS full cells (~256 bytes) and rewrites every attribute
-   anyway, so nothing else need run during one.  A move's two dirty
-   cells are already a frame's worth at 144 bytes each.  Only when
-   neither is outstanding does the cheap attribute pass get the frame. */
+/* One frame's worth of what the renderer owes the screen.
+
+   The two are mutually exclusive per frame on purpose: a move's two
+   dirty cells are already a frame's worth at 144 bytes each, so the
+   cheap attribute pass waits for a frame of its own.
+
+   Moving the cursor is NOT in here.  The window follows the cursor, so
+   a step changes every cell and there is nothing to spread — it is
+   repainted in one go and accepts the tear (docs/PLAN.md § P7). */
 void render_tick(void)
 {
-    if (cells_left) {
-        uint8_t n = PAGE_CELLS;
-
-        while (n-- && cells_left) {
-            uint8_t i = (uint8_t)(VIEW_CELLS - cells_left);
-
-            draw_view_cell((uint8_t)(i % VIEW_COLS),
-                           (uint8_t)(i / VIEW_COLS));
-            cells_left--;
-        }
-        return;
-    }
-
     if (dirty_n) {
         while (dirty_n) {
             uint8_t i = --dirty_n;
+            int8_t vx = (int8_t)(dirty_x[i] - page_x);
+            int8_t vy = (int8_t)(dirty_y[i] - page_y);
 
-            if (dirty_x[i] >= page_x && dirty_x[i] < page_x + VIEW_COLS &&
-                dirty_y[i] >= page_y && dirty_y[i] < page_y + VIEW_ROWS)
-                draw_view_cell((uint8_t)(dirty_x[i] - page_x),
-                               (uint8_t)(dirty_y[i] - page_y));
+            if (vx >= 0 && vx < VIEW_COLS && vy >= 0 && vy < VIEW_ROWS)
+                draw_view_cell((uint8_t)vx, (uint8_t)vy);
         }
         return;
     }
@@ -618,7 +973,14 @@ void render_title(void)
             print_at(11, 5, "HALT FALLBACK      ");
             break;
     }
-    set_attr_rect(0, 3, 32, 3, ATTR_TEXT);
+    /* Whether the shadow screen is actually in use.  On the title
+       screen because it is the only place a tester without a debugger
+       can see it, and because "is the 128K path live?" has been the
+       hardest question to answer all the way through this. */
+    print_at(1, 6, "SCREEN  :");
+    print_at(11, 6, shadow_ok ? "DOUBLE" : "SINGLE");
+
+    set_attr_rect(0, 3, 32, 4, ATTR_TEXT);
 
     print_at(1, 10, "SPACE / FIRE   START");
     set_attr_rect(0, 10, 32, 1, ATTR_HINT);

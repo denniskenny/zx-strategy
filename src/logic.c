@@ -22,6 +22,7 @@
 #include "../include/board.h"
 #include "../include/dzx0.h"
 #include "../include/level_1.h"
+#include "../include/memmap.h"
 #include "../include/level_2.h"
 #include "../include/level_3.h"
 #include "../include/level_4.h"
@@ -94,15 +95,7 @@ static const uint8_t level_start[LEVEL_COUNT][2] = {
 
 /* ------------------------------------------------------------- state */
 
-uint8_t terrain[CELL_COUNT];
-uint8_t cell_cost[CELL_COUNT];
-uint8_t occupancy[CELL_COUNT];
-uint8_t cost[CELL_COUNT];
 
-uint8_t u_type[UNITS_MAX];
-uint8_t u_cell[UNITS_MAX];
-uint8_t u_hp[UNITS_MAX];
-uint8_t u_flags[UNITS_MAX];
 uint8_t unit_count;
 
 uint8_t cursor_x, cursor_y;
@@ -113,6 +106,24 @@ uint8_t sel_x, sel_y;
 uint8_t level;
 uint16_t turn;
 uint8_t player_won;
+
+/* --- Locators for the hand-placed arrays -----------------------------
+   terrain[], occupancy[], cost[], cell_cost[] and the unit arrays live
+   at fixed addresses (include/memmap.h), so the linker emits no symbol
+   for any of them.  Both the test harnesses and the debugger look names
+   up in zxstrategy.map, and without these they simply cannot find the
+   board any more — `symbol _terrain not found`.
+
+   Two bytes each to keep everything inspectable, which is a bargain:
+   the alternative is a game whose state cannot be read from outside. */
+uint8_t *const at_terrain   = terrain;
+uint8_t *const at_occupancy = occupancy;
+uint8_t *const at_cost      = cost;
+uint8_t *const at_cell_cost = cell_cost;
+uint8_t *const at_u_type    = u_type;
+uint8_t *const at_u_cell    = u_cell;
+uint8_t *const at_u_hp      = u_hp;
+uint8_t *const at_u_flags   = u_flags;
 
 /* y * GRID_COLS without the multiply. */
 const uint8_t row_base[GRID_ROWS] = { 0, 14, 28, 42, 56, 70, 84 };
@@ -147,27 +158,40 @@ const uint8_t col_of[CELL_COUNT] = {
 #error "Q_BUCKET is too small for MAX_MOVE; a bucket could overflow"
 #endif
 
-static uint8_t q[(MAX_MOVE + 1) * Q_BUCKET];
+#define q ((uint8_t *)MEM_Q)
+
+#if ((MAX_MOVE + 1) * Q_BUCKET) > 128
+#error "the Dial queue no longer fits the block memmap.h reserves for it"
+#endif
 
 /* Where each bucket starts, and where its next entry goes.  A pointer
    pair rather than a count per bucket because a push then costs one
    16-bit load and a store: indexing q[nc * Q_BUCKET + n] instead makes
    SDCC emit a five-shift multiply and a pair of 16-bit adds every time,
    and pushing is the innermost thing the fill does. */
-static uint8_t *const bucket_start[MAX_MOVE + 1] = {
-    q, q + Q_BUCKET, q + 2 * Q_BUCKET, q + 3 * Q_BUCKET
-};
+static uint8_t *bucket_start[MAX_MOVE + 1];
 static uint8_t *bucket_end[MAX_MOVE + 1];
 
-#if MAX_MOVE != 3
-#error "bucket_start[] is written out for MAX_MOVE = 3; regenerate it"
-#endif
+/* Filled once rather than initialised: q now lives at a hand-picked
+   address (include/memmap.h) and SDCC will not take a cast pointer in a
+   static initialiser. */
+static void buckets_init(void)
+{
+    uint8_t i;
+
+    for (i = 0; i <= MAX_MOVE; i++)
+        bucket_start[i] = q + (uint16_t)i * Q_BUCKET;
+}
 
 /* Placement scratch: the free cells around one base, drawn from at
    random.  A base sits in a corner, so its radius block holds at most
    UNITS_PLACE_SLOTS usable cells (game_config.h does that arithmetic
    and refuses a roster that cannot fit). */
-static uint8_t place_cand[UNITS_PLACE_SLOTS];
+#define place_cand ((uint8_t *)MEM_PLACE_CAND)
+
+#if UNITS_PLACE_SLOTS > 32
+#error "place_cand no longer fits the block memmap.h reserves for it"
+#endif
 static prng_t place_rng;
 
 /* ------------------------------------------------------------- armies */
@@ -406,6 +430,8 @@ static void populate_map(void)
    back to terrain 0. */
 void load_map(void)
 {
+    buckets_init();
+
     uint8_t i, t;
 
     /* The compressed GIDs unpack straight into terrain[] — same 98

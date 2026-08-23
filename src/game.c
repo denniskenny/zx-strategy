@@ -41,16 +41,19 @@
  *                                 and takes the level-end screen on.
  *                                 Fire 1 does the same on the screens a
  *                                 joystick has to get through.
- *            ENTER / Z / fire 1   end the turn (ST_PLAY only, because
- *                                 SPACE is busy giving orders there)
+ *            Z / fire 1           the same as SPACE: act
+ *            ENTER                end the turn (ST_PLAY only, because
+ *                                 SPACE is busy giving orders there).
+ *                                 The one thing a joystick cannot do.
  *            X / fire 2           back (drops the held unit first)
  *            M                    campaign overview (ST_PLAY only)
  *
  * The tune plays itself whenever the title screen is entered, and any
  * key stops it; there is no key that starts it.
  *
- * The border turns GREEN while the frame's work runs and BLACK while
- * waiting for the beam, so the green band is the CPU budget used.
+ * The border flashes GREEN while a state repaints its screen — the work
+ * SPACE and ENTER cause.  It is deliberately quiet during cursor
+ * movement, which is a multi-frame scroll and would strobe.
  */
 
 #include "../config/app_config.h"
@@ -76,12 +79,10 @@
 
 #define ACT_DIRS    (ACT_UP | ACT_DOWN | ACT_LEFT | ACT_RIGHT)
 
-/* Moving between screens is SPACE.  Fire 1 is accepted alongside it
-   because a Kempston stick has no space bar and would otherwise be
-   unable to start a game or take the level-end screen on — and fire 1
-   arrives in ACT_SELECT, which scan_input() cannot separate from Z or
-   ENTER without another action bit (all eight are spoken for).  So
-   ENTER still works on these screens; the screens advertise SPACE. */
+/* Moving between screens is SPACE, and fire 1 arrives as ACT_SPACE too,
+   so a joystick can start a game and take the level-end screen on.
+   ENTER is accepted here as well — it is only on the board that the two
+   part company, where SPACE gives orders and ENTER ends the turn. */
 #define ACT_GO      (ACT_SPACE | ACT_SELECT)
 
 /* Keyboard half-rows not covered by input.h. */
@@ -115,7 +116,13 @@ static uint8_t scan_actions(void)
     if (k & INPUT_DOWN)  a |= ACT_DOWN;
     if (k & INPUT_LEFT)  a |= ACT_LEFT;
     if (k & INPUT_RIGHT) a |= ACT_RIGHT;
-    if (k & INPUT_FIRE1) a |= ACT_SELECT;   /* Z / Kempston fire 1 */
+    /* Fire 1 (and Z) mean ACT — the same as SPACE — not "end turn".
+       They used to land in ACT_SELECT, which on the board is the
+       end-turn key, so a joystick could never pick a unit up and any
+       setup that maps fire onto the space bar selected a unit and ended
+       the turn in the same frame.  ENTER is now the only thing that
+       ends a turn. */
+    if (k & INPUT_FIRE1) a |= ACT_SPACE;    /* Z / Kempston fire 1 */
     if (k & INPUT_FIRE2) a |= ACT_BACK;     /* X / Kempston fire 2 */
 
     if (!(read_keys(KEY_ENTER_ROW) & 0x01)) a |= ACT_SELECT;
@@ -315,31 +322,31 @@ static void move_cursor(void)
    Passability is a constraint on the unit being ordered, and is checked
    when the order is issued.  A step inside the page repaints just the
    two cells that changed; a step off it starts a page flip. */
+/* A direction moves the WORLD, not the cursor: the cursor is pinned to
+   CURSOR_VX/VY and the window slides under it (docs/DESIGN.md § Cursor
+   and movement).  Nothing on screen survives a step, so there is no
+   two-cell shortcut left and no page flip to spread — the whole window
+   is repainted in one go.
+
+   That is ~4 608 bytes against a ~256-byte vblank window, so it tears.
+   Deliberately, for now: the alternative is spreading it over 16 frames,
+   which makes a single cursor step take a third of a second.  The double
+   buffer is what removes the tear (docs/PLAN.md § P7). */
 static void move_play_cursor(void)
 {
-    uint8_t nx, ny, ox, oy;
+    uint8_t nx, ny;
+    int8_t dx, dy;
 
-    if (cells_left) {           /* frozen while the page repaints */
-        nav_delay = NAV_DELAY;
-        return;
-    }
     if (!nav_step(cursor_x, cursor_y, &nx, &ny)) return;
 
-    ox = (uint8_t)(cursor_x - page_x);
-    oy = (uint8_t)(cursor_y - page_y);
+    dx = (int8_t)(nx - cursor_x);
+    dy = (int8_t)(ny - cursor_y);
     cursor_x = nx;
     cursor_y = ny;
     redraw_status = 1;
 
-    if (nx < page_x || nx >= page_x + VIEW_COLS ||
-        ny < page_y || ny >= page_y + VIEW_ROWS) {
-        set_page();
-        start_page_flip();
-    } else {
-        draw_view_cell(ox, oy);                     /* leave the old cell */
-        draw_view_cell((uint8_t)(nx - page_x),
-                       (uint8_t)(ny - page_y));     /* and enter the new  */
-    }
+    set_page();
+    scroll_view(dx, dy);
 }
 
 /* Per-frame work for the active state, run inside the vblank window. */
@@ -401,7 +408,7 @@ static void handle_input(void)
                the page, so a move made now could have its two cells
                drawn before the unit had left one and reached the
                other. */
-            if ((edge & ACT_SPACE) && !cells_left) {
+            if (edge & ACT_SPACE) {
                 uint8_t cell = cell_of(cursor_x, cursor_y);
                 uint8_t u = occupancy[cell];
 
@@ -418,8 +425,16 @@ static void handle_input(void)
                 redraw_status = 1;
             }
             /* ENTER, not SPACE: SPACE is giving orders on this screen,
-               and it is the only screen where the two differ. */
-            if (edge & ACT_SELECT) {
+               and it is the only screen where the two differ.
+
+               Belt and braces: never when SPACE fired in the same
+               frame.  Fire 1 used to land in ACT_SELECT, so a setup
+               mapping fire onto the space bar picked a unit up and
+               ended the turn in one press — end_turn() deselects, so
+               SPACE looked like it did nothing but advance the turn.
+               Fire 1 is ACT_SPACE now and the collision is gone at
+               source, but one keypress should still mean one action. */
+            if ((edge & ACT_SELECT) && !(edge & ACT_SPACE)) {
                 end_turn();
                 redraw_status = 1;
             }
@@ -487,6 +502,8 @@ static void handle_input(void)
 
 void game_run(void)
 {
+    uint8_t act;
+
     turn = 0;
     level = 1;
     load_tiles();
@@ -502,14 +519,26 @@ void game_run(void)
            48K) are free for tear-free updates. */
         vsync_wait();
 
-        border(4);              /* GREEN: start of the frame's work */
         update_state();
-        border(0);              /* BLACK: work done, idle from here */
 
         poll_input();
 #if DEBUG_STATE_WALK
         poll_debug();
 #endif
+
+        /* The border marks work the PLAYER asked for: selecting a unit,
+           ordering a move, ending a turn, changing screen.  Gated on a
+           non-direction edge, so cursor movement stays quiet — it is a
+           multi-frame scroll and would strobe green on every step.
+
+           Wrapping update_state() instead, as this used to, made the
+           meter useless for the same reason.  Wrapping only
+           enter_state() went too far the other way: SPACE that picks a
+           unit up is not a state change, so the flash vanished from the
+           one place it is most useful. */
+        act = (uint8_t)(edge & ~ACT_DIRS);
+        if (act) border(4);
+
         handle_input();
 
         if (next_state != game_state) {
@@ -517,5 +546,7 @@ void game_run(void)
                from a full-screen state needs no extra bookkeeping. */
             enter_state(next_state);
         }
+
+        if (act) border(0);
     }
 }

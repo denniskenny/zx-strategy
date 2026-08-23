@@ -45,20 +45,32 @@ PRESS_WAIT = 0.6     # how long to hold a key before re-pressing
 TRIES = 10           # re-presses before giving up on a transition
 
 
-def sym(name):
+def _mapaddr(name):
     out = subprocess.run(['grep', '-E', f'^_{name}\\b', 'zxstrategy.map'],
                          capture_output=True, text=True).stdout.split()
-    if not out:
+    return int(out[2].lstrip('$'), 16) if out else None
+
+
+def sym(name):
+    """Address of a symbol, following an `at_` locator if there is one.
+
+       Arrays placed by hand in the RAM below the program (see
+       include/memmap.h) have no symbol of their own, because the linker
+       never saw them.  src/logic.c exports `at_<name>` pointers for
+       exactly this, so a lookup that misses falls through to reading the
+       pointer out of the running machine."""
+    a = _mapaddr(name)
+    if a is not None:
+        return a
+    a = _mapaddr('at_' + name)
+    if a is None:
         sys.exit(f"symbol _{name} not found — run `make map` first")
-    return int(out[2].lstrip('$'), 16)          # addresses from the fresh map
+    return int.from_bytes(rd(_S[0], a, 2), 'little')
 
 
-GS, TER = sym('game_state'), sym('terrain')
-LVL, WON = sym('level'), sym('player_won')
+_S = [None]
 
-# level / turn / player_won are contiguous, so one read covers all three.
-BLK = min(LVL, WON)
-BLK_LEN = max(LVL, WON) - BLK + 1
+
 
 # Keep these in step with include/game.h.  Named, not inlined: the ids
 # shift whenever a state is added or removed, and bare numbers in the
@@ -192,13 +204,32 @@ def expected(n):
 
 t0 = time.time()
 s = connect()
-cmd(s, 'smartload /Users/Kennyd/projects/zx-strategy/zxstrategy.tap')
+_S[0] = s
 
-# The title screen paints ATTR_TITLE across row 0; nothing else does, so
-# it is the cheapest "the program is up and running" signal there is.
-if not wait(lambda: rd(s, 0x5800, 1)[0] == 0x45, 40):
-    sys.exit("timed out waiting for the title screen — did the tap load?")
+# No smartload: the emulator autoloads the tap named on its command line,
+# and smartload RESETS the machine.  Issuing one and then polling for the
+# title matches the pre-reset screen still sitting in memory, declares
+# success in a fraction of a second and then drives a machine that is
+# busy rebooting — every check after that fails for no visible reason.
+#
+# `level` is the "the program is running" signal: game_run() sets it to 1
+# before painting anything, and unlike the screen it cannot be left over
+# from a previous run.
+#
+# NOT vsync_mode, which this used to watch — VSYNC_MODE_HALT is 0, so a
+# machine that legitimately falls back to HALT sync never satisfies it and
+# the test hangs for a minute before claiming the tap did not load.
+LV = sym('level')
+if not wait(lambda: rd(s, LV, 1)[0] != 0, 60):
+    sys.exit("timed out waiting for the program to start — did the tap load?")
 print(f"booted in {time.time() - t0:.1f}s")
+
+GS, TER = sym('game_state'), sym('terrain')
+LVL, WON = sym('level'), sym('player_won')
+
+# level / turn / player_won are contiguous, so one read covers all three.
+BLK = min(LVL, WON)
+BLK_LEN = max(LVL, WON) - BLK + 1
 
 fails = []
 

@@ -456,18 +456,87 @@ writing the assembly, because it changes what the assembly looks like.
 
 #### Steps, each one playable
 
-1. **The model, still jumping.** Signed view origin, cursor pinned, sea beyond
-   the board, window follows the cursor by jumping. Uses the existing per-cell
-   draw path — no buffer, no assembly. This is where the addressing gets proved
-   and the sea gets drawn, and it is testable with the harness we have.
-2. **Compose and present.** Build the view into a RAM buffer and blit it.
-   Replaces per-cell drawing for the play view; still jumps.
-3. **Scroll.** Shift the buffer by a character, render the incoming edge slice
-   into it, present, four times per cursor step, with input locked.
-4. **128K shadow screen.** Mostly already there: `render_compose()` /
-   `render_show()` exist and work, so a scroll step composes the window into
-   the back buffer and flips. On a 128K that makes the scroll tear-free for
-   free; the 48K blit stays as the fallback.
+1. **The model, still jumping.**  ✓ **done.** Signed view origin (`int8_t
+   page_x/page_y`), cursor pinned to `CURSOR_VX/VY` = (3,1), sea beyond the
+   board, window follows the cursor. No buffer and no assembly yet.
+   - `set_page()` inverted: the window goes where the pinned cursor lands,
+     with **no clamping** — that is what lets the cursor reach a corner, and
+     both bases are in one.
+   - The progressive page flip is gone: `start_page_flip()` and `cells_left`
+     retired, because a step changes every cell and there is nothing left to
+     reuse. `move_play_cursor()` repaints the window in one go.
+   - **It tears**, as predicted: ~4 608 bytes against a ~256-byte window. The
+     alternative was 16 frames a step, which is a third of a second to move
+     one cell. Step 3 is what fixes it.
+   - Verified: the cursor holds screen cell (3,1) across every step while the
+     world slides under it; `(0,0)` is reachable with the window at origin
+     `(-3,-1)` and 17 of 32 cells drawn as sea; both suites still pass.
+2. **Compose and present.**  ✓ **done.** The view is built in a linear RAM
+   buffer at 0x6000 (128 rows x 32 bytes, plus 512 attributes) and presented
+   in one pass.
+   - **This is where the speed came from, not the scroll.** Drawing straight
+     to the screen cost **1 024 `scr_off()` calls** for a full repaint — one
+     per pixel row per cell — because the display is interleaved and every
+     row needs its address worked out. The buffer is linear, so composing
+     needs *no* address arithmetic at all, and presenting needs 128 table
+     lookups (`VIEW_OFF[]`, built once at startup) instead of 1 024
+     computations.
+   - `VIEW_COL` is 0 and tiles are a whole number of characters wide, so
+     every copy is byte-aligned and nothing is ever shifted. A `#error`
+     keeps that true.
+   - `cell_art()` now returns the unit sprite *instead of* the terrain rather
+     than over it. Sprites are opaque, so the terrain underneath was being
+     composed and then completely overwritten — wasted work on every
+     occupied cell, and a starting board has fourteen.
+3. **Scroll.**  ✓ **done.** `scroll_view()` pushes the buffer one character at
+   a time, four sub-steps per cursor step, presenting between each.
+   - Shifting a linear buffer is a `memmove` per row; a vertical push is one
+     move for the lot, because rows are contiguous.
+   - The incoming edge is a **slice**: a column is a strided read (every
+     fourth byte of the tile), a row is contiguous. That is the capability
+     nothing had before.
+   - Attributes are recomposed wholesale at the end rather than sliced in —
+     512 bytes, and far simpler than tracking what the pinned cursor's flood
+     and the range highlight should look like mid-slide.
+   - **Verified the strong way**: after a scroll in each of the four
+     directions, the screen is *byte-identical* to a from-scratch recompose
+     at the same origin.
+4. **128K shadow screen.**  ✓ **armed, and self-disabling.** `shadow_ok` is set
+   only after `screens_init()` proves a page-in survives — `is_128k` alone is
+   not enough, because `main()` may have locked `0x7FFD` and every write to it
+   then fails silently. Without that proof the flag stays set while nothing
+   works, and the title screen vanishes: it cost two separate debugging
+   sessions before being caught properly.
+   - **The shadow screen is off on every machine, and a +3 is why.** Clearing
+     the paging lock in `main()` does arm it on a 128K — verified, `shadow_ok`
+     went to 1 and the flip worked — but the same writes then reach a +2A/+3
+     and drop it into BASIC with *"Nonsense in BASIC"*. The lock had been
+     protecting those machines silently. Reverted.
+   - **The blocker is +2A/+3 detection**, not the shadow screen. `vsync_mode
+     == VSYNC_MODE_128K` only identifies one when the mode-2 bus was detected;
+     a +3 on HALT sync looks exactly like a 128K. Port `0x1FFD` is decoded on
+     a +2A/+3 and not on a 128K, so probing it is the obvious next move — and
+     it needs a +3 to validate, because getting it wrong crashes that machine
+     and nothing in CI would notice.
+   - Two guards now stand between here and that crash: `main()` keeps the
+     lock, and `screens_init()` refuses to touch paging when mode 2 is active.
+     Deliberately redundant.
+   - `tests/render_paths.py` now reports the detected vsync mode per machine,
+     checks the marker only when a mode that uses one is active, and checks it
+     is written to the screen being DISPLAYED rather than merely somewhere.
+
+   The old note: `shadow_ok` was `is_128k`. The
+   blocker was never the shadow screen itself — it was `ST_PLAY` drawing
+   incrementally after a flip and diverging the buffers, which P7 removed by
+   composing the whole window per repaint.
+   - **Flips are confined to state changes.** Verified on a 128K: `page_reg`
+     holds at 0x17 across cursor movement in all four directions, with the
+     header, hint row and panel intact.
+   - The scroll itself still tears, on both machines. Flipping per sub-step
+     would fix that, but the chrome lives only in the buffer it was painted
+     into, so the other would show a board with no panel and the movement
+     would strobe. Painting the chrome into both buffers is the remaining
+     work, and it is the last thing between here and a tear-free scroll.
 5. **Assembly.** The present and the buffer shift, once their shape has stopped
    changing.
 
@@ -502,8 +571,47 @@ writing the assembly, because it changes what the assembly looks like.
 |------|------------|
 | The present is too slow and the scroll crawls | Step 1 leaves a working jump-scroll to fall back to; measure at step 2 before committing to the assembly |
 | Tearing on 48K | Accepted by decision; the 128K shadow screen path is the real answer and step 4 puts the seam in the right place |
-| RAM for the buffer | 4 608 bytes against ~15 KB free above the binary and 8 KB at 0x6000. Comfortable, but confirm after step 2 |
+| RAM for the buffer | Settled: everything hand-placed in 0x6000-0x7FFF via `include/memmap.h`, which now also holds the tile sheets and the logic scratch. The linker-placed part clears 0xC000 by only **55 bytes**, so the next thing added has to move down there too |
 | The board reads as tiny once surrounded by sea | An 8x4 window on a 14x7 island shows a lot of water. If it looks wrong, the answer is bigger maps, which is a `.tmx` change and not a code one |
+
+### The +3 problem  — OPEN, and blocking
+
+The game crashes on a real +2A/+3 with **"Nonsense in BASIC", immediately
+after loading and before the title paints**. It runs on 48K and 128K, and both
+test suites pass on both, so nothing in CI can see it.
+
+**Do not treat a green test run as evidence about a +3.** Three separate
+hypotheses were confidently wrong here — the paging lock, the buffers colliding
+with BASIC at 0x6000, and the bank left selected at 0xC000 — each one reasoned
+from the two machines that *can* be tested. The next person should reproduce
+before theorising.
+
+What is actually established:
+
+- **It dies before the title**, so the failure is in `hw_detect()`,
+  `vsync_detect()`, `load_tiles()` or `load_map()` — not in the game loop.
+- **`hw_detect()` leaves ROM 0 selected.** It ends with `xor a; out (c),a`,
+  which is bank 0 *and* ROM 0. `main()` corrects that to ROM 1 only when
+  `vsync_mode != VSYNC_MODE_128K`, so a +3 that detects the mode-2 bus keeps
+  the editor/DOS ROM. `print_at()` reads the character set from `0x3D00`,
+  which only the 48K BASIC ROM has — this is a confirmed explanation for the
+  garbled text seen on a +3, separate from the crash.
+- **The buffers are the newest suspect and the least defensible design.**
+  `include/memmap.h` puts ~7 KB at 0xC000-0xDC48, which on a 128K-class
+  machine is a *paged bank*. It works only because `hw_detect()` happens to
+  leave bank 0 there. Depending on that is not a plan.
+- **ZEsarUX cannot reproduce it.** `--machine P341` never gets the tap running
+  (`PC=0x11E5`, the ROM reset), so it cannot distinguish a real fault from a
+  loading-procedure difference. Fixing that harness is probably the highest
+  value next step: a `.sna`/`.z80` snapshot bypasses the ROM menu entirely on
+  every model and would give the +3 the same coverage the other two have.
+
+The structural fix, when someone has a +3 to test against: **stop putting
+buffers in banked memory.** Everything above 0xC000 belongs to whatever bank is
+paged in. The options are to shrink the program under 0xC000 including its
+buffers (it is ~23.6 KB and does not fit at `-zorg=32768`), or to lower the
+loader's `CLEAR` to 24575 so 0x6000-0x7FFF is genuinely ours on every machine
+rather than borrowed from BASIC.
 
 ### P5 — Enemy turn
 

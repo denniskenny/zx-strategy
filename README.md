@@ -61,8 +61,10 @@ Actions from the keyboard and the joystick are folded into one byte, so a single
 edge test debounces both: a bit must be seen in two consecutive frames and then
 fires on its rising edge.
 
-The border turns **red** while the frame's work runs and black while waiting for
-the beam, so the red band shows how much of the frame budget is actually used.
+The border flashes **green** while a state repaints its screen — the work SPACE
+and ENTER cause — and is black otherwise. It used to mark every frame's work as
+a budget meter, but a cursor step is now a multi-frame scroll and the meter
+strobed on every step.
 
 ## Game loop
 
@@ -93,7 +95,7 @@ it discarded. Loading a level and playing the tune both work that way — see
 4x4-character terrain cells filling the screen width, both armies standing on
 the grid loaded from the Tiled map, a free cursor, and a four-line status panel
 below. **SPACE** picks up the unit under the cursor, washes the ground it can
-reach in blue, and sends it there; **ENTER** ends the turn. **M** opens
+reach in blue, and sends it there; **ENTER** ends the turn (fire 1 acts, it does not end turns). **M** opens
 `ST_MAP`, the whole-world overview with its own cursor and the play cursor's
 cell marked; **SPACE** dismisses it back to play.
 

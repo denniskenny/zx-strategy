@@ -18,6 +18,7 @@
 
 #include "../config/game_config.h"
 #include "level_1.h"
+#include "memmap.h"
 
 /* --- The board ------------------------------------------------------
  * Sized from level 1; every level is the same size and shares its
@@ -34,8 +35,9 @@
 
 /* A cell index, not an (x, y) pair: one byte per position, neighbours
    at +/-1 and +/-GRID_COLS. */
-extern uint8_t terrain[CELL_COUNT];     /* terrain id per cell          */
-extern uint8_t cell_cost[CELL_COUNT];   /* cost to ENTER, 0 = impassable */
+#define terrain   ((uint8_t *)MEM_TERRAIN)     /* terrain id per cell   */
+/* Hand-placed below the program; see include/memmap.h. */
+#define cell_cost ((uint8_t *)MEM_CELL_COST)   /* cost to ENTER, 0 = impassable */
 
 /* y * GRID_COLS and cell % GRID_COLS without the multiply or divide. */
 extern const uint8_t row_base[GRID_ROWS];
@@ -57,15 +59,20 @@ uint8_t cell_of(uint8_t x, uint8_t y);
 #define SIDE_PLAYER 0
 #define SIDE_ENEMY  1
 
-extern uint8_t u_type[UNITS_MAX];
-extern uint8_t u_cell[UNITS_MAX];       /* row_base[y] + x, never a pair */
-extern uint8_t u_hp[UNITS_MAX];
-extern uint8_t u_flags[UNITS_MAX];
+/* Hand-placed below the program; see include/memmap.h. */
+#define u_type    ((uint8_t *)MEM_U_TYPE)
+#define u_cell    ((uint8_t *)MEM_U_CELL)   /* row_base[y] + x, never a pair */
+#define u_hp      ((uint8_t *)MEM_U_HP)
+#define u_flags   ((uint8_t *)MEM_U_FLAGS)
+
+#if UNITS_MAX > 40
+#error "the unit arrays no longer fit the blocks memmap.h reserves for them"
+#endif
 extern uint8_t unit_count;              /* slots used, 0..UNITS_MAX */
 
 /* Which unit stands where, or NO_UNIT.  This is what makes "one unit
    per tile" an O(1) fact rather than a scan of the roster. */
-extern uint8_t occupancy[CELL_COUNT];
+#define occupancy ((uint8_t *)MEM_OCCUPANCY)
 
 /* --- Movement range --------------------------------------------------
  * cost[] is the whole result of the flood fill: a cell is reachable
@@ -74,7 +81,7 @@ extern uint8_t occupancy[CELL_COUNT];
  * on that. */
 #define NO_COST     0xFF
 
-extern uint8_t cost[CELL_COUNT];
+#define cost      ((uint8_t *)MEM_COST)
 
 void movement_range(uint8_t start, uint8_t budget);
 

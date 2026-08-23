@@ -60,6 +60,9 @@ MACHINES = [
 
 POLL = 0.01
 ATTR_TITLE, ATTR_TEXT, ATTR_HINT, ATTR_BUSY = 0x45, 0x47, 0x46, 0x42
+VSYNC_HALT, VSYNC_48K, VSYNC_128K = 0, 1, 2
+VSYNC_NAME = {0: 'HALT fallback', 1: 'floating bus 0x40FF',
+              2: 'floating bus 0x0FFD'}
 VSYNC_MARKER = 0x03
 MARKER_ROW = 22
 TITLE, PLAY, MAP = 0, 1, 2
@@ -178,14 +181,26 @@ def wait_frames(s, n, timeout=0.5):
         time.sleep(POLL)
 
 
-def settle(s, tries=25):
-    """Wait until the screen stops changing, then return its attributes.
+def settle(s, was=None, tries=25):
+    """Wait for the screen to stop changing, then return its attributes.
 
-       Necessary because `enter_state()` sets game_state BEFORE it paints,
-       and because render_tick() finishes page flips over several frames.
-       Sampling on the state change alone catches a half-drawn screen and
-       reports it as a rendering fault — which is what the first draft of
-       this test did, on both machines at once."""
+       Two separate hazards, both of which have bitten:
+
+       `enter_state()` sets game_state BEFORE it paints, so sampling on
+       the state change alone catches a half-drawn screen.
+
+       And on a 128K the new screen appears ATOMICALLY, at the flip.
+       Until then the old one is still up and perfectly stable, so "two
+       equal samples" is satisfied by the screen we are trying to replace
+       — the test then measures the previous state and cheerfully passes.
+       That is why `was` exists: pass the attributes from before the
+       action and this waits for them to change first.  Without it,
+       ST_MAP was reporting ST_PLAY's pixels down to the byte."""
+    if was is not None:
+        for _ in range(tries):
+            if attrs(s) != was:
+                break
+            wait_frames(s, 2)
     prev = attrs(s)
     for _ in range(tries):
         wait_frames(s, 3)
@@ -275,10 +290,11 @@ def run(machine, rom, want_128k, port, results):
         check(n > 300, f'ST_TITLE: {n} ink bytes on the displayed screen')
 
         stop_tune(s)
+        was = attrs(s)
         check(press_until(s, 'SPACE', lambda: byte(s, 'game_state') == PLAY),
               'SPACE starts a game')
 
-        a = settle(s)
+        a = settle(s, was)
         view = [v for r in range(1, 17) for v in row_attr(a, r)]
         check(len(set(view)) > 3,
               f'ST_PLAY: the board is painted ({len(set(view))} colours in '
@@ -288,24 +304,45 @@ def run(machine, rom, want_128k, port, results):
         n = ink(s)
         check(n > 500, f'ST_PLAY: {n} ink bytes on the displayed screen')
 
+        was = attrs(s)
         check(press_until(s, 'M', lambda: byte(s, 'game_state') == MAP),
               'M opens the overview')
-        a = settle(s)
+        a = settle(s, was)
         omap = [v for r in range(3, 17) for v in row_attr(a, r)]
         check(len(set(omap)) > 3,
               f'ST_MAP: the overview is painted ({len(set(omap))} colours)')
         n = ink(s)
         check(n > 500, f'ST_MAP: {n} ink bytes on the displayed screen')
 
+        was = attrs(s)
         check(press_until(s, 'SPACE', lambda: byte(s, 'game_state') == PLAY),
               'SPACE returns to the board')
+        settle(s, was)
 
-        # The 128K path moves the screen out from under the floating bus
-        # sync.  If the marker is gone or duplicated, vsync_wait() either
-        # hangs or locks to the wrong row.
+        # --- vsync -------------------------------------------------
+        # Which technique the machine settled on, and whether the marker
+        # that technique depends on is actually on the screen the ULA is
+        # reading.  The 128K path moves the display out from under the
+        # sync, which is precisely how it hung the first time.
+        vm = byte(s, 'vsync_mode')
+        print(f'         (vsync: {VSYNC_NAME.get(vm, vm)})')
+        check(vm in (VSYNC_HALT, VSYNC_48K, VSYNC_128K),
+              f'vsync_detect settled on a known mode ({vm})')
+
         a = settle(s)
-        check(all(v == VSYNC_MARKER for v in row_attr(a, MARKER_ROW)),
-              'the floating bus sync marker survives on row 22')
+        if vm == VSYNC_HALT:
+            # HALT does not use the marker and does not write it, so its
+            # absence is correct rather than a fault.
+            check(True, 'HALT sync: no marker expected')
+        else:
+            check(all(v == VSYNC_MARKER for v in row_attr(a, MARKER_ROW)),
+                  'the floating bus sync marker survives on row 22')
+            marker = int.from_bytes(rd(s, sym('vsync_marker_addr'), 2),
+                                    'little')
+            want = displayed(s) + 6144 + MARKER_ROW * 32
+            check(marker == want,
+                  'the marker is written to the screen being DISPLAYED '
+                  f'(0x{marker:04X}, want 0x{want:04X})')
         stray = [i for i, v in enumerate(a)
                  if v in (VSYNC_MARKER, VSYNC_MARKER & 0xFE)
                  and i // 32 != MARKER_ROW]
