@@ -13,22 +13,31 @@ Two things drive the ordering:
 2. **The board is tiny; exploit it.** 14x7 = **98 cells**. A full Dijkstra over
    the map is 98 nodes, a bitmap of the board is 13 bytes, and a byte per cell
    is 98 bytes. Algorithms that would be extravagant on a bigger grid are free
-   here — what is *not* free is doing them inside the vblank window.
+   here — and because the game is turn-based, they may take as long as they
+   like (`docs/DESIGN.md` § Long operations). What is *not* free is **drawing**
+   the result: the raster does not wait.
 
 
 ## Frame discipline
 
-The one hard rule, from `docs/DESIGN.md` § The loop:
+One hard rule, and it is about **drawing, not thinking**
+(`docs/DESIGN.md` § The loop):
 
 | Where | Budget | Use it for |
 |-------|--------|------------|
-| `update_state()` (in vblank) | ~256 bytes of screen writes, ~28 000 T | one or two cells repainted, one AI step |
-| `enter_*()` (outside vblank) | a few frames of stall is fine | full repaints, map load, army placement |
+| `update_state()` (in vblank) | ~256 bytes of screen *writes* | one or two cells repainted |
+| `enter_*()`, and any long operation | as long as it takes | full repaints, map load, army placement, the enemy turn |
 
-So: **computation is chunked, never blocking.** A movement-range flood fill is
-cheap enough for one frame; painting its highlight is not (20 cells x 16 attr
-bytes = 320 bytes), so highlights paint N cells per frame exactly like the
-existing page flip does with `PAGE_CELLS`.
+The game is turn-based, so **computation is never chopped up to fit a frame**.
+Work that overruns runs to completion and the loop misses a vsync, or several.
+Anything long enough to notice puts a banner on the hint line and throws away
+the input made while it ran (`docs/DESIGN.md` § Long operations). This is why
+no phase below has a T-state target: there is nothing for one to protect.
+
+What *does* still have to be spread across frames is **painting**, because the
+raster will not wait. A movement highlight is up to 25 cells x 16 attribute
+bytes and a full page flip is ~4 KB, so both go out N cells per frame —
+`RANGE_CELLS` and `PAGE_CELLS` respectively.
 
 
 ## Decisions needed before Phase 1
@@ -152,11 +161,16 @@ Per enemy unit, then:
    rebuild, not a code change.
 3. Mark it acted.
 
-Cost per unit: one Dial's (≤ 450 steps) plus ≤ 24 candidate cells x 19 targets.
-Well under a frame — but **run one unit per frame anyway**, as an AI state
-machine driven from `update_state()`. Two reasons: the frame loop keeps
-servicing vsync, and the player sees the enemy act unit by unit instead of the
-board teleporting.
+Cost per unit: one Dial's (~42 000 T) plus ≤ 24 candidate cells x 19 targets —
+call it a frame each, and a fifth of a second for a full 19-unit army.
+
+The enemy turn is a **long operation** (`docs/DESIGN.md` § Long operations): it
+runs behind a banner with input discarded, and is under no obligation to fit
+the frame. It should still step **unit by unit**, pausing long enough for each
+move to register, but for the one reason that survives: the player has to see
+what the enemy did rather than watch the board teleport. That is a pacing
+decision now, not a scheduling constraint, so it belongs to whatever reads
+best — not to `update_state()`'s budget.
 
 
 ## Phases
@@ -210,14 +224,32 @@ panel shows type / HP / range / movement. Cursor movement drives page flips.
 - **Acceptance**: select and deselect every unit on the board; the panel
   matches the config table; walking the cursor off a page flips it.
 
-### P3 — Movement
+### P3 — Movement  ✓ done
 
 Dial's + highlight (painted N cells/frame) + move + `occupancy` update + acted
 flag + end turn clears all acted flags and bumps the turn counter.
 
+- The highlight is **attribute-only**: a range cell's art does not change, just
+  its paper, so recolouring a cell costs 16 bytes where redrawing it costs 144.
+  That is a separate, cheaper repaint pass from the page flip's
+  (`RANGE_CELLS` = 8 a frame against `PAGE_CELLS` = 2), and the two are
+  mutually exclusive per frame.
+- `view_cell_attr()` is the single place that decides a cell's colour —
+  selected, occupied, in range, or bare terrain — so every repaint path (flip,
+  cursor step, recolour) agrees without any of them knowing about the others.
 - **Acceptance**: an infantry on plains reaches exactly 3 tiles, 1 through
-  forest+forest; water and occupied cells are never in the set; T-state
-  measurement of the flood fill under 28 000.
+  forest+forest; water and occupied cells are never in the set. Verified
+  against an independent Dijkstra over five boards — open plains, forest,
+  water, an occupied cell, and mixed hills/city — written into the emulator
+  over ZRCP and compared cell by cell.
+- **Cost**: the worst case (movement 3, open plains, 25 cells reached) is
+  **41 616 T**, about six tenths of a frame, so selecting a unit drops one
+  frame and no banner is warranted. That is down from 68 248 T for the first
+  working version: `memset` for the clear, a per-cell `cell_cost[]` folding
+  three table lookups into one, bucket end-pointers instead of an indexed
+  multiply, and inlining the relaxation to kill an IX-frame function call
+  ninety times a fill. Recorded because P5 calls the same fill up to 19 times
+  a turn, not because anything requires it to be smaller.
 
 ### P4 — Combat and the real win condition
 
@@ -232,12 +264,15 @@ P0 debug keys.
 
 ### P5 — Enemy turn
 
-Threat map, per-unit AI state machine, one unit per frame, end-of-turn handback.
+Threat map, per-unit AI, unit-by-unit pacing, end-of-turn handback. The whole
+turn is one long operation: banner up, input discarded, banner down and the
+legend back when control returns to the player.
 
 - **Acceptance**: an enemy adjacent to a player unit attacks rather than
   moving; an enemy with no target in range closes the distance and prefers
-  cells with `threat == 0`; a full enemy turn never drops a frame (border
-  timing stays inside the window).
+  cells with `threat == 0`; each enemy move is visible as it happens rather
+  than the board changing all at once; keys pressed during the enemy turn do
+  nothing once it ends.
 
 ### P6 — Balance and polish
 
@@ -249,8 +284,8 @@ whatever the ten maps show up as unplayable.
 
 | Risk | Mitigation |
 |------|------------|
-| Highlight repaint blows the frame budget | Paint N cells/frame, reuse the `PAGE_CELLS` pattern |
+| Highlight repaint tears | Paint N cells/frame in the vblank window, reusing the `PAGE_CELLS` pattern — this is a raster constraint and does not go away |
 | SDCC multiplies in inner loops | Cell indices + `row_base[]`; no `y * GRID_COLS` at runtime |
-| Binary growth on 48K | ~12.5 KB now; measure per phase, and the maps are already ZX0'd |
-| AI stalls the frame loop | One unit per frame, always; never loop the whole army in one call |
+| Binary growth on 48K | ~17 KB now; measure per phase, and the maps are already ZX0'd |
+| A long operation looks like a crash | Banner before the work, input flushed after (`docs/DESIGN.md` § Long operations) |
 | Sprites are opaque, so units overwrite terrain | Accept for P1; masked sprites need `gfx.c`'s XOR path and a mask strip |

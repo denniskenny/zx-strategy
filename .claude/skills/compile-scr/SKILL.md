@@ -56,43 +56,47 @@ include/%.h: assets/%.zxp tools/zxp2header.py
 	$(ZXP2HEADER) $< $@ --name $*
 ```
 
-### The Great Old One (worked example)
+### Cropped full-screen art
+
+**Nothing in the game uses this today** — the art is all `.zxp` tile and sprite
+strips — so there is no rule for it in the Makefile. This is how to add one.
 
 ```make
-GOO_SRC = assets/goo.scr
-
-include/goo_data.h: $(GOO_SRC) tools/scr_crop_zx0.py
-	$(SCR_CROP_ZX0) $@ $(ZX0) goo_final:$(GOO_SRC)
+include/splash_data.h: assets/splash.scr tools/scr_crop_zx0.py
+	$(SCR_CROP_ZX0) $@ $(ZX0) splash_final:assets/splash.scr
 ```
 
 `scr_crop_zx0.py` finds the art's bounding box, stores only that region
-(row-major) and emits placement constants alongside the data:
+(row-major) and emits placement constants alongside the data. The prefix comes
+from the output header's name (`splash_data.h` → `SPLASH_`), or from `--name`:
 
 ```c
-#define GOO_CROP_COL 3      /* byte column of the left edge  */
-#define GOO_CROP_ROW 11     /* pixel row of the top edge     */
-#define GOO_CROP_W   24     /* width in bytes                */
-#define GOO_CROP_H   157    /* height in pixel rows          */
-#define GOO_CROP_SIZE 3768
+#define SPLASH_CROP_COL  3     /* byte column of the left edge  */
+#define SPLASH_CROP_ROW  11    /* pixel row of the top edge     */
+#define SPLASH_CROP_W    24    /* width in bytes                */
+#define SPLASH_CROP_H    157   /* height in pixel rows          */
+#define SPLASH_CROP_SIZE 3768
 ```
 
-6144 raw → 3768 cropped → 2010 bytes ZX0. `src/game.c` decompresses it to a
-low-RAM staging buffer and blits it back at its original position:
+A 24x157 region is 3768 bytes cropped against 6144 raw, and ZX0 took that to
+about 2 KB in practice. Decompress to a low-RAM staging buffer and blit it back
+at its original position:
 
 ```c
-dzx0_decompress(goo_final, SCRATCH_BUF);
-write_blit(GOO_CROP_COL, GOO_CROP_ROW, SCRATCH_BUF, GOO_CROP_W, GOO_CROP_H);
-set_attr_rect(GOO_CROP_COL, GOO_CROP_ROW >> 3, GOO_CROP_W,
-              (GOO_CROP_H + 7) >> 3, GOO_ATTR);
+dzx0_decompress(splash_final, SCRATCH_BUF);
+write_blit(SPLASH_CROP_COL, SPLASH_CROP_ROW, SCRATCH_BUF,
+           SPLASH_CROP_W, SPLASH_CROP_H);
+set_attr_rect(SPLASH_CROP_COL, SPLASH_CROP_ROW >> 3, SPLASH_CROP_W,
+              (SPLASH_CROP_H + 7) >> 3, attr);
 ```
 
 Pass `--mirror` to store only the left half of a symmetric image (halves the
 data); the runtime must then bit-reverse each byte to rebuild the right half,
-and the header gains `GOO_MIRROR_COL`.
+and the header gains `SPLASH_MIRROR_COL`.
 
-Note `scr_crop_zx0.py` handles **pixels only**. This .scr's attributes are a
-flat 0x07, so the gallery state just paints a solid attribute rect; for coloured art,
-compress the trailing 768 bytes separately with `zx0_to_header.py`.
+Note `scr_crop_zx0.py` handles **pixels only**. If the source has flat
+attributes, paint a solid attribute rect as above; for coloured art, compress
+the trailing 768 bytes separately with `zx0_to_header.py`.
 
 To add an asset:
 
@@ -135,17 +139,26 @@ Notes:
 
 ## Regression harness
 
-`tests/dzx0check.c` (`make dzx0check`) decompresses the goo blob into the same
-staging buffer the gallery state uses and writes a result block at 0xF000:
+`tests/dzx0check.c` (`make dzx0check`) decompresses the `units_view` sprite
+sheet — a blob the game itself unpacks at startup — into a low-RAM staging
+buffer and writes a result block at 0xF000:
 
 | Address | Meaning |
 |---------|---------|
 | 0xF000 | 0x5A once the run completed (anything else = crash) |
-| 0xF001-2 | number of bytes written (LE) |
+| 0xF001-2 | 16-bit sum of the decompressed block (LE) |
 | 0xF003+ | first 16 decompressed bytes |
+
+A sum, not a count of bytes that changed from the 0xAA fill: counting
+under-reports every byte the data itself sets to 0xAA, while a sum catches both
+a short write and corruption in the middle.
 
 Read it back with `read-memory 61440 32` and compare against the host reference:
 
 ```bash
-z88dk-dzx0 /tmp/goo_final.zx0 /tmp/goo_final.bin   # host-side ground truth
+# host-side ground truth; zxp_tiles_zx0.py leaves the blob in /tmp
+z88dk-dzx0 /tmp/units_view_tiles.zx0 /tmp/units_view_tiles.bin
 ```
+
+The byte count should equal `UNITS_VIEW_RAW_SIZE` and the first 16 bytes should
+match the start of that file.

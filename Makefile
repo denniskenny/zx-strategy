@@ -34,8 +34,11 @@ LDFLAGS=-lm -create-app
 # Runtime decompressor: src/dzx0.c → dzx0_decompress(src, dst).
 ZX0 ?= $(firstword $(wildcard $(Z88DK)/bin/z88dk-zx0) /tmp/ZX0/src/zx0)
 ZXP2HEADER = $(PYTHON) tools/zxp2header.py
-SCR_CROP_ZX0 = $(PYTHON) tools/scr_crop_zx0.py
 ZXP_TILES_ZX0 = $(PYTHON) tools/zxp_tiles_zx0.py
+# tools/scr_crop_zx0.py crops a .scr to its bounding box before compressing.
+# Nothing in the game is a full-screen graphic today, so no rule uses it; see
+# .claude/skills/compile-scr for the invocation if one is added.
+SCR_CROP_ZX0 = $(PYTHON) tools/scr_crop_zx0.py
 
 # assets/NAME.scr  → include/NAME.h   (full 6912-byte screen, ZX0, NAME_zx0[])
 include/%.h: assets/%.scr tools/zx0_to_header.py
@@ -73,16 +76,6 @@ include/%.h: assets/maps/%.tmx tools/tmx2header.py
 include/%.h: assets/%.zxp tools/zxp2header.py
 	$(ZXP2HEADER) $< $@ --name $*
 
-# The Great Old One: full-screen .scr cropped to its bounding box, then ZX0'd.
-# scr_crop_zx0.py emits the pixel data plus GOO_CROP_* placement constants, so
-# only the ~24x157 byte area that actually contains art is stored (3768 bytes
-# cropped -> ~2 KB compressed, vs 6144 raw).  Add --mirror to store just the
-# left half of a symmetric image (see .claude/skills/compile-scr).
-GOO_SRC = assets/goo.scr
-
-include/goo_data.h: $(GOO_SRC) tools/scr_crop_zx0.py
-	$(SCR_CROP_ZX0) $@ $(ZX0) goo_final:$(GOO_SRC)
-
 # Terrain tile sheets: N tiles side by side in one .zxp, ZX0-compressed into
 # one blob per sheet plus a per-tile attribute table (colours are authored in
 # ZX-Paintbrush).  The runtime decompresses each blob once and blits tiles out
@@ -114,7 +107,7 @@ include/units_view.h: assets/units_view.zxp tools/zxp_tiles_zx0.py
 	    --attr $(UNIT_ATTR) --zx0 $(ZX0)
 
 # List generated headers here so `make assets` and `make clean` know them.
-GENERATED_HEADERS = include/goo_data.h $(LEVEL_HEADERS) \
+GENERATED_HEADERS = $(LEVEL_HEADERS) \
                     include/tiles_map.h include/tiles_view.h \
                     include/units_map.h include/units_view.h
 
@@ -184,7 +177,7 @@ tests/fbprobe.tap: tests/fbprobe.c
 # --- ZX0 decompression harness (see tests/dzx0check.c) ---
 dzx0check: tests/dzx0check.tap
 
-tests/dzx0check.tap: tests/dzx0check.c src/dzx0.c include/goo_data.h
+tests/dzx0check.tap: tests/dzx0check.c src/dzx0.c include/units_view.h
 	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) -m -o tests/dzx0check tests/dzx0check.c src/dzx0.c -create-app
 
 # --- Clean ---

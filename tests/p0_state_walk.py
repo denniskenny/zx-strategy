@@ -24,7 +24,12 @@ def sym(name):
     return int(out[2].lstrip('$'), 16)          # addresses from the fresh map
 
 GS, TER, LVL, WON = (sym('game_state'), sym('terrain'), sym('level'), sym('player_won'))
-ST = {0:"TITLE",1:"PLAY",2:"MAP",3:"GALLERY",4:"MUSIC",5:"OVER",6:"WON"}
+
+# Keep these in step with include/game.h.  Named, not inlined: the ids
+# shift whenever a state is added or removed, and bare numbers in the
+# assertions below survive that silently.
+TITLE, PLAY, MAP, OVER, WON_ST = 0, 1, 2, 3, 4
+ST = {TITLE:"TITLE", PLAY:"PLAY", MAP:"MAP", OVER:"OVER", WON_ST:"WON"}
 print(f"symbols: game_state={GS:#06x} terrain={TER:#06x} level={LVL:#06x} won={WON:#06x}")
 
 def connect():
@@ -68,32 +73,32 @@ def check(cond, msg):
     print(("  ok   " if cond else "  FAIL ") + msg)
     if not cond: fails.append(msg)
 
-check(st(s)==0, f"boots to TITLE (got {ST.get(st(s))})")
-press_until(s,'ENTER', lambda: st(s)==1)
+check(st(s)==TITLE, f"boots to TITLE (got {ST.get(st(s))})")
+press_until(s,'SPACE', lambda: st(s)==PLAY)
 for lvl in range(1,11):
-    check(st(s)==1 and lv(s)==lvl,
+    check(st(s)==PLAY and lv(s)==lvl,
           f"level {lvl}: PLAY, level counter = {lv(s)}")
     if lvl in (1,5,10):
         check(list(rd(s,TER,98))==expected(lvl),
               f"level {lvl}: terrain[] matches assets/maps/level_{lvl}.tmx")
-    press_until(s,'W', lambda: st(s)==5)
-    check(st(s)==5 and rd(s,WON,1)[0]==1, f"level {lvl}: W -> ST_OVER, player_won=1")
-    want = 6 if lvl==10 else 1
-    press_until(s,'ENTER', lambda: st(s)==want)
-check(st(s)==6, f"winning level 10 -> ST_WON (got {ST.get(st(s))})")
-press_until(s,'SPACE', lambda: st(s)==0)
-check(st(s)==0, "any key from ST_WON -> ST_TITLE")
+    press_until(s,'W', lambda: st(s)==OVER)
+    check(st(s)==OVER and rd(s,WON,1)[0]==1, f"level {lvl}: W -> ST_OVER, player_won=1")
+    want = WON_ST if lvl==10 else PLAY
+    press_until(s,'SPACE', lambda: st(s)==want)
+check(st(s)==WON_ST, f"winning level 10 -> ST_WON (got {ST.get(st(s))})")
+press_until(s,'SPACE', lambda: st(s)==TITLE)
+check(st(s)==TITLE, "any key from ST_WON -> ST_TITLE")
 
-press_until(s,'ENTER', lambda: st(s)==1)
-press_until(s,'W', lambda: st(s)==5)
-press_until(s,'ENTER', lambda: st(s)==1)
-check(st(s)==1 and lv(s)==2, f"restart, win once -> level {lv(s)}")
-press_until(s,'L', lambda: st(s)==5)
-check(st(s)==5 and rd(s,WON,1)[0]==0, "L -> ST_OVER with player_won=0")
-press_until(s,'ENTER', lambda: st(s)==0)
-check(st(s)==0, "a loss returns to ST_TITLE")
-press_until(s,'ENTER', lambda: st(s)==1)
-check(st(s)==1 and lv(s)==1, f"a new game restarts at level {lv(s)}")
+press_until(s,'SPACE', lambda: st(s)==PLAY)
+press_until(s,'W', lambda: st(s)==OVER)
+press_until(s,'SPACE', lambda: st(s)==PLAY)
+check(st(s)==PLAY and lv(s)==2, f"restart, win once -> level {lv(s)}")
+press_until(s,'L', lambda: st(s)==OVER)
+check(st(s)==OVER and rd(s,WON,1)[0]==0, "L -> ST_OVER with player_won=0")
+press_until(s,'SPACE', lambda: st(s)==TITLE)
+check(st(s)==TITLE, "a loss returns to ST_TITLE")
+press_until(s,'SPACE', lambda: st(s)==PLAY)
+check(st(s)==PLAY and lv(s)==1, f"a new game restarts at level {lv(s)}")
 
 print("\nP0 ACCEPTANCE:", "PASS" if not fails else f"FAIL ({len(fails)})")
 sys.exit(1 if fails else 0)

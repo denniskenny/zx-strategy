@@ -5,12 +5,19 @@ Finds the union bounding box across all input frames, extracts that region
 in row-major order, compresses each with ZX0, and writes a single C header
 with the data arrays and crop constants.
 
+The placement constants are prefixed with the output header's name —
+include/foo_data.h gives FOO_CROP_COL, FOO_CROP_ROW, FOO_CROP_W, FOO_CROP_H
+and FOO_CROP_SIZE — or with --name if you want something else.  The pixel
+arrays are named by the name:file pairs.
+
 With --mirror, only the left half (up to column 15) is stored.  The runtime
 reconstructs the right half by bit-reversing each byte and reversing column
-order.  The header emits GOO_MIRROR_COL for the right-half start column.
+order.  The header then also emits PREFIX_MIRROR_COL for the right-half start
+column.
 
 Usage:
-    python3 tools/scr_crop_zx0.py [--mirror] output.h zx0_path name1:file1.scr [...]
+    python3 tools/scr_crop_zx0.py [--mirror] [--name PREFIX] \
+        output.h zx0_path name1:file1.scr [...]
 
 Requires the zx0 compressor binary at zx0_path.
 """
@@ -56,16 +63,33 @@ def crop_frame(data, min_col, min_y, max_col, max_y):
 def main():
     args = sys.argv[1:]
     mirror = False
-    if args and args[0] == "--mirror":
-        mirror = True
-        args = args[1:]
+    prefix = None
+    while args and args[0].startswith("--"):
+        if args[0] == "--mirror":
+            mirror = True
+            args = args[1:]
+        elif args[0] == "--name":
+            prefix = args[1].upper()
+            args = args[2:]
+        else:
+            print(f"Unknown option {args[0]}")
+            sys.exit(1)
 
     if len(args) < 3:
-        print(f"Usage: {sys.argv[0]} [--mirror] output.h zx0_path name1:file1.scr [...]")
+        print(f"Usage: {sys.argv[0]} [--mirror] [--name PREFIX] "
+              "output.h zx0_path name1:file1.scr [...]")
         sys.exit(1)
 
     dst = args[0]
     zx0_bin = args[1]
+
+    # The placement constants are named after the header unless --name
+    # says otherwise: include/foo_data.h -> FOO_CROP_COL and friends.
+    if prefix is None:
+        stem = os.path.basename(dst).rsplit(".", 1)[0]
+        if stem.endswith("_data"):
+            stem = stem[:-len("_data")]
+        prefix = stem.upper()
     entries = []
     for arg in args[2:]:
         name, path = arg.split(":", 1)
@@ -108,16 +132,18 @@ def main():
             print(f"  {name}: {len(zdata)} bytes ZX0")
 
     # Write header
-    guard = "_GOO_DATA_H_"
+    guard = "_" + os.path.basename(dst).replace(".", "_").upper() + "_"
     with open(dst, "w") as f:
         f.write(f"#ifndef {guard}\n#define {guard}\n\n")
-        f.write(f"#define GOO_CROP_COL  {min_col}\n")
-        f.write(f"#define GOO_CROP_ROW  {min_y}\n")
-        f.write(f"#define GOO_CROP_W    {w}\n")
-        f.write(f"#define GOO_CROP_H    {h}\n")
-        f.write(f"#define GOO_CROP_SIZE {crop_size}\n")
+        f.write(f"/* Generated from {len(entries)} .scr frame(s) by "
+                "tools/scr_crop_zx0.py — do not edit. */\n\n")
+        f.write(f"#define {prefix}_CROP_COL  {min_col}\n")
+        f.write(f"#define {prefix}_CROP_ROW  {min_y}\n")
+        f.write(f"#define {prefix}_CROP_W    {w}\n")
+        f.write(f"#define {prefix}_CROP_H    {h}\n")
+        f.write(f"#define {prefix}_CROP_SIZE {crop_size}\n")
         if mirror_col is not None:
-            f.write(f"#define GOO_MIRROR_COL {mirror_col}\n")
+            f.write(f"#define {prefix}_MIRROR_COL {mirror_col}\n")
         f.write("\n")
         for name, zdata in compressed:
             f.write(f"/* ZX0 compressed cropped screen data ({len(zdata)} bytes) */\n")

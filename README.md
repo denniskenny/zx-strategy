@@ -9,8 +9,8 @@ graphics/input/PRNG helpers, a ZX0 asset pipeline with a runtime decompressor,
 the Tritone (Beepola) beeper music pipeline, and the Claude skills that document
 all of it.
 
-The current program is a scaffold: a frame-synced game loop with switchable
-states (title, play, campaign map, graphic gallery, music), polling
+The current program is a frame-synced game loop with switchable states
+(title, play, campaign map, level end, campaign complete), polling
 keyboard and Kempston input once per frame.
 
 ## Requirements
@@ -42,12 +42,20 @@ make USER_CFLAGS="-m"
 
 | Key | Kempston | Action |
 |-----|----------|--------|
-| Q / A / O / P | up / down / left / right | Move the party, or the map cursor (repeats when held) |
-| ENTER, Z | fire 1 | Select — start the game / end the turn |
-| X | fire 2 | Back — return to the title |
-| SPACE | — | Dismiss the campaign map |
-| M | — | Campaign map while playing; Tritone tune on the title screen |
-| G | — | Gallery: the ZX0-compressed Great Old One (any key returns) |
+| Q / A / O / P | up / down / left / right | Move the cursor (repeats when held) |
+| SPACE | fire 1 | Go on — start the game, pick a unit up, order its move, close the overview, take the level-end screen on |
+| ENTER, Z | fire 1 | End the turn (in play only — SPACE is giving orders there) |
+| X | fire 2 | Back — drop the held unit, then return to the title |
+| M | — | Campaign map (while playing) |
+
+The Tritone tune plays itself whenever the title screen is entered — there is
+no key that starts it. It blocks with interrupts off, so the title is
+unresponsive until any key stops it; from cold, starting a game is one key to
+stop the tune and then `SPACE`.
+
+`SPACE` is the one key that moves you forward. Fire 1 is accepted alongside it
+on the screens a joystick has to get through, because a Kempston stick has no
+space bar.
 
 Actions from the keyboard and the joystick are folded into one byte, so a single
 edge test debounces both: a bit must be seen in two consecutive frames and then
@@ -60,11 +68,16 @@ the beam, so the red band shows how much of the frame budget is actually used.
 
 `game_run()` in `src/game.c` is one frame per iteration: `vsync_wait()` →
 update the active state → poll input → optional state switch. States are
-`ST_TITLE`, `ST_PLAY`, `ST_MAP`, `ST_GALLERY` and `ST_MUSIC`; each
+`ST_TITLE`, `ST_PLAY`, `ST_MAP`, `ST_OVER` and `ST_WON`; each
 has an `enter_*` function that paints its screen once, and only play and map do
 per-frame work. To add a state: add the `ST_` id in `include/game.h`, an
 `enter_*` case, and its transitions in `handle_input()`. The states, their
 screens and their transitions are specified in [`docs/DESIGN.md`](docs/DESIGN.md).
+
+Because the game is turn-based, logic that overruns a frame is allowed to: it
+runs to completion behind a banner on the hint line, with the input made during
+it discarded. Loading a level and playing the tune both work that way — see
+§ Long operations in the design doc.
 
 `ST_PLAY` is entered from the title and is the game proper: an **8x4 page** of
 4x4-character terrain cells filling the screen width, with the party (`@`)
@@ -88,7 +101,6 @@ src/input.c              keyboard half-rows + Kempston
 src/prng.c               16-bit LFSR/Weyl PRNG
 src/dzx0.c               ZX0 decompression (wraps z88dk's dzx0_standard)
 src/game.c               the game loop + states
-assets/goo.scr           the Great Old One (example graphic)
 assets/tiles_map.zxp     16x16 terrain tiles for the campaign overview
 assets/tiles_view.zxp    32x32 terrain tiles for the play view
 assets/units_map.zxp     16x16 unit sprites for the campaign overview
@@ -123,12 +135,12 @@ At runtime: `dzx0_decompress(NAME_zx0, SCREEN);`. The compressor is
 Converters live in `tools/` (`zx0_to_header.py`, `zxp2header.py`, `zxp2zx0.py`,
 `scr2header.py`, `scr_crop_zx0.py`, `scr_dither_reveal.py`).
 
-The worked example is **the Great Old One**, `assets/goo.scr`:
-`tools/scr_crop_zx0.py` crops it to its bounding box and ZX0-compresses it
-(6144 raw → 3768 cropped → 2010 bytes), emitting `include/goo_data.h` with the
-data plus `GOO_CROP_*` placement constants. Press **G** in the game: it is
-decompressed into a low-RAM staging buffer and blitted back at its original
-screen position.
+The worked example is the tile sheets: `tools/zxp_tiles_zx0.py` packs each
+strip into one ZX0 blob plus a per-tile attribute table, and `load_tiles()`
+unpacks all four into RAM once at startup. For a full-screen graphic,
+`tools/scr_crop_zx0.py` crops a `.scr` to its bounding box before compressing
+and emits `PREFIX_CROP_*` placement constants named after the output header;
+nothing in the game needs one today, so no Makefile rule invokes it.
 
 **ZX0 v1 vs v2**: the stream format differs and the decompressor must match the
 compressor. z88dk ships ZX0 v1.5 and the matching `dzx0_standard`, so

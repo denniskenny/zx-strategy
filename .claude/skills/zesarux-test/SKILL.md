@@ -138,16 +138,33 @@ Prefer Kempston — `set-ui-io-ports` takes 8 keyboard half-rows (`ff` = nothing
 
 ```
 set-ui-io-ports ffffffffffffffff01    # right → move the cursor right
-set-ui-io-ports ffffffffffffffff10    # fire1 → select / end turn
+set-ui-io-ports ffffffffffffffff10    # fire1 → go on / end turn
 set-ui-io-ports ffffffffffffffff20    # fire2 → back
 set-ui-io-ports ffffffffffffffff00    # release
 ```
 
 `game_run()` acts on *edges* of a combined keyboard+Kempston action byte, so always release between presses. Kempston is only polled when `has_kempston` is set by `hw_detect()`.
 
-Keyboard equivalents (half-rows, active low): Q up on `0xFBFE` bit 0, A down on `0xFDFE` bit 0, O/P on `0xDFFE` bits 1/0, ENTER select on `0xBFFE` bit 0, SPACE close-the-map on `0x7FFE` bit 0, G gallery on `0xFDFE` bit 4, M on `0x7FFE` bit 2 (map while playing, music on the title screen). Z/X (select/back) sit on the CAPS SHIFT row only because `scan_input()` reads them.
+Keyboard equivalents (half-rows, active low): Q up on `0xFBFE` bit 0, A down on `0xFDFE` bit 0, O/P on `0xDFFE` bits 1/0, **SPACE on `0x7FFE` bit 0**, ENTER on `0xBFFE` bit 0, M on `0x7FFE` bit 2 (map while playing, tune on the title screen). Z/X sit on the CAPS SHIFT row (bits 1/2) only because `scan_input()` reads them.
 
-The byte order for `set-ui-io-ports` is `0xFEFE, 0xFDFE, 0xFBFE, 0xF7FE, 0xEFFE, 0xDFFE, 0xBFFE, 0x7FFE` then the joystick; each row uses only bits 0-4. So holding G is `set-ui-io-ports ffefffffffffffff00`.
+**SPACE is what drives the app between screens** — starting a game, taking the level-end screen on, closing the overview — so a state walk presses `fffffffffffffffe00`. ENTER ends a turn inside `ST_PLAY`, and is the only thing it does.
+
+The byte order for `set-ui-io-ports` is `0xFEFE, 0xFDFE, 0xFBFE, 0xF7FE, 0xEFFE, 0xDFFE, 0xBFFE, 0x7FFE` then the joystick; each row uses only bits 0-4. So holding M is `set-ui-io-ports fffffffffffffffb00`.
+
+### The app boots into the tune — send a key first
+
+**The title screen plays the Tritone tune the moment it is entered**, on boot and on every return to the title. The player runs with interrupts off and does not return until a key is pressed, so a freshly loaded tap sits there ignoring everything: `game_state` reads 0, the screen is painted, and nothing you send has any effect except stopping the tune.
+
+Every harness therefore has to **spend one keypress waking it up**:
+
+```python
+press(SPACE)          # stops the tune; flushed, so it does NOT start a game
+press(SPACE)          # this one starts the game
+```
+
+The keypress that stops the tune is deliberately flushed (`busy_off()` calls `flush_input()`), so it never doubles as the one that acts. A `press_until()` helper that retries until the state changes — as `tests/p0_state_walk.py` has — absorbs this without special-casing; a fixed single press does not.
+
+The same applies after any return to the title: losing a level, or `X` out of play, lands you back in the tune.
 
 ### Phantom keypresses = a Kempston false positive
 
@@ -155,7 +172,7 @@ If the app appears to press its own keys (sync toggling, counters resetting with
 
 `hw_detect()` therefore requires **all 16 samples** of `in a,(0x1F) & 0x1F` to be zero. After that fix, ZEsarUX reports `has_kempston = 0` and the app runs for minutes with zero spurious actions.
 
-`game.c` also debounces: `poll_input()` needs an action bit in two consecutive frames before acting, and the gallery state's exit check samples once per frame with the same two-sample rule. Sampling once per frame matters — hammering the ULA port in a tight loop invites bus noise.
+`game.c` also debounces: `poll_input()` needs an action bit in two consecutive frames before acting, and `ST_WON`'s exit check samples once per frame with the same two-sample rule. Sampling once per frame matters — hammering the ULA port in a tight loop invites bus noise.
 
 ## 6. Profiling
 
@@ -194,18 +211,19 @@ format mismatch (see `.claude/skills/compile-scr`).
 
 ### Verifying a blitted graphic
 
-Because the Great Old One is blitted back to the position it was cropped from,
-the screen bytes must equal the source `.scr` exactly:
+A graphic blitted back to the position it was cropped from must match its
+source byte for byte. With `PREFIX_CROP_*` from the generated header:
 
 ```python
 def off(col, y):
     return ((y >> 6) << 11) | ((y & 7) << 8) | (((y >> 3) & 7) << 5) | col
 
-src = open('assets/goo.scr', 'rb').read()[:6144]
+src = open('assets/splash.scr', 'rb').read()[:6144]
 pix = read_bytes(s, 16384, 6144)
 same = sum(pix[off(c, y)] == src[off(c, y)]
-           for y in range(11, 168) for c in range(3, 27))
-# expect 3768/3768 while the graphic is on screen
+           for y in range(CROP_ROW, CROP_ROW + CROP_H)
+           for c in range(CROP_COL, CROP_COL + CROP_W))
+# expect CROP_W * CROP_H while the graphic is on screen
 ```
 
 ## 8. Diagnosing common issues

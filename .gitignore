@@ -18,7 +18,6 @@ assets/music/lowlands.asm
 tools/__pycache__/
 
 # generated asset headers (rebuilt by make assets)
-include/goo_data.h
 include/level_*.h
 include/tiles_map.h
 include/tiles_view.h

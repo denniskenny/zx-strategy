@@ -141,9 +141,12 @@ Token grammar (per channel line, space-separated):
    ```
    Call `NAME_play()` from a **static screen** (interrupts stay disabled; it
    returns on any key/joystick press). Never call it from the synced frame
-   loop — it owns the speaker and blocks. `src/game.c` shows the pattern: the
-   M key switches to `ST_MUSIC`, whose enter function clears the screen and
-   whose update calls `lowlands_play()`, then returns to the previous state.
+   loop — it owns the speaker and blocks. `src/game.c` shows the pattern in
+   `play_music()`: `enter_title()` paints the screen, then puts a banner on the
+   hint line, calls `lowlands_play()`, and on return restores the line and
+   flushes the key that stopped it. It is a **long operation**, not a state —
+   see `docs/DESIGN.md`. Paint before you play: the screen is the only thing
+   the player has to look at while the CPU is gone.
 
 4. **Build & verify.**
    ```bash
@@ -199,5 +202,5 @@ PY
 - `assets/music/tritone_template.asm` — Beepola export minus song data; the
   engine source (`--engine`) and the `--template` default for `txt2tritone.py`.
 - `assets/music/lowlands.txt` — Lowlands Away; the single example melody
-  shipped with this template, played by the M key (`ST_MUSIC`).
+  shipped with this template, played automatically on the title screen.
 - `include/music.h` — C declarations for the linked tunes.

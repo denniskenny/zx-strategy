@@ -12,17 +12,23 @@
  *               the party walks off its edge
  *   ST_MAP      campaign overview, opened with M from ST_PLAY and
  *               dismissed with SPACE; free cursor over the terrain grid
- *   ST_GALLERY  the ZX0-compressed Great Old One
- *   ST_MUSIC    Tritone tune (blocking; returns to the previous state)
  *   ST_OVER     a level ended: a win loads the next one, a loss quits
  *   ST_WON      the last level was won; the campaign is over
  *
  * Controls:  Q/A/O/P or Kempston  move the cursor
- *            SPACE                pick up / put down the unit under it
- *            ENTER / Z / fire 1   end the turn
+ *            SPACE                the one "go on" key: starts a game,
+ *                                 picks a unit up and puts it down,
+ *                                 orders a move, closes the overview,
+ *                                 and takes the level-end screen on.
+ *                                 Fire 1 does the same on the screens a
+ *                                 joystick has to get through.
+ *            ENTER / Z / fire 1   end the turn (ST_PLAY only, because
+ *                                 SPACE is busy giving orders there)
  *            X / fire 2           back (drops the held unit first)
- *            M                    map (play) / music (title)
- *            G                    gallery
+ *            M                    campaign overview (ST_PLAY only)
+ *
+ * The tune plays itself whenever the title screen is entered, and any
+ * key stops it; there is no key that starts it.
  *
  * The worlds come from assets/maps/level_N.tmx (Tiled), N = 1..10.
  * The build ZX0's each one into include/level_N.h as Tiled GIDs;
@@ -40,12 +46,13 @@
  * waiting for the beam, so the red band is the CPU budget used.
  */
 
+#include <string.h>
+
 #include "../config/app_config.h"
 #include "../config/game_config.h"
 #include "../include/dzx0.h"
 #include "../include/game.h"
 #include "../include/gfx.h"
-#include "../include/goo_data.h"
 #include "../include/hw.h"
 #include "../include/input.h"
 #include "../include/level_1.h"
@@ -79,6 +86,21 @@
    (docs/DESIGN.md: "Enemy units are red, player units are cyan"). */
 #define ATTR_UNIT_P 0x45    /* bright cyan ink, black paper   */
 #define ATTR_UNIT_E 0x42    /* bright red ink, black paper    */
+
+/* A player unit that has spent its action loses its brightness, which
+   is how the board shows what is left to move.  The enemy has no
+   matching dim form: non-bright red is 0x02, one of the two values the
+   floating bus sync marker reserves.  It does not need one — the
+   player never waits on an enemy unit's remaining action. */
+#define ATTR_UNIT_P_DONE 0x05   /* cyan ink, black paper, not bright */
+
+/* Ground the selected unit can reach: the terrain art stays, its paper
+   turns blue.  Distinct from the cursor (white paper) and from every
+   terrain and unit colour, all of which use black paper. */
+#define ATTR_RANGE  0x4F    /* bright white ink, blue paper   */
+
+/* The "working" banner, deliberately not the hint line's yellow. */
+#define ATTR_BUSY   0x42    /* bright red ink, black paper    */
 
 /* Terrain ids are tile indices: the .tmx tileset order, the .zxp tile
    column order and the generated tables all line up. */
@@ -118,15 +140,17 @@
 #define ACT_SELECT  0x10
 #define ACT_BACK    0x20
 #define ACT_SPACE   0x40
-#define ACT_EXTRA   0x80    /* G or M, disambiguated by extra_key */
+#define ACT_M       0x80    /* the campaign overview, in ST_PLAY only */
 
 #define ACT_DIRS    (ACT_UP | ACT_DOWN | ACT_LEFT | ACT_RIGHT)
 
-/* The G and M keys mean different things per state, so the raw key is
-   carried alongside the shared ACT_EXTRA edge. */
-#define EXTRA_NONE  0
-#define EXTRA_G     1
-#define EXTRA_M     2
+/* Moving between screens is SPACE.  Fire 1 is accepted alongside it
+   because a Kempston stick has no space bar and would otherwise be
+   unable to start a game or take the level-end screen on — and fire 1
+   arrives in ACT_SELECT, which scan_input() cannot separate from Z or
+   ENTER without another action bit (all eight are spoken for).  So
+   ENTER still works on these screens; the screens advertise SPACE. */
+#define ACT_GO      (ACT_SPACE | ACT_SELECT)
 
 /* Keyboard half-rows not covered by input.h. */
 #define KEY_ENTER_ROW 0xBFFE    /* ENTER = bit 0            */
@@ -135,7 +159,6 @@
 /* Staging buffer for decompressed asset data.  Low RAM above the screen
    is free: code and data start at 0x8000 (-zorg=32768). */
 #define SCRATCH_BUF ((uint8_t *)0x6000)
-#define GOO_ATTR    0x44        /* bright green ink, black paper */
 
 /* --- Campaign overview: the whole world in tiles_map.zxp cells.  Size
        comes from the Tiled map, cell size from the tile sheet. --- */
@@ -164,6 +187,12 @@
    room to spare; the whole page takes VIEW_CELLS / this many frames. */
 #define PAGE_CELLS  2
 
+/* Cells RECOLOURED per frame, when a movement range goes on or comes
+   off.  An attribute-only cell is 16 bytes against a full repaint's
+   144, so eight of them is 128 bytes — half the budget above, and the
+   whole page in four frames. */
+#define RANGE_CELLS 8
+
 /* Status panel: four lines, ending one row above the key legend.  The
    play view stops at row 16 and the overview at row 17, so ROW_UNIT is
    the last row either renderer leaves free. */
@@ -173,6 +202,21 @@
 #define ROW_TERRAIN 20
 #define PANEL_TOP   ROW_UNIT
 #define PANEL_ROWS  4
+
+/* The key legend, and the row a long operation borrows to say it is
+   working.  Every state paints this row on entry, so a banner needs
+   nothing saved: whoever comes next writes over it. */
+#define ROW_HINT    21
+
+/* The legends a banner has to be able to put back, each 31 columns so
+   it overwrites whatever the banner left.  ST_TITLE keeps its key list
+   up at rows 10-11 and leaves this row blank. */
+#if DEBUG_STATE_WALK
+#define PLAY_HINT   "SPC MOVE ENTER TURN MAP W/L END"
+#else
+#define PLAY_HINT   "SPACE MOVE  ENTER END TURN  MAP"
+#endif
+#define TITLE_HINT  "                               "
 
 /* Both renderers must fit above the status panel. */
 #if (MAP_COL + GRID_COLS * CELL_W > 32) \
@@ -242,10 +286,8 @@ static const uint8_t level_start[LEVEL_COUNT][2] = {
 uint8_t game_state;
 
 static uint8_t next_state;
-static uint8_t back_state;      /* where ST_GALLERY / ST_MUSIC return to */
 
 static uint8_t acts, last_acts, prev_stable, edge;
-static uint8_t extra_key;
 static uint8_t nav_delay;
 
 static uint8_t terrain[GRID_COLS * GRID_ROWS];
@@ -293,9 +335,74 @@ static uint8_t occupancy[CELL_COUNT];
 /* y * GRID_COLS without the multiply. */
 static const uint8_t row_base[GRID_ROWS] = { 0, 14, 28, 42, 56, 70, 84 };
 
+/* cell % GRID_COLS without the divide.  The flood fill needs a popped
+   cell's column to know whether stepping east or west would wrap it
+   onto the next row — the one edge case of addressing the board as a
+   flat array instead of a coordinate pair. */
+static const uint8_t col_of[CELL_COUNT] = {
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13
+};
+
 #if (GRID_COLS != 14) || (GRID_ROWS != 7)
-#error "row_base[] is written out for a 14x7 map; regenerate it"
+#error "row_base[] and col_of[] are written out for a 14x7 map; regenerate them"
 #endif
+
+/* --- Movement range --------------------------------------------------
+   Dial's algorithm, not Dijkstra: movement costs are 1 or 2 and the
+   budget is at most MAX_MOVE, so a priority queue would be a
+   comparison-heavy way of ordering four values.  A bucket queue pops
+   cells in non-decreasing cost order with no comparisons at all —
+   bucket c holds the cells reached at cost c, and the buckets are
+   walked in order (docs/PLAN.md, "Movement range").
+
+   cost[] is the whole result: a cell is reachable exactly when
+   cost[cell] != NO_COST, so it doubles as the highlight set and no
+   separate list is kept.  It is meaningful only while a unit is
+   selected — every reader gates on that. */
+#define NO_COST     0xFF
+
+/* A queued cell always has cost >= its Manhattan distance from the
+   start, so only the diamond of radius MAX_MOVE is ever pushed: 25
+   cells at MAX_MOVE = 3.  No single bucket can hold more than that
+   however the terrain is arranged, which is what bounds q[]. */
+#define Q_BUCKET    32
+#define Q_DIAMOND   (2 * MAX_MOVE * MAX_MOVE + 2 * MAX_MOVE + 1)
+
+#if Q_DIAMOND > Q_BUCKET
+#error "Q_BUCKET is too small for MAX_MOVE; a bucket could overflow"
+#endif
+
+static uint8_t cost[CELL_COUNT];
+static uint8_t q[(MAX_MOVE + 1) * Q_BUCKET];
+
+/* Where each bucket starts, and where its next entry goes.  A pointer
+   pair rather than a count per bucket because a push then costs one
+   16-bit load and a store: indexing q[nc * Q_BUCKET + n] instead makes
+   SDCC emit a five-shift multiply and a pair of 16-bit adds every time,
+   and pushing is the innermost thing the fill does. */
+static uint8_t *const bucket_start[MAX_MOVE + 1] = {
+    q, q + Q_BUCKET, q + 2 * Q_BUCKET, q + 3 * Q_BUCKET
+};
+static uint8_t *bucket_end[MAX_MOVE + 1];
+
+#if MAX_MOVE != 3
+#error "bucket_start[] is written out for MAX_MOVE = 3; regenerate it"
+#endif
+
+/* Cost of entering each CELL, or 0 for "cannot be entered".  Folding
+   terrain[] -> terrain_move_cost[] / level_1_terrain_blocked[] into one
+   per-cell byte turns three table lookups in the fill's innermost loop
+   into one.  Rebuilt by load_map(), because terrain only changes when
+   a level does — and derived from the .tmx flags rather than repeating
+   them, so passability still has exactly one source (game_config.h
+   explains why it is not restated there). */
+static uint8_t cell_cost[CELL_COUNT];
 
 /* The unit the player has picked up, or NO_UNIT.  Selection survives
    the cursor wandering off — the point of it is to look at the ground
@@ -304,10 +411,18 @@ static const uint8_t row_base[GRID_ROWS] = { 0, 14, 28, 42, 56, 70, 84 };
 static uint8_t selected = NO_UNIT;
 static uint8_t sel_x, sel_y;    /* where it stands, kept to avoid a divide */
 
-/* A world cell whose picture is stale, repainted on the next frame.
-   NO_CELL when there is nothing outstanding. */
-#define NO_CELL     0xFF
-static uint8_t dirty_x = NO_CELL, dirty_y;
+/* World cells whose PICTURE is stale, redrawn on the next frame: a unit
+   sprite that left one cell and arrived in another.  Input is handled
+   outside the vblank window, so an order cannot draw its own result.
+   Two is all a move needs, and two draw_view_cell() calls is exactly
+   what a page flip already spends per frame. */
+#define DIRTY_MAX   2
+static uint8_t dirty_x[DIRTY_MAX], dirty_y[DIRTY_MAX], dirty_n;
+
+/* Page cells whose COLOUR is stale, recoloured a few per frame: a
+   movement range going on or coming off.  0 when there is nothing
+   outstanding. */
+static uint8_t attrs_left;
 
 /* Status-panel labels, padded to 8 characters like the terrain names
    the map converter generates. */
@@ -337,8 +452,6 @@ static uint8_t scan_actions(void)
     uint8_t k = scan_input();
     uint8_t a = 0;
 
-    extra_key = EXTRA_NONE;
-
     if (k & INPUT_UP)    a |= ACT_UP;
     if (k & INPUT_DOWN)  a |= ACT_DOWN;
     if (k & INPUT_LEFT)  a |= ACT_LEFT;
@@ -348,15 +461,7 @@ static uint8_t scan_actions(void)
 
     if (!(read_keys(KEY_ENTER_ROW) & 0x01)) a |= ACT_SELECT;
     if (!(read_keys(KEY_SPACE_ROW) & 0x01)) a |= ACT_SPACE;
-
-    if (!(read_keys(KEY_ASDFG) & 0x10)) {    /* G */
-        a |= ACT_EXTRA;
-        extra_key = EXTRA_G;
-    }
-    if (!(read_keys(KEY_SPACE_ROW) & 0x04)) { /* M */
-        a |= ACT_EXTRA;
-        extra_key = EXTRA_M;
-    }
+    if (!(read_keys(KEY_SPACE_ROW) & 0x04)) a |= ACT_M;
 
     return a;
 }
@@ -409,6 +514,35 @@ static void flush_input(void)
     dbg_last = dbg_prev = 0xFF;
     dbg_edge = 0;
 #endif
+}
+
+/* --- Long operations -------------------------------------------------
+   The game is turn-based, so nothing animates and nothing waits on a
+   clock: work that overruns a frame costs a pause and nothing else, and
+   game logic is never chopped up to fit the frame (docs/DESIGN.md
+   § Long operations).
+
+   What the player must not get is a game that looks dead, or one that
+   acts on a key pressed half a second ago.  So an operation long enough
+   to see says what it is doing, and throws away whatever was pressed
+   while it ran.
+
+   Pass a message padded to the full 31 columns; it overwrites the hint
+   line in place. */
+static void busy_on(const char *msg)
+{
+    print_at(1, ROW_HINT, msg);
+    set_attr_rect(0, ROW_HINT, 32, 1, ATTR_BUSY);
+}
+
+/* Put the legend back and forget the keyboard.  Only needed when the
+   work does NOT end in a state change: enter_state() repaints the whole
+   screen and flushes input already. */
+static void busy_off(const char *hint)
+{
+    print_at(1, ROW_HINT, hint);
+    set_attr_rect(0, ROW_HINT, 32, 1, ATTR_HINT);
+    flush_input();
 }
 
 /* True if any key on the whole keyboard, or the joystick, is down.
@@ -594,6 +728,88 @@ static void place_side(uint8_t side, uint8_t bx, uint8_t by)
     }
 }
 
+/* Every cell the unit at `start` can reach on a budget of `budget`
+   movement points, written into cost[].  Dial's algorithm: bucket c is
+   scanned only once c is the cheapest cost left outstanding, so the
+   first cost written for a cell is its cheapest and the entry that put
+   it there is never revisited.
+
+   Terrain the .tmx marks impassable and cells that already hold a unit
+   are both skipped, because "one unit per tile" makes an occupied tile
+   as solid as water for as long as its occupant stands there
+   (docs/DESIGN.md § Units).  Movement is 4-way, so entering a cell
+   costs the same whichever side it is entered from and a single
+   per-terrain cost is the whole cost model. */
+/* Try to reach cell N from the cell being scanned, at cost c.
+ *
+ * A macro rather than a function, which is not the usual trade: this is
+ * the innermost thing the fill does — around ninety times per call —
+ * and as a function SDCC spent over a third of each invocation on the
+ * call itself.  A byte parameter goes on the stack, which forces an IX
+ * frame to read it (push ix / ld ix,0 / add ix,sp ... pop ix), and c
+ * and the budget had to become file statics to reach it, turning two
+ * register reads into two memory loads.  Inlined, all four live in
+ * registers and the call disappears.
+ *
+ * Everything it touches is a single-subscript table read, so the macro
+ * evaluates N exactly once and needs no other hygiene. */
+#define RELAX(N)                                                    \
+    do {                                                            \
+        uint8_t rn = (N);                                           \
+        uint8_t sc = cell_cost[rn];     /* 0 = water, or no land */ \
+                                                                    \
+        if (sc && occupancy[rn] == NO_UNIT) {   /* one per tile */  \
+            uint8_t nc = (uint8_t)(c + sc);                         \
+                                                                    \
+            if (nc <= budget && nc < cost[rn]) {                    \
+                cost[rn] = nc;                                      \
+                *bucket_end[nc] = rn;                               \
+                bucket_end[nc]++;                                   \
+            }                                                       \
+        }                                                           \
+    } while (0)
+
+static void movement_range(uint8_t start, uint8_t budget)
+{
+    uint8_t c;
+
+    memset(cost, NO_COST, CELL_COUNT);
+    for (c = 0; c <= MAX_MOVE; c++) bucket_end[c] = bucket_start[c];
+
+    /* q[] has a bucket per point of MAX_MOVE and no more; a unit that
+       could outrun them would write past the end. */
+    if (budget > MAX_MOVE) budget = MAX_MOVE;
+
+    cost[start] = 0;
+    *bucket_end[0] = start;
+    bucket_end[0]++;
+
+    for (c = 0; c <= budget; c++) {
+        const uint8_t *p = bucket_start[c];
+        const uint8_t *e = bucket_end[c];   /* pushes from this bucket
+                                               land in later ones, so
+                                               the end cannot move */
+
+        for (; p != e; p++) {
+            uint8_t cell = *p;
+            uint8_t x;
+
+            /* A cheaper path reached this cell after it was queued, so
+               its entry in this bucket is stale. */
+            if (cost[cell] != c) continue;
+
+            /* North and south simply fall off the array; west and east
+               need the column, the one place a flat cell index can wrap
+               onto the wrong row. */
+            x = col_of[cell];
+            if (cell >= GRID_COLS)              RELAX((uint8_t)(cell - GRID_COLS));
+            if (cell < CELL_COUNT - GRID_COLS)  RELAX((uint8_t)(cell + GRID_COLS));
+            if (x != 0)                         RELAX((uint8_t)(cell - 1));
+            if (x != GRID_COLS - 1)             RELAX((uint8_t)(cell + 1));
+        }
+    }
+}
+
 /* Build both armies for the current level.  Called from load_map(),
    after terrain[] is in place — placement reads it for passability.
    The player takes the bottom-left corner and the enemy the top-right,
@@ -609,9 +825,11 @@ static void populate_map(void)
     unit_count = 0;
 
     /* Unit indices are about to be reused, so anything holding one is
-       stale — including the player's selection from the level just won. */
+       stale — including the player's selection from the level just won,
+       and the repaints it had outstanding. */
     selected = NO_UNIT;
-    dirty_x = NO_CELL;
+    dirty_n = 0;
+    attrs_left = 0;
 
     /* Seeded from the level, so a level's layout is the same every time
        it is played but different from its neighbours' — reproducible
@@ -641,12 +859,32 @@ static void load_map(void)
         terrain[i] = (t < TER_COUNT) ? t : 0;
     }
 
+    /* Flatten terrain into the per-cell entry cost the flood fill
+       reads, with impassable terrain as cost 0.  Doing it once per
+       level here is what lets the fill's inner loop take a single
+       lookup where it would otherwise take three. */
+    for (i = 0; i < CELL_COUNT; i++) {
+        t = terrain[i];
+        cell_cost[i] = level_1_terrain_blocked[t] ? 0 : terrain_move_cost[t];
+    }
+
     cursor_x = level_start[level - 1][0];
     cursor_y = level_start[level - 1][1];
     cur_x = cursor_x;
     cur_y = cursor_y;
 
     populate_map();
+}
+
+/* A unit's own colour: its side, dimmed once it has spent its action
+   for the turn.  This is the board's only record of what the player
+   still has left to move, so it has to survive every repaint — which
+   is why it is computed here rather than painted once at the moment
+   the unit acts. */
+static uint8_t unit_attr(uint8_t u)
+{
+    if (u_flags[u] & U_SIDE)   return ATTR_UNIT_E;
+    return (u_flags[u] & U_ACTED) ? ATTR_UNIT_P_DONE : ATTR_UNIT_P;
 }
 
 /* The colour a cell wears when the cursor is not on it: yellow if it
@@ -658,16 +896,21 @@ static uint8_t map_cell_attr(uint8_t cell)
 
     if (u == NO_UNIT) return tiles_map_attr[terrain[cell]];
     if (u == selected) return ATTR_HINT;
-    return (u_flags[u] & U_SIDE) ? ATTR_UNIT_E : ATTR_UNIT_P;
+    return unit_attr(u);
 }
 
+/* As above, plus the movement range: the play view is where orders are
+   given, so it is the only view that shows the ground a held unit can
+   reach.  cost[] is only meaningful while something is selected, hence
+   the guard.  Reachable cells are never occupied — the fill refuses
+   them — so testing the occupant first cannot hide a highlight. */
 static uint8_t view_cell_attr(uint8_t cell)
 {
     uint8_t u = occupancy[cell];
 
-    if (u == NO_UNIT) return tiles_view_attr[terrain[cell]];
-    if (u == selected) return ATTR_HINT;
-    return (u_flags[u] & U_SIDE) ? ATTR_UNIT_E : ATTR_UNIT_P;
+    if (u != NO_UNIT) return (u == selected) ? ATTR_HINT : unit_attr(u);
+    if (selected != NO_UNIT && cost[cell] != NO_COST) return ATTR_RANGE;
+    return tiles_view_attr[terrain[cell]];
 }
 
 /* Terrain, then the unit standing on it.  The sprites are opaque, so a
@@ -728,8 +971,9 @@ static void draw_unit_line(uint8_t cell)
     print_char(30, ROW_UNIT, 'M');
     print_num(31, ROW_UNIT, unit_movement[t], 1);
 
-    set_attr_rect(0, ROW_UNIT, 32, 1,
-                  (u_flags[u] & U_SIDE) ? ATTR_UNIT_E : ATTR_UNIT_P);
+    /* Same colour rule as the sprite, so a spent unit reads as spent in
+       the panel too. */
+    set_attr_rect(0, ROW_UNIT, 32, 1, unit_attr(u));
 }
 
 /* Unit / turn / coordinate / terrain panel, shared by the play and map
@@ -802,6 +1046,25 @@ static void draw_view_cell(uint8_t vx, uint8_t vy)
     }
 }
 
+/* The same cell, colour only.  Laying a movement range down or taking
+   it away changes up to 25 cells' attributes and not one pixel of their
+   art, so this costs 16 bytes a cell where draw_view_cell() costs 144.
+   That is the difference between recolouring the page in four frames
+   and repainting it in thirteen. */
+static void attr_view_cell(uint8_t vx, uint8_t vy)
+{
+    uint8_t wx = (uint8_t)(page_x + vx);
+    uint8_t wy = (uint8_t)(page_y + vy);
+    uint8_t a;
+
+    if (wx >= GRID_COLS || wy >= GRID_ROWS)     a = ATTR_VOID;
+    else if (wx == cursor_x && wy == cursor_y)  a = ATTR_CURSOR;
+    else                                        a = view_cell_attr(cell_of(wx, wy));
+
+    set_attr_rect((uint8_t)(VIEW_COL + vx * VIEW_CW),
+                  (uint8_t)(VIEW_ROW + vy * VIEW_CH), VIEW_CW, VIEW_CH, a);
+}
+
 static void draw_view(void)
 {
     uint8_t i;
@@ -811,6 +1074,20 @@ static void draw_view(void)
 }
 
 /* ---------------------------------------------------------------- states */
+
+/* Play the tune.  The Tritone player blocks with interrupts off until a
+   key is pressed — it owns the speaker and cannot share the frame loop —
+   which used to make it a state of its own.  It does not need to be: it
+   is a long operation like any other, so it borrows the hint row to say
+   so and flushes the key that stopped it (docs/DESIGN.md § Long
+   operations).  Nothing else on the title screen is disturbed, so
+   nothing has to be repainted afterwards. */
+static void play_music(void)
+{
+    busy_on("PLAYING - PRESS A KEY          ");
+    lowlands_play();
+    busy_off(TITLE_HINT);
+}
 
 static void enter_title(void)
 {
@@ -836,16 +1113,27 @@ static void enter_title(void)
     }
     set_attr_rect(0, 3, 32, 3, ATTR_TEXT);
 
-    print_at(1, 10, "ENTER / FIRE   START");
-    print_at(1, 11, "G              GALLERY");
-    print_at(1, 12, "M              MUSIC");
-    set_attr_rect(0, 10, 32, 3, ATTR_HINT);
+    print_at(1, 10, "SPACE / FIRE   START");
+    set_attr_rect(0, 10, 32, 1, ATTR_HINT);
 
     print_at(1, 20, "QAOP / KEMPSTON TO MOVE");
     set_attr_rect(0, 20, 32, 1, ATTR_TEXT);
 
+    /* The hint row is where the tune's banner goes, and where it is
+       cleared back to. */
+    print_at(1, ROW_HINT, TITLE_HINT);
+    set_attr_rect(0, ROW_HINT, 32, 1, ATTR_HINT);
+
     /* Row 22 is left blank on purpose — it holds the floating bus sync
        marker written by vsync_wait(). */
+
+    /* The tune plays itself, as the last thing entering the title does:
+       the screen above is already painted, so the player has something
+       to read while it runs.  It blocks until a key is pressed, so the
+       title is unresponsive until then — the banner says so, and the
+       keypress that stops it is flushed rather than being taken as the
+       one that starts a game. */
+    play_music();
 }
 
 static void enter_play(void)
@@ -854,14 +1142,12 @@ static void enter_play(void)
     set_page();
     draw_view();
     cells_left = 0;
+    attrs_left = 0;         /* draw_view() already used the real colours */
+    dirty_n = 0;
     draw_status("CURSOR :", cursor_x, cursor_y);
 
-#if DEBUG_STATE_WALK
-    print_at(1, 21, "SPC PICK M MAP X TITLE W/L END ");
-#else
-    print_at(1, 21, "SPACE PICK  FIRE TURN  M MAP   ");
-#endif
-    set_attr_rect(0, 21, 32, 1, ATTR_HINT);
+    print_at(1, ROW_HINT, PLAY_HINT);
+    set_attr_rect(0, ROW_HINT, 32, 1, ATTR_HINT);
 }
 
 static void enter_map(void)
@@ -872,8 +1158,8 @@ static void enter_map(void)
     draw_cell(cur_x, cur_y, ATTR_CURSOR);
     draw_status("CURSOR :", cur_x, cur_y);
 
-    print_at(1, 21, "QAOP LOOK AROUND  SPACE CLOSE");
-    set_attr_rect(0, 21, 32, 1, ATTR_HINT);
+    print_at(1, ROW_HINT, "QAOP LOOK AROUND  SPACE CLOSE");
+    set_attr_rect(0, ROW_HINT, 32, 1, ATTR_HINT);
 }
 
 /* A level ended.  player_won says which message to show; the exit is
@@ -886,14 +1172,14 @@ static void enter_over(void)
     print_num(18, 10, level, 2);
     set_attr_rect(0, 10, 32, 1, ATTR_TEXT);
 
-    print_at(1, 21, player_won ? "FIRE FOR THE NEXT LEVEL        "
-                               : "FIRE TO RETURN TO THE TITLE    ");
-    set_attr_rect(0, 21, 32, 1, ATTR_HINT);
+    print_at(1, ROW_HINT, player_won ? "SPACE FOR THE NEXT LEVEL       "
+                                     : "SPACE TO RETURN TO THE TITLE   ");
+    set_attr_rect(0, ROW_HINT, 32, 1, ATTR_HINT);
 }
 
 /* Past the last level: the campaign is over.  Any key goes back to the
-   title, using the same release-then-press debounce as the gallery so
-   the key that won the game cannot dismiss this immediately. */
+   title, behind a release-then-press debounce so the key that won the
+   game cannot dismiss this immediately. */
 static void enter_won(void)
 {
     draw_header("CAMPAIGN COMPLETE");
@@ -903,34 +1189,11 @@ static void enter_won(void)
     print_num(21, 11, LEVEL_COUNT, 2);
     set_attr_rect(0, 9, 32, 3, ATTR_TEXT);
 
-    print_at(1, 21, "PRESS A KEY                    ");
-    set_attr_rect(0, 21, 32, 1, ATTR_HINT);
+    print_at(1, ROW_HINT, "PRESS A KEY                    ");
+    set_attr_rect(0, ROW_HINT, 32, 1, ATTR_HINT);
 
     key_idle = 0;
     key_down = 0;
-}
-
-static void enter_gallery(void)
-{
-    screen_clear(0x00);
-
-    dzx0_decompress(goo_final, SCRATCH_BUF);
-    write_blit(GOO_CROP_COL, GOO_CROP_ROW, SCRATCH_BUF,
-               GOO_CROP_W, GOO_CROP_H);
-    set_attr_rect(GOO_CROP_COL, GOO_CROP_ROW >> 3,
-                  GOO_CROP_W, (GOO_CROP_H + 7) >> 3, GOO_ATTR);
-
-    print_at(3, 21, "THE GREAT OLD ONE - ANY KEY");
-    set_attr_rect(0, 21, 32, 1, ATTR_TEXT);
-
-    key_idle = 0;
-    key_down = 0;
-}
-
-static void enter_music(void)
-{
-    screen_clear(ATTR_TEXT);
-    print_at(4, 11, "PLAYING - PRESS A KEY");
 }
 
 static void enter_state(uint8_t s)
@@ -941,8 +1204,6 @@ static void enter_state(uint8_t s)
         case ST_TITLE:   enter_title();   break;
         case ST_PLAY:    enter_play();    break;
         case ST_MAP:     enter_map();     break;
-        case ST_GALLERY: enter_gallery(); break;
-        case ST_MUSIC:   enter_music();   break;
         case ST_OVER:    enter_over();    break;
         case ST_WON:     enter_won();     break;
     }
@@ -1021,6 +1282,7 @@ static void move_play_cursor(void)
         ny < page_y || ny >= page_y + VIEW_ROWS) {
         set_page();
         cells_left = VIEW_CELLS;
+        attrs_left = 0;         /* the flip repaints every attribute */
     } else {
         draw_view_cell(ox, oy);                     /* leave the old cell */
         draw_view_cell((uint8_t)(nx - page_x),
@@ -1028,15 +1290,82 @@ static void move_play_cursor(void)
     }
 }
 
-/* Put the held unit down.  Its cell is repainted from update_state()
-   rather than here: input is handled outside the vblank window, so
-   drawing from it would tear. */
+/* Queue a world cell for a full redraw next frame.  Orders are given
+   from handle_input(), which runs outside the vblank window, so nothing
+   there may draw its own result. */
+static void mark_dirty(uint8_t x, uint8_t y)
+{
+    if (dirty_n < DIRTY_MAX) {
+        dirty_x[dirty_n] = x;
+        dirty_y[dirty_n] = y;
+        dirty_n++;
+    }
+}
+
+/* Pick a unit up: work out the ground it can reach and start showing
+   it.  The range is recomputed at every selection rather than cached
+   for the turn, because units block each other and the board has
+   usually moved since the last time this unit was looked at
+   (docs/DESIGN.md § Units). */
+static void select_unit(uint8_t u)
+{
+    selected = u;
+    sel_x = cursor_x;
+    sel_y = cursor_y;
+    movement_range(u_cell[u], unit_movement[u_type[u]]);
+    attrs_left = VIEW_CELLS;
+}
+
+/* Put the held unit down.  Only colours change — the unit has not
+   moved — so the page is recoloured rather than redrawn, and
+   view_cell_attr() stops reporting the range the moment `selected`
+   clears. */
 static void deselect(void)
 {
     if (selected == NO_UNIT) return;
     selected = NO_UNIT;
-    dirty_x = sel_x;
-    dirty_y = sel_y;
+    attrs_left = VIEW_CELLS;
+}
+
+/* Order the held unit onto the cursor's cell.  The caller has already
+   established that the cell is in range, which by construction means it
+   is empty, passable, and no further than the unit's movement.
+
+   Moving is the unit's action for the turn, so it is spent and put down
+   in the same breath.  The design's "a move ending next to an enemy may
+   also attack" is the one exception, and it needs an attack to exist
+   first: it arrives with combat in P4. */
+static void move_selected(void)
+{
+    uint8_t u = selected;
+    uint8_t from = u_cell[u];
+    uint8_t to = cell_of(cursor_x, cursor_y);
+
+    occupancy[from] = NO_UNIT;
+    occupancy[to] = u;
+    u_cell[u] = to;
+    u_flags[u] |= U_ACTED;
+
+    selected = NO_UNIT;
+    mark_dirty(sel_x, sel_y);           /* the sprite leaves here */
+    mark_dirty(cursor_x, cursor_y);     /* and arrives here       */
+    attrs_left = VIEW_CELLS;
+}
+
+/* End the player's turn.  Every unit gets its action back and the
+   counter moves on; anything the player did not spend is forfeit, which
+   is what makes SELECT a decision rather than a formality
+   (docs/DESIGN.md § Enemy turn).  The enemy half of the round is P5, so
+   for now the counter goes straight round again. */
+static void end_turn(void)
+{
+    uint8_t i;
+
+    deselect();
+    for (i = 0; i < unit_count; i++)
+        u_flags[i] &= (uint8_t)~U_ACTED;
+    turn++;
+    attrs_left = VIEW_CELLS;    /* spent units brighten again */
 }
 
 /* Per-frame work for the active state, run inside the vblank window. */
@@ -1056,17 +1385,35 @@ static void update_state(void)
                     cells_left--;
                 }
             }
-            /* A cell whose highlight changed while input was handled —
-               the unit that was just put down.  Only repaint it if the
-               page still shows it and a flip is not already redrawing
-               everything anyway. */
-            if (dirty_x != NO_CELL) {
-                if (!cells_left &&
-                    dirty_x >= page_x && dirty_x < page_x + VIEW_COLS &&
-                    dirty_y >= page_y && dirty_y < page_y + VIEW_ROWS)
-                    draw_view_cell((uint8_t)(dirty_x - page_x),
-                                   (uint8_t)(dirty_y - page_y));
-                dirty_x = NO_CELL;
+            /* Cells an order left stale — the two ends of a move.  Only
+               drawn if the page still shows them and a flip is not
+               already redrawing everything anyway. */
+            if (dirty_n) {
+                while (dirty_n) {
+                    uint8_t i = --dirty_n;
+
+                    if (!cells_left &&
+                        dirty_x[i] >= page_x &&
+                        dirty_x[i] < page_x + VIEW_COLS &&
+                        dirty_y[i] >= page_y &&
+                        dirty_y[i] < page_y + VIEW_ROWS)
+                        draw_view_cell((uint8_t)(dirty_x[i] - page_x),
+                                       (uint8_t)(dirty_y[i] - page_y));
+                }
+            }
+            /* Recolour the page a few cells at a time: a movement range
+               appearing or clearing.  Held off while either heavier
+               repaint is outstanding — a flip rewrites every attribute
+               itself, and a move has already spent this frame's budget
+               on its two full cells. */
+            else if (attrs_left && !cells_left) {
+                uint8_t n = RANGE_CELLS;
+                while (n-- && attrs_left) {
+                    uint8_t i = (uint8_t)(VIEW_CELLS - attrs_left);
+                    attr_view_cell((uint8_t)(i % VIEW_COLS),
+                                   (uint8_t)(i / VIEW_COLS));
+                    attrs_left--;
+                }
             }
             if (redraw_status) {
                 draw_status("CURSOR :", cursor_x, cursor_y);
@@ -1082,13 +1429,6 @@ static void update_state(void)
             }
             break;
 
-        case ST_MUSIC:
-            /* Blocking: the Tritone player owns the speaker and returns
-               on the next key/joystick press. */
-            lowlands_play();
-            set_state(back_state);
-            break;
-
         default:
             break;
     }
@@ -1099,36 +1439,51 @@ static void handle_input(void)
 {
     switch (game_state) {
         case ST_TITLE:
-            if (edge & ACT_SELECT) {
+            if (edge & ACT_GO) {
                 turn = 1;
                 level = 1;
+                /* Decompressing a map and placing two armies runs long.
+                   No banner is put back: enter_play() repaints the
+                   screen and enter_state() flushes the keyboard. */
+                busy_on("DEPLOYING...                   ");
                 load_map();
                 set_state(ST_PLAY);
             }
             break;
 
         case ST_PLAY:
-            /* SPACE picks the unit under the cursor up, or puts down
-               whatever is already held.  Only the player's own units
-               can be held; an enemy under the cursor is reported in the
-               panel but not selectable. */
-            if (edge & ACT_SPACE) {
-                if (selected != NO_UNIT) {
-                    deselect();
-                } else {
-                    uint8_t u = occupancy[cell_of(cursor_x, cursor_y)];
+            /* SPACE is the one order key: with nothing held it picks
+               the unit under the cursor up, and with a unit held it
+               either sends it to the highlighted cell the cursor is on
+               or puts it down again.  Only the player's own units can
+               be held, and only ones that still have their action; an
+               enemy under the cursor is reported in the panel but never
+               selectable. */
+            /* Orders wait for a page flip to finish, exactly as cursor
+               movement does: the flip is part way through repainting
+               the page, so a move made now could have its two cells
+               drawn before the unit had left one and reached the
+               other. */
+            if ((edge & ACT_SPACE) && !cells_left) {
+                uint8_t cell = cell_of(cursor_x, cursor_y);
+                uint8_t u = occupancy[cell];
 
-                    if (u != NO_UNIT && (u_flags[u] & U_SIDE) == SIDE_PLAYER) {
-                        selected = u;
-                        sel_x = cursor_x;
-                        sel_y = cursor_y;
-                    }
+                if (selected == NO_UNIT) {
+                    if (u != NO_UNIT &&
+                        (u_flags[u] & (U_SIDE | U_ACTED)) == SIDE_PLAYER)
+                        select_unit(u);
+                } else if (u == NO_UNIT && cost[cell] != NO_COST) {
+                    move_selected();
+                } else {
+                    /* The unit's own cell, or ground it cannot reach. */
+                    deselect();
                 }
                 redraw_status = 1;
             }
+            /* ENTER, not SPACE: SPACE is giving orders on this screen,
+               and it is the only screen where the two differ. */
             if (edge & ACT_SELECT) {
-                turn++;
-                deselect();     /* the turn ends; nothing is held into it */
+                end_turn();
                 redraw_status = 1;
             }
             /* X drops the held unit first and only quits on a second
@@ -1148,37 +1503,22 @@ static void handle_input(void)
 
         case ST_MAP:
             /* Read-only overview: SPACE (or back) dismisses it. */
-            if (edge & (ACT_SPACE | ACT_BACK | ACT_SELECT))
+            if (edge & (ACT_GO | ACT_BACK))
                 set_state(ST_PLAY);
-            break;
-
-        case ST_GALLERY:
-            /* Wait for the G key to be released, then for a fresh
-               press: two consecutive samples in each state debounce
-               both.  Sampling once per frame (not in a tight loop)
-               keeps ULA bus noise out of the reads. */
-            if (key_idle < 2) {
-                key_idle = any_key() ? 0 : (uint8_t)(key_idle + 1);
-            } else {
-                key_down = any_key() ? (uint8_t)(key_down + 1) : 0;
-                if (key_down >= 2) set_state(back_state);
-            }
-            break;
-
-        case ST_MUSIC:
             break;
 
         case ST_OVER:
             /* A loss ends the campaign.  A win advances: level 11 does
                not exist, so passing the last level is the campaign
                being complete rather than another map to load. */
-            if (edge & ACT_SELECT) {
+            if (edge & ACT_GO) {
                 if (!player_won) {
                     set_state(ST_TITLE);
                 } else if (++level > LEVEL_COUNT) {
                     set_state(ST_WON);
                 } else {
                     turn = 1;
+                    busy_on("DEPLOYING...                   ");
                     load_map();
                     set_state(ST_PLAY);
                 }
@@ -1186,7 +1526,10 @@ static void handle_input(void)
             break;
 
         case ST_WON:
-            /* Same two-sample release-then-press rule as the gallery. */
+            /* Wait for the key that won the level to be released, then
+               for a fresh press: two consecutive samples in each state
+               debounce both.  Sampling once per frame rather than in a
+               tight loop keeps ULA bus noise out of the reads. */
             if (key_idle < 2) {
                 key_idle = any_key() ? 0 : (uint8_t)(key_idle + 1);
             } else {
@@ -1196,17 +1539,12 @@ static void handle_input(void)
             break;
     }
 
-    /* G opens the gallery from the title and from play.  M is the map
-       while playing and the music player on the title screen. */
-    if (edge & ACT_EXTRA) {
-        if (game_state == ST_PLAY && extra_key == EXTRA_M) {
-            cur_x = cursor_x;
-            cur_y = cursor_y;
-            set_state(ST_MAP);
-        } else if (game_state == ST_TITLE || game_state == ST_PLAY) {
-            back_state = game_state;
-            set_state(extra_key == EXTRA_M ? ST_MUSIC : ST_GALLERY);
-        }
+    /* M opens the overview.  It means nothing anywhere else — the tune
+       plays itself when the title screen is entered. */
+    if ((edge & ACT_M) && game_state == ST_PLAY) {
+        cur_x = cursor_x;
+        cur_y = cursor_y;
+        set_state(ST_MAP);
     }
 }
 
