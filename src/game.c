@@ -230,7 +230,7 @@ static void busy_off(const char *hint)
    screen is disturbed, so nothing has to be repainted afterwards. */
 static void play_music(void)
 {
-    busy_on("PLAYING - PRESS A KEY          ");
+    busy_on("PLAYING - PRESS A KEY");
     lowlands_play();
     busy_off(TITLE_HINT);
 }
@@ -370,7 +370,7 @@ static void view_to(uint8_t cell)
     cursor_x = (uint8_t)(cell % GRID_COLS);
     cursor_y = (uint8_t)(cell / GRID_COLS);
     render_play();          /* set_page, whole window, one clean reveal */
-    render_hint("      ENEMY TURN       ");
+    render_hint("      ENEMY TURN");
     redraw_status = 1;
 }
 
@@ -442,7 +442,7 @@ static void handle_input(void)
                 /* Decompressing a map and placing two armies runs long.
                    No banner is put back: enter_play() repaints the
                    screen and enter_state() flushes the keyboard. */
-                busy_on("DEPLOYING...                   ");
+                busy_on("DEPLOYING...");
                 load_map();
                 set_state(ST_PLAY);
             }
@@ -504,7 +504,7 @@ static void handle_input(void)
                 enemy_begin();
                 enemy_active = 1;
                 enemy_beat = ENEMY_BEAT;
-                render_hint("      ENEMY TURN       ");
+                render_hint("      ENEMY TURN");
                 redraw_status = 1;
             }
             /* X drops the held unit first and only quits on a second
@@ -546,7 +546,7 @@ static void handle_input(void)
                     set_state(ST_WON);
                 } else {
                     turn = 1;
-                    busy_on("DEPLOYING...                   ");
+                    busy_on("DEPLOYING...");
                     load_map();
                     set_state(ST_PLAY);
                 }

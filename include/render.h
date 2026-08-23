@@ -134,7 +134,7 @@
 #else
 #define PLAY_HINT   "SPACE MOVE  ENTER END TURN  MAP"
 #endif
-#define TITLE_HINT  "                               "
+#define TITLE_HINT  ""      /* render_hint() pads; see it */
 
 
 /* --- Repaint queues --------------------------------------------------

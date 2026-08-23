@@ -117,6 +117,8 @@
 #define PAGE_SCREEN 0x08    /* bit 3: show the shadow screen           */
 #define MARKER_ROW  22      /* the floating bus sync marker's row      */
 
+static void hint_row(const char *s, uint8_t attr);
+
 static uint8_t page_reg;    /* 0x7FFD is write-only; remember it       */
 static uint8_t back;        /* 1 = the back buffer is SCREEN_1         */
 static uint8_t shadow_ok;   /* 0 = the 128K path is not usable yet     */
@@ -506,7 +508,7 @@ static void draw_unit_line(uint8_t cell)
     print_at(1, ROW_UNIT, "UNIT   :");
 
     if (u == NO_UNIT) {
-        print_at(10, ROW_UNIT, "-                     ");
+        print_at(10, ROW_UNIT, "-");
         set_attr_rect(0, ROW_UNIT, 32, 1, ATTR_TEXT);
         return;
     }
@@ -1144,14 +1146,27 @@ void render_tick(void)
 
 void render_busy(const char *msg)
 {
-    print_at(1, ROW_HINT, msg);
-    set_attr_rect(0, ROW_HINT, 32, 1, ATTR_BUSY);
+    hint_row(msg, ATTR_BUSY);
+}
+
+/* The hint row, padded to full width here rather than in the literal.
+
+   Every message used to be written out to 31 characters by hand so the
+   next one would erase all of the last — up to thirty bytes of spaces
+   each, in a build that has to fit in sixteen kilobytes.  The banner and
+   the legend differ only in the colour they wash the row with. */
+static void hint_row(const char *s, uint8_t attr)
+{
+    uint8_t col = 1;
+
+    while (*s && col < 32) print_char(col++, ROW_HINT, *s++);
+    while (col < 32)       print_char(col++, ROW_HINT, ' ');
+    set_attr_rect(0, ROW_HINT, 32, 1, attr);
 }
 
 void render_hint(const char *hint)
 {
-    print_at(1, ROW_HINT, hint);
-    set_attr_rect(0, ROW_HINT, 32, 1, ATTR_HINT);
+    hint_row(hint, ATTR_HINT);
 }
 
 void render_title(void)
@@ -1167,14 +1182,15 @@ void render_title(void)
 
     print_at(1, 5, "VSYNC   :");
     switch (vsync_mode) {
+        /* The two bus lines differ by four characters, so they share a
+           prefix rather than carrying it twice. */
         case VSYNC_MODE_48K:
-            print_at(11, 5, "FLOATING BUS 0X40FF");
-            break;
         case VSYNC_MODE_128K:
-            print_at(11, 5, "FLOATING BUS 0X0FFD");
+            print_at(11, 5, "FLOATING BUS 0X");
+            print_at(26, 5, vsync_mode == VSYNC_MODE_48K ? "40FF" : "0FFD");
             break;
         default:
-            print_at(11, 5, "HALT FALLBACK      ");
+            print_at(11, 5, "HALT FALLBACK  ");
             break;
     }
     /* Whether the shadow screen is actually in use.  On the title
@@ -1221,7 +1237,7 @@ void render_map(void)
     solid_map_cell(cursor_x, cursor_y, ATTR_HINT);  /* the play cursor */
     solid_map_cell(cur_x, cur_y, ATTR_CURSOR);
     draw_status("CURSOR :", cur_x, cur_y);
-    render_hint("QAOP LOOK AROUND  SPACE CLOSE  ");
+    render_hint("QAOP LOOK AROUND  SPACE CLOSE");
     render_show();
 }
 
@@ -1236,8 +1252,8 @@ void render_over(void)
     print_num(18, 10, level, 2);
     set_attr_rect(0, 10, 32, 1, ATTR_TEXT);
 
-    render_hint(player_won ? "SPACE FOR THE NEXT LEVEL       "
-                           : "SPACE TO RETURN TO THE TITLE   ");
+    render_hint(player_won ? "SPACE FOR THE NEXT LEVEL"
+                           : "SPACE TO RETURN TO THE TITLE");
     render_show();
 }
 
@@ -1251,6 +1267,6 @@ void render_won(void)
     print_num(21, 11, LEVEL_COUNT, 2);
     set_attr_rect(0, 9, 32, 3, ATTR_TEXT);
 
-    render_hint("PRESS A KEY                    ");
+    render_hint("PRESS A KEY");
     render_show();
 }
