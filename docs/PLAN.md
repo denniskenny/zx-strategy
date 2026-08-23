@@ -33,21 +33,23 @@ existing page flip does with `PAGE_CELLS`.
 
 ## Decisions needed before Phase 1
 
-These are unspecified in the design and each one changes the data structures.
-Recommendations given; they are cheap to change now and expensive later.
+Each of these changes the data structures, so all six were settled before any
+of them got expensive. **All are now recorded in `docs/DESIGN.md`**; the table
+is kept as the index of where each rule came from.
 
 | Question | Recommendation | Why |
 |----------|----------------|-----|
-| Unit stacking | **One unit per cell** | Lets `occupancy[98]` be a single byte per cell and makes "who is here" O(1) |
-| Adjacency | **4-way for movement**, Manhattan for attack range | Matches per-tile movement costs; diagonals would need cost 1.4 or break the cost model |
-| Action model | **Move *or* attack, one per unit per turn** | Matches the enemy rule already in the design ("attack if in range; if no attack is possible, move") |
-| Unit HP width | **`uint16`** | Base has 500 HP; scaling to a byte would distort the cover rounding rule |
-| Cursor vs paging | **Cursor drives the page**: flip when the cursor leaves it | The far base is on another page; the player must be able to look at it |
-| Turn order | Player first, then enemy | Already implied |
+| ~~Unit stacking~~ | **Decided: one unit per tile, occupied tiles impassable** | Lets `occupancy[98]` be a single byte per cell and makes "who is here" O(1) |
+| ~~Adjacency~~ | **Decided: 4-way, cursor included** | Matches per-tile movement costs; diagonals would need cost 1.4 or break the cost model |
+| ~~Action model~~ | **Decided: one action per unit; a move ending adjacent to an enemy may also attack** | One `acted` bit per unit, set by either action |
+| ~~Unit HP width~~ | **Decided: `uint8`** — Base is 255, not 500 | Saves 38 bytes and every damage subtraction is 8-bit |
+| ~~Cursor vs paging~~ | **Decided: the cursor drives the page**, flipping when it leaves | The far base is on another page; the player must be able to look at it |
+| ~~Turn order~~ | **Decided: all player units, then all enemy units; `SELECT` forfeits unspent actions** | One `acted` bit clears per side, and the turn counter is per round |
 
-Also unresolved and worth recording: **stalemate**. Cannon and Base have
-Movement 0, so a side left with only immobile out-of-range units can neither
-win nor lose. Suggest a turn cap per level → treated as a loss.
+**Stalemate** is settled too, and the opposite way to the turn cap this plan
+once proposed: there is none. A side reduced to immobile out-of-range units
+can neither win nor lose, so the player leaves with `X` and no `ST_OVER`
+message, because nothing was decided (`docs/DESIGN.md` § Stalemate).
 
 
 ## Data structures
@@ -59,9 +61,9 @@ every `unit[i].field`, but an indexed byte array is `LD A,(HL)`.
 /* --- units: parallel arrays, index 0..UNITS_MAX-1 (38) --- */
 uint8_t  u_type[UNITS_MAX];    /* UNIT_INFANTRY..UNIT_BASE, 0xFF = slot free */
 uint8_t  u_cell[UNITS_MAX];    /* y * 14 + x, one byte, no coordinate pair    */
-uint16_t u_hp[UNITS_MAX];      /* Base needs 500                              */
+uint8_t  u_hp[UNITS_MAX];      /* 1..255; 0 is death                          */
 uint8_t  u_flags[UNITS_MAX];   /* bit0 side (0 player, 1 enemy), bit1 acted   */
-                               /* 38 + 38 + 76 + 38 = 190 bytes               */
+                               /* 4 x 38 = 152 bytes                          */
 
 /* --- board-sized scratch, one byte per cell (98 each) --- */
 uint8_t occupancy[98];         /* unit index, or 0xFF                          */
@@ -77,7 +79,7 @@ uint8_t bucket_end[MAX_MOVE + 1];
 static const uint8_t row_base[7] = { 0, 14, 28, 42, 56, 70, 84 };
 ```
 
-Total 717 bytes of new RAM. There is room: the binary is ~12.5 KB at
+Total 679 bytes of new RAM. There is room: the binary is ~12.5 KB at
 `-zorg=32768`.
 
 **Cell index, not (x,y).** One byte per position, neighbours are `±1` and
@@ -227,7 +229,7 @@ Threat map, per-unit AI state machine, one unit per frame, end-of-turn handback.
 
 ### P6 — Balance and polish
 
-Weights, turn cap for stalemate, a level indicator in the status panel, and
+Weights, a level indicator in the status panel, and
 whatever the ten maps show up as unplayable.
 
 

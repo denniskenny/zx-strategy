@@ -25,6 +25,11 @@ Each subsequent odd-numbered level will have an additional unit of each type.
 
 Movement range is calculated using a simple pathfinding algorithm that calculates the distance from the unit to all reachable tiles.
 
+**Movement is 4-way**: north, south, east and west only. There are no diagonal
+steps, so a tile's movement cost is the whole cost of entering it and no step
+needs a different price from any other. This applies to the cursor as well as
+to units.
+
 ### Tiles
 
 Tiles have an impassable flag and a movement cost. They also offer cover benefits to units standing on them. `impassable` is the name of the Tiled tile property the build actually reads, so the flag here and the flag in the tileset say the same thing the same way round.
@@ -78,6 +83,16 @@ Attack range is calculated using a simple algorithm that calculates the distance
 ### Units
 Units have an attack range and damage value. They have a health value and can be killed. They also have a movement range
 
+**Health fits in a byte**, so no unit may have more than 255 HP. Damage is
+subtracted from it directly and 0 is death; nothing in the game needs a 16-bit
+quantity per unit.
+
+**One unit per tile.** A tile holding a unit is impassable to every other unit,
+friendly or enemy alike, so units block movement exactly as water does — the
+difference is that terrain is impassable for the whole level while a unit's
+tile frees up when it moves or dies. Movement range therefore has to be
+recalculated per unit, at the moment it is selected, not cached for the turn.
+
 Art: `assets/units_view.zxp` (32x32 sprites, `ST_PLAY`) and
 `assets/units_map.zxp` (16x16, `ST_MAP`), one sprite column per unit in the
 order below. Both sides share a sprite; the runtime picks the attribute per
@@ -107,10 +122,29 @@ Movement : 0
 #### Base 
 Range : 0
 Damage : 0
-Health : 500
+Health : 255
 Movement : 0
 
+### Actions
+
+**One action per unit per turn.** A unit either moves or attacks; taking either
+one uses the unit up for that turn, and the turn ends when every unit has acted
+or the player ends it.
+
+The exception is a move that closes with the enemy: **a unit whose movement
+ends adjacent to an enemy unit may attack it in the same turn**. Adjacent means
+one of the four cardinal neighbours, as movement is 4-way. So a unit can move
+*or* attack at range, or move into contact and strike — but never move, attack,
+and still have an action left.
+
 ### Enemy turn
+
+**Turn order is strictly sided: the player moves first, then the enemy.** Every
+player unit that is going to act does so before any enemy unit acts, and ending
+the turn with `SELECT` forfeits the actions of any player units that have not
+yet been used. The enemy turn is likewise indivisible — control returns to the
+player only when every enemy unit has been processed — and the turn counter
+increments once per full player-then-enemy round.
 
 The enemy will cycle through their units and perform an action for each unit. 
 
@@ -141,6 +175,15 @@ The level counter lives with the game state, not the map: `ST_TITLE` sets it to
 1 and `ST_OVER` increments it on a win. There are ten levels, so winning **past
 the last level** is the campaign being finished rather than another map to
 load, and `ST_OVER` sends the player to `ST_WON` instead of `ST_PLAY`.
+
+### Stalemate
+
+Cannon and Base cannot move, so a side reduced to immobile units with nothing
+in range can neither win nor lose, and the turn counter would climb forever.
+There is no turn cap: **the player quits to the title screen with `X`**, which
+is the same exit `ST_PLAY` already offers. The campaign ends there and the next
+game starts at level 1, exactly as a loss does — the difference is only that no
+`ST_OVER` message is shown, because nothing was decided.
 
 ## The loop
 
@@ -222,13 +265,18 @@ Consequences the design has to respect:
   a step changed, advance a page flip if one is in progress, refresh the status
   panel when dirty.
 - **Paging, not scrolling**: a full page repaint is ~4 KB of screen writes —
-  several frames' work — so the party walks inside a fixed page and the page
-  flips only when it steps off the edge. A flip repaints `PAGE_CELLS` tiles per
-  frame and freezes movement until it completes (~0.3 s), which reads as a
-  screen transition.
-- **Movement**: one cell per step, blocked by terrain whose Tiled tile carries
-  `impassable` (currently water). Diagonals fall out of two directions being
-  held at once.
+  several frames' work — so the view holds a fixed page and flips only when it
+  has to. A flip repaints `PAGE_CELLS` tiles per frame and freezes movement
+  until it completes (~0.3 s), which reads as a screen transition.
+- **The cursor flips the page**, not the unit: the page changes when the cursor
+  steps off its edge. The player has to be able to look at the whole board —
+  the enemy base is in the opposite corner and therefore always on another page
+  — and the cursor is the only thing that moves freely. A unit ordered to move
+  never leaves the page it was selected on, because its movement range is at
+  most 3 tiles.
+- **Movement**: one cell per step in the four cardinal directions, blocked by
+  terrain whose Tiled tile carries `impassable` (currently water) and by any
+  tile that already holds a unit.
 - **Exits**: `SELECT` ends the turn (turn counter only, for now), `M` →
   `ST_MAP`, `G` → gallery, `X` → title.
 
