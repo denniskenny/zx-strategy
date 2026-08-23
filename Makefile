@@ -143,11 +143,12 @@ assets/music/%_linkable.asm: assets/music/%.asm tools/gen_tritone_module.py
 .SECONDARY:
 
 # --- Source files ---
-SRCS = src/main.c src/game.c src/gfx.c src/input.c src/hw_detect.c \
+SRCS = src/main.c src/game.c src/logic.c src/render.c src/gfx.c src/input.c src/hw_detect.c \
        src/vsync.c src/prng.c src/dzx0.c
 
 HEADERS = config/app_config.h config/game_config.h include/gfx.h include/input.h include/hw.h \
-          include/vsync.h include/prng.h include/game.h include/dzx0.h \
+          include/vsync.h include/prng.h include/game.h include/board.h \
+          include/render.h include/dzx0.h \
           include/music.h $(GENERATED_HEADERS)
 
 # --- Top-level targets ---

@@ -250,7 +250,8 @@ game starts at level 1, exactly as a loss does — the difference is only that n
 
 ## The loop
 
-Implementation: `src/game.c`, state ids in `include/game.h`.
+Implementation: `src/game.c`, state ids in `include/game.h`. What it calls is
+split between `src/logic.c` and `src/render.c` — see § Logic and rendering.
 
 One iteration of `game_run()` is one 50 Hz frame:
 
@@ -270,8 +271,8 @@ Consequences the design has to respect:
   hardware fact: after `vsync_wait()` returns, roughly 256 bytes can be written
   to the screen before the raster catches up and the write tears. That is what
   `PAGE_CELLS` is set for, and why anything larger than a couple of cells is
-  spread across frames (see `ST_PLAY`) or done in `enter_*`. **Computation has
-  no such limit** — see § Long operations.
+  spread across frames. **Computation has no such limit** — this is the whole
+  reason for the file split; see § Logic and rendering.
 - **One state is active at a time.** There is no state stack, and every state
   has a single caller, so each just names its destination — `ST_MAP` returns to
   `ST_PLAY` and says so. Nothing needs to remember where it came from. If a
@@ -281,6 +282,55 @@ Consequences the design has to respect:
   consecutive frames, then fires once on its rising edge. Held directions
   repeat every `NAV_DELAY` frames. Keyboard and Kempston fold into one action
   byte, so both debounce identically.
+
+## Logic and rendering
+
+The single most useful thing to know about this program is that **its two
+halves are paid in different currencies**, and the code is split three ways to
+keep them apart.
+
+| | Deadline | Because |
+|---|---|---|
+| **Logic** — `src/logic.c` | **None.** Take as long as you like. | The game is turn-based. Nothing animates, nothing is on a timer, nothing is waiting on the player. A routine that overruns costs a pause and nothing else. |
+| **Rendering** — `src/render.c` | **~256 bytes of screen writes per frame.** | The raster does not wait. After `vsync_wait()` returns, that is roughly what can be written before the beam catches up and the write tears. |
+| **The loop** — `src/game.c` | — | Owns the frame, the states and the keyboard, and decides *when* each of the other two runs. |
+
+This is why the two are allowed such different shapes. Logic can be
+**heuristic**: flood the whole board, score every candidate cell, scan all 98
+cells three times if that is the clearest way to express the rule. The
+movement-range fill takes about six tenths of a frame and nobody minds; the
+enemy AI will take a fifth of a second for a full army and nobody will mind
+that either, because it happens behind a banner (§ Long operations).
+
+Rendering gets no such licence. Every routine in it is sized against the
+budget, and anything bigger is spread across frames: a page flip goes out
+`PAGE_CELLS` (2) full cells at a time, a movement highlight `RANGE_CELLS` (8)
+attribute-only cells at a time, and `render_tick()` pays off at most one of
+those debts per frame. **The cost of a routine there is measured in bytes
+written, not in what it computes.**
+
+### The seam
+
+`include/board.h` is the whole contract. Logic owns the board — terrain, the
+armies, occupancy, the movement costs — and rendering reads it. The rule that
+keeps the split honest runs both ways:
+
+- **Logic never draws.** It changes the board and says what is now stale:
+  `mark_dirty()`, `recolour_page()`, `start_page_flip()`. It does not know or
+  care when that gets painted.
+- **Rendering never changes the game.** `attr_view_cell()` decides a cell's
+  colour by reading `occupancy`, `selected` and `cost`; it writes none of them.
+
+That second rule is what makes rendering **replaceable**. These routines are
+the ones that will be hand-written Z80 — they are the only ones with a
+deadline, so they are the only ones where it would buy anything — and a rewrite
+has to preserve nothing except the function signatures in `include/render.h`.
+Nothing else in the program can tell the difference.
+
+The split is also the answer to "where does this belong?". If it computes
+something, it goes in `logic.c` and may take as long as it likes. If it puts
+bytes on the screen, it goes in `render.c` and has to say what it costs. If it
+decides *when*, it stays in `game.c`.
 
 ## Long operations
 

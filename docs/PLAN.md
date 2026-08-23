@@ -25,13 +25,14 @@ Two things drove the ordering:
 
 ## Frame discipline
 
-One hard rule, and it is about **drawing, not thinking**
-(`docs/DESIGN.md` § The loop):
+One hard rule, and it is about **drawing, not thinking**. The source is split
+along exactly that line (`docs/DESIGN.md` § Logic and rendering):
 
-| Where | Budget | Use it for |
-|-------|--------|------------|
-| `update_state()` (in vblank) | ~256 bytes of screen *writes* | one or two cells repainted |
-| `enter_*()`, and any long operation | as long as it takes | full repaints, map load, army placement, the enemy turn |
+| File | Budget | Holds |
+|------|--------|-------|
+| `src/logic.c` | **none** — as long as it takes | the board, the armies, placement, the movement fill, the orders |
+| `src/render.c` | **~256 bytes of screen writes a frame** | every routine that writes to the screen, and nothing else |
+| `src/game.c` | — | the frame loop, the states, the keyboard: it decides *when* the other two run |
 
 The game is turn-based, so **computation is never chopped up to fit a frame**.
 Work that overruns runs to completion and the loop misses a vsync, or several.
@@ -42,7 +43,11 @@ no phase below has a T-state target: there is nothing for one to protect.
 What *does* still have to be spread across frames is **painting**, because the
 raster will not wait. A movement highlight is up to 25 cells x 16 attribute
 bytes and a full page flip is ~4 KB, so both go out N cells per frame —
-`RANGE_CELLS` and `PAGE_CELLS` respectively.
+`RANGE_CELLS` and `PAGE_CELLS` respectively, drained by `render_tick()`.
+
+When adding anything, the file it belongs in answers the budget question for
+you. If you find yourself wanting to draw from `logic.c`, mark the cell stale
+instead (`mark_dirty()`, `recolour_page()`) and let the renderer schedule it.
 
 
 ## Decisions that shaped the data structures  ✓ all settled
@@ -299,6 +304,38 @@ instead of being one flat byte per tile.
   marker, so enemy ink carries BRIGHT permanently and the sheet's flags cannot
   take it away. Shading reads on player units only. The converter rejects
   `0x02`/`0x03` per cell in full mode, naming the tile and the cell.
+
+### The three-way split  ✓ done (not a numbered phase)
+
+`game.c` had grown to 1 655 lines and mixed two kinds of code with opposite
+constraints. Split along the budget line (`docs/DESIGN.md` § Logic and
+rendering):
+
+- **`src/logic.c`** (~500 lines) — the board, the armies, placement, Dial's
+  fill, the orders. Touches no screen memory at all, which is checkable:
+  `grep 'print_at\|set_attr_rect\|write_blit' src/logic.c` comes back empty.
+- **`src/render.c`** (~560 lines) — every routine that writes to the screen,
+  plus the tile buffers and the repaint queues. Changes no game state, which
+  is equally checkable.
+- **`src/game.c`** (~520 lines) — the loop, the states, the keyboard.
+- **`include/board.h`** is the contract between the first two;
+  **`include/render.h`** is what a Z80 rewrite of the renderer must preserve.
+
+Two things came out of it beyond the tidying. `render_tick()` now owns the
+whole repaint schedule in one place instead of being inlined in
+`update_state()`, and the three debts it services are explicitly mutually
+exclusive per frame. And logic no longer sets render's counters directly — it
+calls `mark_dirty()` / `recolour_page()` / `render_discard()`, so "what is
+stale" and "when it gets painted" stopped being the same decision.
+
+**Cost: +1 142 bytes** (15 750 → 16 892). Cross-module calls cannot be
+optimised the way file-local statics could, and the new seam functions have
+real prologues. About 180 bytes of it is `level_1.h`'s tables, which are
+`static const` in a generated header and so get emitted once per including
+translation unit — three copies now. Worth fixing if the binary ever gets
+tight: have `tmx2header.py` emit `extern` declarations with one definition.
+The movement fill is unaffected (40 470 T against 41 616 before — it and its
+`RELAX` macro stayed in the same file).
 
 ### P4 — Combat and the real win condition
 

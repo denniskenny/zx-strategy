@@ -68,11 +68,21 @@ the beam, so the red band shows how much of the frame budget is actually used.
 
 `game_run()` in `src/game.c` is one frame per iteration: `vsync_wait()` →
 update the active state → poll input → optional state switch. States are
-`ST_TITLE`, `ST_PLAY`, `ST_MAP`, `ST_OVER` and `ST_WON`; each
-has an `enter_*` function that paints its screen once, and only play and map do
-per-frame work. To add a state: add the `ST_` id in `include/game.h`, an
-`enter_*` case, and its transitions in `handle_input()`. The states, their
-screens and their transitions are specified in [`docs/DESIGN.md`](docs/DESIGN.md).
+`ST_TITLE`, `ST_PLAY`, `ST_MAP`, `ST_OVER` and `ST_WON`; each has a
+`render_*()` that paints its screen once, and only play and map do per-frame
+work. To add a state: add the `ST_` id in `include/game.h`, a `render_*()` in
+`src/render.c`, a case in `enter_state()`, and its transitions in
+`handle_input()`. The states, their screens and their transitions are
+specified in [`docs/DESIGN.md`](docs/DESIGN.md).
+
+**The source is split by deadline, not by topic.** `src/logic.c` has none — the
+game is turn-based, so the board, the armies and the movement fill may take as
+long as they like. `src/render.c` has a hard one — roughly 256 bytes of screen
+writes between `vsync_wait()` returning and the raster catching up — so big
+repaints are paid off across frames by `render_tick()`. `src/game.c` decides
+when each runs. Logic never draws and rendering never changes the game, which
+is what makes the renderer replaceable by hand-written Z80 later. See
+[§ Logic and rendering](docs/DESIGN.md).
 
 Because the game is turn-based, logic that overruns a frame is allowed to: it
 runs to completion behind a banner on the hint line, with the input made during
@@ -102,7 +112,11 @@ src/gfx.c                screen address maths, blits, XOR sprites, ROM-font text
 src/input.c              keyboard half-rows + Kempston
 src/prng.c               16-bit LFSR/Weyl PRNG
 src/dzx0.c               ZX0 decompression (wraps z88dk's dzx0_standard)
-src/game.c               the game loop + states
+src/game.c               the frame loop + states (decides WHEN)
+src/logic.c              the board, armies and rules (no deadline)
+src/render.c             everything that writes to the screen (has one)
+include/board.h          the contract between logic and render
+include/render.h         what a Z80 rewrite of the renderer must keep
 assets/tiles_map.zxp     16x16 terrain tiles for the campaign overview
 assets/tiles_view.zxp    32x32 terrain tiles for the play view
 assets/units_map.zxp     16x16 unit sprites for the campaign overview
@@ -178,7 +192,7 @@ static const uint8_t level_1_gids_zx0[36] = { ... };          /* the map  */
 ```
 
 The data stays the **raw Tiled GIDs**, so re-ordering the tileset in Tiled can
-never silently change what the data means. `load_map()` in `src/game.c`
+never silently change what the data means. `load_map()` in `src/logic.c`
 decompresses the current level straight into `terrain[]` (both are `COLS*ROWS`
 bytes) and converts the GIDs in place (terrain id = `GID - LEVEL_1_GID_FIRST`),
 then parks the cursor on that level's `START_*`. Status labels come from the
@@ -187,12 +201,12 @@ so a new terrain type needs no C changes.
 
 Levels 2-10 are built with `--shared-terrain`: since every level uses the same
 tileset, only `level_1.h` carries the name and passability tables and the rest
-borrow them. `LEVEL_*_TERRAIN_SIG` hashes each tileset and `src/game.c`
+borrow them. `LEVEL_*_TERRAIN_SIG` hashes each tileset and `src/logic.c`
 `#error`s if one has drifted — as it does if a level is a different size from
 level 1, which `terrain[]` and both renderers are sized from.
 
 To add level 11: author `assets/maps/level_11.tmx`, append `11` to `LEVELS` in
-the Makefile, and add it to `level_maps[]` / `level_start[]` in `src/game.c`.
+the Makefile, and add it to `level_maps[]` / `level_start[]` in `src/logic.c`.
 See `.claude/skills/tiled-maps` for the full recipe, including a
 hand-authorable `.tmx` template and how to add a terrain type.
 
@@ -214,7 +228,7 @@ at `NAME_ATTR_OFF + t * NAME_ATTR_SIZE` in the unpacked buffer — a 32x32 tile
 can be up to sixteen colours. `load_tiles()` decompresses all four sheets into
 RAM once at startup and the renderers blit out of them.
 
-Tile size drives the layout: `CELL_W`, `VIEW_CW` and friends in `src/game.c`
+Tile size drives the layout: `CELL_W`, `VIEW_CW` and friends in `include/render.h`
 come from the generated headers.
 
 **Why the field view pages instead of scrolling:** an 8x4 page of 4x4 tiles is
