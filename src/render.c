@@ -141,21 +141,67 @@ static uint8_t shadow_ok;   /* 0 = the 128K path is not usable yet     */
    its keep (docs/PLAN.md).  Until then both machines take the 48K path
    and this costs nothing but the branch. */
 
-/* No shadow screen: the view buffer occupies the address range page 7
-   would appear at (include/memmap.h), so there is nowhere to bank it.
+/* Bank page 7 in for good, and prove it worked before relying on it.
 
-   The machinery below still works — it was verified armed on a 128K,
-   composing into page 7 and flipping cleanly — and the seam is left in
-   place for whenever the buffers have somewhere else to live.  What it
-   needs is 7 KB below 0xC000, which does not exist today.
+   is_128k is not enough on its own: main() may have locked paging (bit
+   5 of 0x7FFD), after which every write to that port is ignored in
+   SILENCE — the page-in does nothing, the flip does nothing, and the
+   flag would still be set.  The result is a whole screen composed into
+   a bank the ULA never displays: a title screen that simply does not
+   appear, with no other symptom.  That happened twice before this
+   check existed.
 
-   Do not "fix" this by moving the buffers into page 7 above the screen.
-   That is exactly what was tried: it armed on a 128K and rendered
-   part-garbage tiles with no title screen on a +3. */
+   So prove it.  Sentinel into page 7, page something else in, write a
+   different value, page 7 back, see which survived — the same trick
+   hw_detect() uses on the machine itself, because a write-only port
+   lies by omission.
+
+   Bit 4 is set in every value written here.  It is the ROM select, and
+   clearing it on a +2A/+3 pages in +3DOS underneath the running
+   program; see .claude/skills/zx-memory. */
 static void screens_init(void)
 {
     back = 0;
     shadow_ok = 0;
+    if (!is_128k) return;
+
+    /* A +2A/+3 gets this too.  It did not, briefly, because the
+       buffers were living inside page 7 and sharing it with whatever
+       the +3's ROM keeps there; they are at 0x6000 now and page 7 is
+       ours alone. */
+    page_reg = PAGE_7FFD;
+    __asm
+        ld  bc, #0x7FFD
+        ld  a, #0x17            ; page 7 at 0xC000, ROM bit kept
+        out (c), a
+        ld  a, #0xA5
+        ld  (0xC000), a         ; sentinel into page 7
+
+        ld  a, #0x10            ; page 0, same ROM
+        out (c), a
+        ld  a, #0x5A
+        ld  (0xC000), a
+
+        ld  a, #0x17            ; page 7 back
+        out (c), a
+        ld  a, (0xC000)
+        cp  #0xA5               ; did the sentinel survive?
+        ld  a, #0x00
+        jr  nz, _si_done        ; no: paging is locked, stay on 48K path
+        inc a
+    _si_done:
+        ld  (_shadow_ok), a
+        ld  a, #0x17            ; leave BANKM agreeing with the port
+        ld  (0x5B5C), a
+    __endasm;
+
+    if (!shadow_ok) {
+        /* Locked. Whatever bank is at 0xC000 is the one we get, and the
+           buffers at 0xDB00 live in it.  Draw where a 48K draws. */
+        gfx_target(SCREEN_0);
+        return;
+    }
+    vsync_marker_addr = gfx_attr + MARKER_ROW * 32;
 }
 
 /* Start a full-screen repaint.  On a 128K that means aiming at the
@@ -167,7 +213,19 @@ void render_compose(void)
     gfx_target(back ? SCREEN_0 : SCREEN_1);
 }
 
-/* Show what render_compose() built.  One port write on a 128K.
+/* Show what render_compose() built.  One port write on a 128K — plus a
+   copy of it into BANKM, which is not optional.
+
+   0x7FFD is write-only, so the ROM keeps its own record of the last
+   value at the system variable BANKM (0x5B5C) and writes that copy back
+   whenever it touches paging — the interrupt handler included.  Set bit
+   3 without updating BANKM and the ROM restores its own value within a
+   frame: the flip is undone before the ULA ever shows the new screen.
+
+   On a +2A/+3 that is exactly what happened.  Page 7 appeared never to
+   display at all, so every state composed into the shadow screen came
+   up blank or stale while the ones composed into page 5 looked fine.
+   A 128K tolerated it, which is why it took a +3 to find.
 
    Only whole-screen painters call this pair, so a FLIP ONLY HAPPENS ON A
    STATE CHANGE — the SPACE and ENTER that move between screens.  Cursor
@@ -188,6 +246,7 @@ void render_show(void)
         ld  bc, #0x7FFD
         ld  a, (_page_reg)
         out (c), a
+        ld  (0x5B5C), a         ; BANKM — see below
     __endasm;
 
     /* Incremental drawing after this goes to whatever is now on show —
@@ -593,7 +652,7 @@ static void stamp_cursor(void)
    Addresses are baked in because inline assembly cannot see C
    expressions.  The #error fails the build if memmap.h moves them,
    rather than letting this write somewhere else in silence. */
-#if MEM_VBUF != 0xC000 || MEM_VIEW_OFF != 0xD200
+#if MEM_VBUF != 0x6000 || MEM_VIEW_OFF != 0x7200
 #error "present_pixels() has MEM_VBUF/MEM_VIEW_OFF baked into its assembly"
 #endif
 
@@ -605,8 +664,8 @@ static void present_pixels(void) __naked
     __asm
         ld  a, #128
         ld  (_ppx_rows), a
-        ld  hl, #0xC000
-        ld  de, #0xD200
+        ld  hl, #0x6000
+        ld  de, #0x7200
     ppx_row:
         push de
         ex  de, hl

@@ -83,6 +83,27 @@ Port `0x7FFD` is write-only and does four things at once:
 | **4** | **ROM select** |
 | 5 | **Lock** — once set, every later write is ignored, silently |
 
+Mirror whatever you write into BANKM at `0x5B5C`; see below.
+
+**Update BANKM every time you write this port.** `0x7FFD` is write-only, so
+the ROM keeps its own copy of the last value at the system variable **BANKM
+(`0x5B5C`)** and writes that copy back whenever it touches paging — the
+interrupt handler included. Leave it stale and the ROM undoes you, typically
+within a frame:
+
+```asm
+    ld  bc, #0x7FFD
+    ld  a, (_page_reg)
+    out (c), a
+    ld  (0x5B5C), a     ; BANKM — not optional
+```
+
+Skipping it made the shadow screen appear never to display on a +2A/+3: bit 3
+was set on the port, the ROM restored its own value before the ULA read the
+new screen, and every state composed into page 7 came up blank while the ones
+composed into page 5 looked fine. **A 128K tolerated it**, so the test suite
+was green throughout.
+
 **Preserve bit 4 unless you mean to change the ROM.** On a 128K it picks the
 128 editor (0) or 48K BASIC (1). On a +2A/+3 the ROM number is *two* bits —
 `0x1FFD` bit 2 above `0x7FFD` bit 4 — and a 48K-format tap loads from 48

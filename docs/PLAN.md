@@ -16,9 +16,9 @@ Two smaller things remain open and neither blocks P4:
 - **No +3 coverage in the tests.** ZEsarUX will not run the tap on
   `--machine P341`; a `.sna` snapshot bypasses the ROM menu on every model.
   The +3 bug survived a fully green suite for a whole session because of this.
-- **The 128K shadow screen is built but off** (P7 step 4). It works on a 128K
-  and breaks a +3, and the fix is 7 KB of RAM below 0xC000 that does not exist
-  yet — most likely by lowering the loader's `CLEAR`.
+- **A tear-free scroll.** The shadow screen is armed on 128K and +3 and state
+  changes flip cleanly, but scroll sub-steps still present into the screen on
+  show. Flipping those needs the chrome in both buffers.
 
 Two things drove the ordering:
 
@@ -513,27 +513,29 @@ writing the assembly, because it changes what the assembly looks like.
    - **Verified the strong way**: after a scroll in each of the four
      directions, the screen is *byte-identical* to a from-scratch recompose
      at the same origin.
-4. **128K shadow screen.**  ✗ **built, verified, and backed out.** It works
-   on a 128K — `shadow_ok` reached 1, whole screens composed into page 7 and
-   flipped cleanly, chrome intact across every state change. It is off because
-   of a +3.
-   - **The blocker is the memory map.** The view buffer needs 7 KB and the only
-     room is above 0xC000, which is exactly where page 7 appears. Putting the
-     buffers *inside* page 7, above the 6 912 bytes the screen uses, resolved
-     that on a 128K — and gave a +3 part-garbage tiles and no title screen.
-   - **Do not retry that.** It is the obvious idea and it has been tried; see
-     commit "P4 combat, and the 128K shadow screen armed", which is kept
-     precisely so the working 128K path is recoverable.
-   - What it actually needs is **7 KB below 0xC000**. There are a few hundred
-     bytes there. Options: shrink the program, or lower the loader's `CLEAR`
-     so 0x6000-0x7FFF stops belonging to BASIC and becomes genuinely ours.
-     The second is the real answer and it is a build change, not a code one.
-   - The seam stays in `src/render.c` — `render_compose()`/`render_show()` and
-     the `gfx_target()` indirection all remain, doing nothing.
-   - **Still unexplained**: whether the +3 failure was the buffer addresses
-     (0xDC48-0xF748, which it had never run with) or paging being left open
-     for the page-in. Both were reverted together because there is no way to
-     test the two separately without a +3 in the loop.
+4. **128K shadow screen.**  ✓ **done, on 48K, 128K and +3.** Every whole
+   screen is composed into the display file the ULA is not showing and revealed
+   with one write to `0x7FFD`. A 48K takes the direct path unchanged.
+   - **The buffers had to leave the paged window.** They are at **0x6000**,
+     below the program: every byte kept above 0xC000 is a byte page 7 cannot
+     have. Putting them *inside* page 7 above the screen was tried first and
+     works on a 128K, but not a +3. 0x6000 frees the whole bank for everyone.
+   - **0x6000 was rejected earlier on a wrong diagnosis.** It was blamed for a
+     +3 crash that turned out to be `hw_detect()` clearing bit 4 of `0x7FFD`.
+     Fixing that at source made the region available again — two rounds of
+     moving 7 KB of memory were spent chasing the wrong cause.
+   - **BANKM is why the +3 saw nothing.** `0x7FFD` is write-only, so the ROM
+     keeps its copy at `0x5B5C` and writes it back whenever it touches paging.
+     Setting bit 3 without updating BANKM let the ROM undo the flip within a
+     frame: page 7 appeared never to display, so the title and the map came up
+     blank while the board — composed into page 5 — looked perfect. **A 128K
+     tolerated it and the suite stayed green.**
+   - Paging is left OPEN (bit 5 clear) and bit 4 always set. `screens_init()`
+     still proves a page-in survives before arming, so a locked port degrades
+     to the 48K path rather than composing where nobody is looking.
+   - **The scroll still tears** on every machine: sub-steps present into the
+     screen already on show. Flipping those is now possible and needs the
+     chrome painted into both buffers first.
 
 5. **Assembly.**  ✓ **done for the present.** `present_pixels()` is now Z80:
    128 rows of 32 unrolled `LDI`, with the screen offset per row read from

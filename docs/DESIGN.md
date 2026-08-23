@@ -480,8 +480,10 @@ that does not need the +2A/+3 floating bus. **That is a real dependency, not a
 coincidence to rely on quietly**: if anything ever pages again, these move
 first.
 
-Note what makes it safe, because it was nearly broken by accident: **bit 4 of
-`0x7FFD` is the ROM select, and bit 5 locks paging.** Anything writing that
+Two rules for that port, both learned the hard way. **Mirror every write into
+BANKM at `0x5B5C`** — it is write-only, the ROM keeps its own copy there, and
+it writes that copy back from the interrupt handler; a flip that skips BANKM is
+undone within a frame. And **bit 4 is the ROM select, bit 5 locks paging.** Anything writing that
 port must preserve bit 4 or it changes the ROM underneath the running program
 — on a +2A/+3 that means +3DOS, whose `0x0038` is not a BASIC interrupt
 handler. `hw_detect()` did exactly this and crashed every +3; see

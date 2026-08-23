@@ -37,39 +37,28 @@ int main(void)
 
        BIT 4 IS SET here for the same reason: this write must not change
        the ROM either. */
-    if (vsync_mode != VSYNC_MODE_128K) {
-        /* 48K or 128K: bank 0 at 0xC000, ROM 1, and LOCKED.  Nothing
-           needs the port afterwards now that the shadow screen is gone,
-           and the lock pins the bank our buffers live in. */
-        __asm
-        ld bc, #0x7FFD
-        ld a, #0x30         ; bank 0, screen 0, ROM 1 (48K), LOCKED
-        out (c), a
-        __endasm;
-    } else {
-        /* +2A/+3.  Paging must be LOCKED here, and that costs the
-           mode-2 floating bus, which is why this used to be skipped
-           altogether.  The trade is not optional:
+    /* Bank 0 at 0xC000, screen 0, ROM 1 (48K BASIC).  Unconditional:
+       harmless on a 48K where 0x7FFD is not decoded, and needed on
+       every 128K-class machine to start from a known map.
 
-           this program keeps 7 KB of buffers above 0xC000 (see
-           include/memmap.h), and on a +3 that window is the ROM's too —
-           it pages banks in for the RAM disk and +3DOS workspace
-           whenever it likes.  Leaving paging open let it do exactly
-           that underneath us: no crash, just a tile sheet that came
-           back part garbage and a title screen that never arrived.
+       BIT 5 IS CLEAR — paging stays open.  src/render.c banks page 7 in
+       for the shadow screen afterwards, and a +2A/+3 needs port 0x0FFD
+       readable for its floating bus, which the lock would deny.
 
-           Locking pins bank 0 there for good.  Port 0x0FFD then reads
-           0xFF for ever, so vsync_wait() would spin on a marker it can
-           never see — the mode is forced down to HALT to match.  A +3
-           therefore syncs on HALT and has no shadow screen; it renders
-           correctly, which beats both. */
-        vsync_mode = VSYNC_MODE_HALT;
-        __asm
-        ld bc, #0x7FFD
-        ld a, #0x30         ; bank 0, screen 0, ROM 1 (48K), LOCKED
-        out (c), a
-        __endasm;
-    }
+       BIT 4 IS SET.  It is the ROM select, and clearing it on a +2A/+3
+       pages in +3DOS underneath the running program: no BASIC handler
+       at 0x0038, no character set at 0x3D00.  That crashed every +3
+       until hw_detect() stopped doing it.
+
+       BANKM (0x5B5C) is updated to match.  The port is write-only, so
+       the ROM keeps its own copy there and writes it back whenever it
+       touches paging; leaving it stale means the ROM undoes us. */
+    __asm
+    ld bc, #0x7FFD
+    ld a, #0x10
+    out (c), a
+    ld (0x5B5C), a      ; BANKM: the ROM's copy of this port, kept in step
+    __endasm;
 
     game_run();
     return 0;

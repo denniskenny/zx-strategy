@@ -9,26 +9,26 @@
  * in for the shadow screen (docs/DESIGN.md § Two machines).  That is
  * 16 KB for code, rodata, data and bss together, and it is not enough.
  *
- * They go at 0xC000.  Not below: 0x6000-0x7FFF
- * looks free, and is on a 48K, but with the loader's CLEAR 32767 that
- * region holds BASIC's program, its variables and the machine stack.
- * Putting 7 KB of buffers there survived on a 48K and a 128K by luck and
- * crashed a +3 straight back into BASIC with "Nonsense in BASIC" — the
- * +3 reserves more of it.  0xC000-0xFFFF is above RAMTOP and belongs to
- * nobody once the program is loaded.
+ * They go at 0x6000, BELOW the program and out of the paged window
+ * entirely.  That is the whole point: 0xC000-0xFFFF is a bank on a
+ * 128K-class machine, and every byte we keep there is a byte page 7
+ * cannot have.  With this region empty of ours, page 7 holds the
+ * SHADOW SCREEN on a 128K *and* a +2A/+3 — see docs/DESIGN.md
+ * § Two machines.
  *
- * THIS FORECLOSES THE 128K SHADOW SCREEN, deliberately.  0xC000-0xDAFF
- * is where page 7 appears when banked in, so the screen and these
- * buffers cannot both live there.
+ * 0x6000-0x7FFF is CONTENDED RAM, and that costs nothing that matters:
+ * contention only bites while the ULA is drawing, and the present runs
+ * in the vblank window when it is not.
  *
- * They were briefly at 0xDB00 — inside page 7, above the 6 912 bytes
- * the screen uses — which armed the shadow screen on a 128K and worked.
- * A +3 rendered part-garbage tiles and no title screen with that
- * layout, and moving 7 KB below 0xC000 is not possible: there are a few
- * hundred bytes free down there, not seven thousand.  So the shadow
- * screen loses.  Correct on three machines beats faster on one.
+ * It is also below RAMTOP, so it is BASIC's on paper.  The loader's
+ * CLEAR leaves the stack near 0x7FA0 growing down, and MEM_END is
+ * checked against that below — the gap is the only thing between these
+ * buffers and the return addresses.
  *
- * See docs/PLAN.md P7 step 4 for what it would take to get it back.
+ * This was tried once before and blamed for a +3 crash.  That was
+ * wrong: the crash was hw_detect() clearing bit 4 of 0x7FFD, the ROM
+ * select, with interrupts enabled.  Fixed at source, and this region
+ * came back with it.
  *
  * Placing by hand means overlaps are possible, so every block is sized
  * from the thing that lives in it and the total is checked below.  Add a
@@ -46,7 +46,7 @@
  */
 
 /* --- src/render.c: the play-view buffer --- */
-#define MEM_VBUF        0xC000          /* 128 rows x 32 bytes  = 4096 */
+#define MEM_VBUF        0x6000          /* 128 rows x 32 bytes  = 4096 */
 #define MEM_VATTR       (MEM_VBUF  + 4096)      /* 16 x 32      =  512 */
 #define MEM_VIEW_OFF    (MEM_VATTR + 512)       /* 128 x uint16 =  256 */
 
@@ -78,11 +78,13 @@
 
 #define MEM_END         (MEM_U_FLAGS + 40)
 
-#if MEM_END > 0x10000
-#error "the hand-placed buffers have outgrown the RAM above 0xC000"
+/* The stack lives near 0x7FA0 and grows down.  Leave it room: this is
+   the check that stops a buffer quietly eating return addresses. */
+#if MEM_END > 0x7C80
+#error "the hand-placed buffers are encroaching on the stack below 0x7FA0"
 #endif
-#if MEM_VBUF < 0xC000
-#error "the buffers must stay above BASIC's RAMTOP; see the note above"
+#if MEM_VBUF < 0x5B00
+#error "the buffers must clear BASIC's system variables and program"
 #endif
 
 #endif /* _MEMMAP_H_ */
