@@ -537,8 +537,29 @@ writing the assembly, because it changes what the assembly looks like.
      into, so the other would show a board with no panel and the movement
      would strobe. Painting the chrome into both buffers is the remaining
      work, and it is the last thing between here and a tear-free scroll.
-5. **Assembly.** The present and the buffer shift, once their shape has stopped
-   changing.
+5. **Assembly.**  ✓ **done for the present.** `present_pixels()` is now Z80:
+   128 rows of 32 unrolled `LDI`, with the screen offset per row read from
+   `VIEW_OFF[]`.
+   - `LDI` is 16 T-states a byte against `LDIR`'s 21, and there is no memcpy
+     call per row — ~20 000 T a present, four times a cursor step.
+   - **BC cannot hold the row counter**, because `LDI` decrements it. The
+     counter lives in memory; ~40 T a row against the 160 the unrolling saves.
+   - Measured end to end: the P0 walk fell from **27.6 s to 18.6 s**.
+   - **Verified byte-identical**: after a scroll in each direction the screen
+     still matches a from-scratch recompose exactly, pixels and attributes.
+   - Two things had to be true first. The attribute half of the present was
+     16 `memcpy` calls where the attribute area is *flat* — one 512-byte copy
+     — and that saved 60 bytes, which is what made room for the unrolling.
+   - Addresses are baked in (inline assembly cannot see C expressions) behind
+     an `#error` that fails the build if `memmap.h` moves them.
+   - Earlier attempts failed to compile: SDCC rejected `.rept`/`.endm` and the
+     `0 (iy)` indexed operand. Explicit `LDI` lines and `ex de,hl` juggling
+     work. Copy the shape of `border()` in `src/gfx.c` rather than
+     re-deriving it.
+
+   The buffer shift (`push_h`/`push_v`) is still C. It is a `memmove` per row,
+   which z88dk already turns into `LDIR`, so the win there is only the call
+   overhead — a fraction of what the present gave.
 
 #### Settle before step 1
 
@@ -574,44 +595,48 @@ writing the assembly, because it changes what the assembly looks like.
 | RAM for the buffer | Hand-placed in 0xC000-0xDC48 via `include/memmap.h`. **`make memmap` prints the whole picture** — linker-placed and hand-placed together, which neither the map file nor the header shows on its own. Today: 85 bytes free below 0xC000, 9 144 above. The squeeze is on *code*, not data, so moving more arrays up buys almost nothing |
 | The board reads as tiny once surrounded by sea | An 8x4 window on a 14x7 island shows a lot of water. If it looks wrong, the answer is bigger maps, which is a `.tmx` change and not a code one |
 
-### The +3 problem  — OPEN, and blocking
+### The +3 problem  ✓ SOLVED
 
-The game crashes on a real +2A/+3 with **"Nonsense in BASIC", immediately
-after loading and before the title paints**. It runs on 48K and 128K, and both
-test suites pass on both, so nothing in CI can see it.
+The game crashed on a real +2A/+3 with "Nonsense in BASIC" immediately after
+loading, and before that rendered its text as garbage. Both were the same
+fault, in `hw_detect()`, and neither could be seen on a 48K or a 128K.
 
-**Do not treat a green test run as evidence about a +3.** Three separate
-hypotheses were confidently wrong here — the paging lock, the buffers colliding
-with BASIC at 0x6000, and the bank left selected at 0xC000 — each one reasoned
-from the two machines that *can* be tested. The next person should reproduce
-before theorising.
+**Bit 4 of port 0x7FFD is the ROM select.** `hw_detect()` probes for 128K by
+bank-switching, and every value it wrote — `0x01`, `0x02`, `xor a` — had bit 4
+clear. It only ever cared about bits 0-2; the ROM came along as collateral.
 
-What is actually established:
+- On a **128K** bit 4 picks ROM 0 (128 editor) or ROM 1 (48K BASIC). Landing on
+  ROM 0 is survivable — it has a working interrupt handler — but its `0x3D00`
+  is not a character set, so `print_at()` drew noise.
+- On a **+2A/+3** the ROM number is two bits: `0x1FFD` bit 2 above `0x7FFD`
+  bit 4. A 48K-format tap loads from **48 BASIC, which is ROM 3**, so clearing
+  bit 4 drops it to **ROM 2: +3DOS**.
+- And `hw_detect()` ran with **interrupts enabled**, so an IM 1 interrupt could
+  vector to `0x0038` inside +3DOS. That is the crash.
+- `main()` restored the ROM with `0x30` afterwards, but only when the mode-2
+  floating bus was *not* in use — i.e. never on the machine that needed it.
 
-- **It dies before the title**, so the failure is in `hw_detect()`,
-  `vsync_detect()`, `load_tiles()` or `load_map()` — not in the game loop.
-- **`hw_detect()` leaves ROM 0 selected.** It ends with `xor a; out (c),a`,
-  which is bank 0 *and* ROM 0. `main()` corrects that to ROM 1 only when
-  `vsync_mode != VSYNC_MODE_128K`, so a +3 that detects the mode-2 bus keeps
-  the editor/DOS ROM. `print_at()` reads the character set from `0x3D00`,
-  which only the 48K BASIC ROM has — this is a confirmed explanation for the
-  garbled text seen on a +3, separate from the crash.
-- **The buffers are the newest suspect and the least defensible design.**
-  `include/memmap.h` puts ~7 KB at 0xC000-0xDC48, which on a 128K-class
-  machine is a *paged bank*. It works only because `hw_detect()` happens to
-  leave bank 0 there. Depending on that is not a plan.
-- **ZEsarUX cannot reproduce it.** `--machine P341` never gets the tap running
-  (`PC=0x11E5`, the ROM reset), so it cannot distinguish a real fault from a
-  loading-procedure difference. Fixing that harness is probably the highest
-  value next step: a `.sna`/`.z80` snapshot bypasses the ROM menu entirely on
-  every model and would give the +3 the same coverage the other two have.
+The fix is two lines of intent: `di`/`ei` around the probe, and bit 4 set in
+every value it writes (`0x11`, `0x12`, `0x10`). The ROM is now exactly as the
+loader left it.
 
-The structural fix, when someone has a +3 to test against: **stop putting
-buffers in banked memory.** Everything above 0xC000 belongs to whatever bank is
-paged in. The options are to shrink the program under 0xC000 including its
-buffers (it is ~23.6 KB and does not fit at `-zorg=32768`), or to lower the
-loader's `CLEAR` to 24575 so 0x6000-0x7FFF is genuinely ours on every machine
-rather than borrowed from BASIC.
+**It also fixed 128K vsync.** A 128K used to fall back to HALT sync, which had
+been written off as a ZEsarUX emulation gap. It was not: interrupts were
+firing during `vsync_detect()`'s timed probe, which runs immediately after
+`hw_detect()`. A 128K now detects the floating bus and its sync marker checks
+pass.
+
+Two lessons worth more than the fix:
+
+- **Three confident diagnoses were wrong first** — the paging lock, the buffers
+  colliding with BASIC at 0x6000, the bank left selected at 0xC000. Each was
+  reasoned from the two machines that could be tested, and each survived a
+  fully green suite. The symptom that finally localised it was one the user
+  supplied: *before the title paints*, which cut the search to five functions.
+- **A green test run says nothing about a machine the tests cannot load.**
+  `tests/render_paths.py` covers 48K and 128K; ZEsarUX could not run the tap on
+  `--machine P341` at all. That gap is still open and is the obvious next
+  investment: a `.sna` snapshot bypasses the ROM menu on every model.
 
 ### P5 — Enemy turn
 

@@ -198,5 +198,8 @@ a miscounted tile shifts everything after it.
   tileset generates.
 - `.claude/skills/compile-scr` — the other `.zxp`/`.scr` converters
   (`zxp2header.py` for row-major sprites, `zxp2zx0.py` for full-width banners).
+- `.claude/skills/zx-memory` — where the compressed source and the unpacked
+  destination each live, and why a generated header must not be included
+  from another header
 - `.claude/skills/floating-bus-vsync` — attribute constraints and the frame
   budget the renderers have to live inside.

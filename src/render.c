@@ -584,17 +584,94 @@ static void stamp_cursor(void)
     }
 }
 
+/* The pixel half of a present, in Z80.
+
+   4 096 bytes, four times a cursor step, so it is the hottest thing the
+   program does.  Two costs come out against the C version: a memcpy
+   call per row, and LDIR's 21 T-states a byte.  Unrolled LDI is 16,
+   which is 5 x 4 096 = ~20 000 T a present — about a third of a frame.
+
+   BC cannot hold the row counter: LDI decrements it.  Hence the counter
+   in memory, ~40 T a row against the 160 the unrolling saves.
+
+   Addresses are baked in because inline assembly cannot see C
+   expressions.  The #error fails the build if memmap.h moves them,
+   rather than letting this write somewhere else in silence. */
+#if MEM_VBUF != 0xC000 || MEM_VIEW_OFF != 0xD200
+#error "present_pixels() has MEM_VBUF/MEM_VIEW_OFF baked into its assembly"
+#endif
+
+static uint8_t ppx_rows;
+static const uint8_t *ppx_src;
+
+static void present_pixels(void) __naked
+{
+    __asm
+        ld  a, #128
+        ld  (_ppx_rows), a
+        ld  hl, #0xC000
+        ld  de, #0xD200
+    ppx_row:
+        push de
+        ex  de, hl
+        ld  e, (hl)
+        inc hl
+        ld  d, (hl)
+        ex  de, hl
+        ld  de, (_gfx_pix)
+        add hl, de
+        ex  de, hl
+        pop hl
+        inc hl
+        inc hl
+        push hl
+        ld  hl, (_ppx_src)
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ldi
+        ld  (_ppx_src), hl
+        pop de
+        ld  a, (_ppx_rows)
+        dec a
+        ld  (_ppx_rows), a
+        jr  nz, ppx_row
+        ret
+    __endasm;
+}
+
 static void present_all(void)
 {
-    uint8_t r;
-    const uint8_t *sp = VBUF;
-
-    /* Pixels go row by row because the display is interleaved: each
-       row needs its own address, which is what VIEW_OFF[] holds. */
-    for (r = 0; r < VIEW_PX_ROWS; r++) {
-        memcpy(gfx_pix + VIEW_OFF[r], sp, 32);
-        sp += 32;
-    }
+    ppx_src = VBUF;
+    present_pixels();
 
     /* Attributes are NOT interleaved — they are 768 flat bytes — and
        VATTR's rows are contiguous too.  So the whole block is one copy,
