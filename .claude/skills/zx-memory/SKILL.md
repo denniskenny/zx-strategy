@@ -127,6 +127,35 @@ Port `0x1FFD` is decoded on a +2A/+3 only, and **partially decodes onto
 `0x7FFD` on a plain 128K** — writing it there repages RAM. Guard any `0x1FFD`
 write behind a genuine +2A/+3 test.
 
+## The +2A/+3, specifically
+
+Three faults this project hit are +3-only, and every one passed a full 48K and
+128K test run first. If you change anything about paging, the ROM, or where
+buffers live, **that machine is the one that decides**.
+
+- **Do not keep anything above `0xC000`.** It is a paged bank, and on a +3 the
+  ROM pages it for the RAM disk and +3DOS workspace whenever it likes.
+  Buffers there are not corrupted at once — they rot between writes, which
+  looks like a rendering bug, not a memory bug. The buffers moved to `0x6000`
+  for exactly this reason, and that freed page 7 for the shadow screen as a
+  bonus.
+- **Page 7 is not spare RAM.** It is 16 KB and the shadow screen only uses
+  6 912 bytes of it. Putting buffers in the remainder is arithmetically sound,
+  works on a 128K, and gives a +3 part-garbage tiles and no title screen.
+- **The ROM number is two bits** — `0x1FFD` bit 2 above `0x7FFD` bit 4 — so a
+  write that is ROM-neutral on a 128K may not be on a +3. A 48K-format tap
+  loads from 48 BASIC, ROM 3; clearing bit 4 lands on ROM 2, +3DOS.
+- **A +3 is not reliably detectable.** `vsync_mode == VSYNC_MODE_128K` finds
+  one only when the mode-2 floating bus was detected; a +3 that falls back to
+  HALT is indistinguishable from a 128K by anything this program knows. Port
+  `0x1FFD` is decoded there and not on a 128K, so probing it is the obvious
+  route if a real test is ever needed.
+
+**A snapshot will not test any of this.** `.sna`/`.z80` restore a machine
+mid-flight and skip the boot path entirely — the ROM state the loader leaves,
+`hw_detect()`, the first paging write. All three faults above lived there.
+Testing a +3 means driving its boot menu and loading the tape for real.
+
 ## Adding a graphic
 
 The converters do the work; see `.claude/skills/zx-tiles`. What this skill
