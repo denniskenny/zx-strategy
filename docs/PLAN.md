@@ -16,9 +16,9 @@ Two smaller things remain open and neither blocks P4:
 - **No +3 coverage in the tests.** ZEsarUX will not run the tap on
   `--machine P341`; a `.sna` snapshot bypasses the ROM menu on every model.
   The +3 bug survived a fully green suite for a whole session because of this.
-- **A tear-free scroll.** The 128K shadow screen is armed and state changes
-  flip cleanly, but scroll sub-steps still write to the displayed screen.
-  Flipping those needs the chrome in both buffers.
+- **The 128K shadow screen is built but off** (P7 step 4). It works on a 128K
+  and breaks a +3, and the fix is 7 KB of RAM below 0xC000 that does not exist
+  yet — most likely by lowering the loader's `CLEAR`.
 
 Two things drove the ordering:
 
@@ -513,33 +513,27 @@ writing the assembly, because it changes what the assembly looks like.
    - **Verified the strong way**: after a scroll in each of the four
      directions, the screen is *byte-identical* to a from-scratch recompose
      at the same origin.
-4. **128K shadow screen.**  ✓ **done and armed.** A 128K now composes each
-   whole screen into the display file the ULA is not showing and reveals it
-   with one write to `0x7FFD`.
-   - **The blocker was the memory map, not the chrome.** The view buffer sat
-     at 0xC000, which is exactly where page 7 must appear. Page 7 is 16 KB and
-     the shadow screen only uses its bottom 6 912 bytes, so the buffers moved
-     to **0xDB00** — inside the same page, above the screen. Page 7 is banked
-     in once at startup and never moved; the flip is bit 3, which does not
-     change the bank. On a 48K there is no page 7 and 0xDB00 is plain RAM:
-     one layout, both machines.
-   - **The chrome problem never materialised.** Flips only happen on state
-     entry, and every `render_*()` repaints the whole screen — header, panel
-     and legend included. Verified on a 128K: header 0x45, hint 0x46, panel
-     0x47 intact across title -> play -> map -> play, with `page_reg`
-     alternating 0x1F/0x17 on each flip and holding steady through cursor
-     movement.
-   - `main()` no longer locks paging (bit 5). That crashed a +3 once, but the
-     lock was never the cause — `hw_detect()` was clearing **bit 4, the ROM
-     select**, with interrupts on. Fixed at source, so the port can be left
-     open. Both writes keep bit 4 set.
-   - `screens_init()` still proves the page-in survived before arming, so a
-     locked port degrades to the 48K path instead of composing into a bank
-     nobody is looking at.
-   - **The scroll itself still tears.** Flipping per sub-step would fix that,
-     and now that the buffers are out of the way it is finally possible — but
-     the chrome would have to be painted into both buffers first, which is the
-     thing this step turned out not to need for state changes.
+4. **128K shadow screen.**  ✗ **built, verified, and backed out.** It works
+   on a 128K — `shadow_ok` reached 1, whole screens composed into page 7 and
+   flipped cleanly, chrome intact across every state change. It is off because
+   of a +3.
+   - **The blocker is the memory map.** The view buffer needs 7 KB and the only
+     room is above 0xC000, which is exactly where page 7 appears. Putting the
+     buffers *inside* page 7, above the 6 912 bytes the screen uses, resolved
+     that on a 128K — and gave a +3 part-garbage tiles and no title screen.
+   - **Do not retry that.** It is the obvious idea and it has been tried; see
+     commit "P4 combat, and the 128K shadow screen armed", which is kept
+     precisely so the working 128K path is recoverable.
+   - What it actually needs is **7 KB below 0xC000**. There are a few hundred
+     bytes there. Options: shrink the program, or lower the loader's `CLEAR`
+     so 0x6000-0x7FFF stops belonging to BASIC and becomes genuinely ours.
+     The second is the real answer and it is a build change, not a code one.
+   - The seam stays in `src/render.c` — `render_compose()`/`render_show()` and
+     the `gfx_target()` indirection all remain, doing nothing.
+   - **Still unexplained**: whether the +3 failure was the buffer addresses
+     (0xDC48-0xF748, which it had never run with) or paging being left open
+     for the page-in. Both were reverted together because there is no way to
+     test the two separately without a +3 in the loop.
 
 5. **Assembly.**  ✓ **done for the present.** `present_pixels()` is now Z80:
    128 rows of 32 unrolled `LDI`, with the screen offset per row read from

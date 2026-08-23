@@ -141,78 +141,21 @@ static uint8_t shadow_ok;   /* 0 = the 128K path is not usable yet     */
    its keep (docs/PLAN.md).  Until then both machines take the 48K path
    and this costs nothing but the branch. */
 
-/* Bank page 7 in for good, and prove it worked before relying on it.
+/* No shadow screen: the view buffer occupies the address range page 7
+   would appear at (include/memmap.h), so there is nowhere to bank it.
 
-   is_128k is not enough on its own: main() may have locked paging (bit
-   5 of 0x7FFD), after which every write to that port is ignored in
-   SILENCE — the page-in does nothing, the flip does nothing, and the
-   flag would still be set.  The result is a whole screen composed into
-   a bank the ULA never displays: a title screen that simply does not
-   appear, with no other symptom.  That happened twice before this
-   check existed.
+   The machinery below still works — it was verified armed on a 128K,
+   composing into page 7 and flipping cleanly — and the seam is left in
+   place for whenever the buffers have somewhere else to live.  What it
+   needs is 7 KB below 0xC000, which does not exist today.
 
-   So prove it.  Sentinel into page 7, page something else in, write a
-   different value, page 7 back, see which survived — the same trick
-   hw_detect() uses on the machine itself, because a write-only port
-   lies by omission.
-
-   Bit 4 is set in every value written here.  It is the ROM select, and
-   clearing it on a +2A/+3 pages in +3DOS underneath the running
-   program; see .claude/skills/zx-memory. */
+   Do not "fix" this by moving the buffers into page 7 above the screen.
+   That is exactly what was tried: it armed on a 128K and rendered
+   part-garbage tiles with no title screen on a +3. */
 static void screens_init(void)
 {
     back = 0;
     shadow_ok = 0;
-    if (!is_128k) return;
-
-    /* NOT on a +2A/+3.  Page 7 is +3DOS's workspace on those machines,
-       so banking it in hands the disk system's RAM to the shadow screen
-       AND to the buffers at 0xDB00, which share the page.  The result
-       is not a crash but slow corruption: the title never appears and
-       the tile sheet comes back mostly garbage, because +3DOS is
-       writing over it between our writes.
-
-       A +3 that detects the mode-2 floating bus identifies itself here
-       — that is the same test main() uses to leave paging alone — and
-       it falls through to the 48K path, which is what it was doing
-       happily before the shadow screen existed.  A +3 on HALT sync is
-       still indistinguishable from a 128K, which is the known gap. */
-    if (vsync_mode == VSYNC_MODE_128K) {
-        gfx_target(SCREEN_0);
-        return;
-    }
-
-    page_reg = PAGE_7FFD;
-    __asm
-        ld  bc, #0x7FFD
-        ld  a, #0x17            ; page 7 at 0xC000, ROM bit kept
-        out (c), a
-        ld  a, #0xA5
-        ld  (0xC000), a         ; sentinel into page 7
-
-        ld  a, #0x10            ; page 0, same ROM
-        out (c), a
-        ld  a, #0x5A
-        ld  (0xC000), a
-
-        ld  a, #0x17            ; page 7 back
-        out (c), a
-        ld  a, (0xC000)
-        cp  #0xA5               ; did the sentinel survive?
-        ld  a, #0x00
-        jr  nz, _si_done        ; no: paging is locked, stay on 48K path
-        inc a
-    _si_done:
-        ld  (_shadow_ok), a
-    __endasm;
-
-    if (!shadow_ok) {
-        /* Locked. Whatever bank is at 0xC000 is the one we get, and the
-           buffers at 0xDB00 live in it.  Draw where a 48K draws. */
-        gfx_target(SCREEN_0);
-        return;
-    }
-    vsync_marker_addr = gfx_attr + MARKER_ROW * 32;
 }
 
 /* Start a full-screen repaint.  On a 128K that means aiming at the
@@ -650,7 +593,7 @@ static void stamp_cursor(void)
    Addresses are baked in because inline assembly cannot see C
    expressions.  The #error fails the build if memmap.h moves them,
    rather than letting this write somewhere else in silence. */
-#if MEM_VBUF != 0xDB00 || MEM_VIEW_OFF != 0xED00
+#if MEM_VBUF != 0xC000 || MEM_VIEW_OFF != 0xD200
 #error "present_pixels() has MEM_VBUF/MEM_VIEW_OFF baked into its assembly"
 #endif
 
@@ -662,8 +605,8 @@ static void present_pixels(void) __naked
     __asm
         ld  a, #128
         ld  (_ppx_rows), a
-        ld  hl, #0xDB00
-        ld  de, #0xED00
+        ld  hl, #0xC000
+        ld  de, #0xD200
     ppx_row:
         push de
         ex  de, hl

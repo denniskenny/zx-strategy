@@ -38,11 +38,12 @@ int main(void)
        BIT 4 IS SET here for the same reason: this write must not change
        the ROM either. */
     if (vsync_mode != VSYNC_MODE_128K) {
-        /* 48K or 128K: bank 0 at 0xC000, ROM 1, paging left OPEN so
-           src/render.c can bank page 7 in for the shadow screen. */
+        /* 48K or 128K: bank 0 at 0xC000, ROM 1, and LOCKED.  Nothing
+           needs the port afterwards now that the shadow screen is gone,
+           and the lock pins the bank our buffers live in. */
         __asm
         ld bc, #0x7FFD
-        ld a, #0x10         ; bank 0, screen 0, ROM 1 (48K), NOT locked
+        ld a, #0x30         ; bank 0, screen 0, ROM 1 (48K), LOCKED
         out (c), a
         __endasm;
     } else {
