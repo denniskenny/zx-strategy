@@ -10,7 +10,7 @@ the Tritone (Beepola) beeper music pipeline, and the Claude skills that document
 all of it.
 
 The current program is a scaffold: a frame-synced game loop with switchable
-states (title, play, campaign map, pause, graphic gallery, music), polling
+states (title, play, campaign map, graphic gallery, music), polling
 keyboard and Kempston input once per frame.
 
 ## Requirements
@@ -45,7 +45,7 @@ make USER_CFLAGS="-m"
 | Q / A / O / P | up / down / left / right | Move the party, or the map cursor (repeats when held) |
 | ENTER, Z | fire 1 | Select — start the game / end the turn |
 | X | fire 2 | Back — return to the title |
-| SPACE | — | Pause / resume play; dismiss the map |
+| SPACE | — | Dismiss the campaign map |
 | M | — | Campaign map while playing; Tritone tune on the title screen |
 | G | — | Gallery: the ZX0-compressed Great Old One (any key returns) |
 
@@ -60,7 +60,7 @@ the beam, so the red band shows how much of the frame budget is actually used.
 
 `game_run()` in `src/game.c` is one frame per iteration: `vsync_wait()` →
 update the active state → poll input → optional state switch. States are
-`ST_TITLE`, `ST_PLAY`, `ST_MAP`, `ST_PAUSE`, `ST_GALLERY` and `ST_MUSIC`; each
+`ST_TITLE`, `ST_PLAY`, `ST_MAP`, `ST_GALLERY` and `ST_MUSIC`; each
 has an `enter_*` function that paints its screen once, and only play and map do
 per-frame work. To add a state: add the `ST_` id in `include/game.h`, an
 `enter_*` case, and its transitions in `handle_input()`. The states, their
@@ -71,13 +71,13 @@ screens and their transitions are specified in [`docs/DESIGN.md`](docs/DESIGN.md
 walking the grid loaded from the Tiled map (water is impassable) and a
 turn/position/terrain panel below. **M** opens `ST_MAP`, the overview grid with a free
 cursor and the party's cell highlighted; **SPACE** dismisses it back to play.
-**SPACE** in play pauses.
 
 ## Layout
 
 ```
 Makefile                 build + asset/music pipelines (-zorg=32768)
 config/app_config.h      screen/keyboard constants + floating bus marker config
+config/game_config.h     unit types and how many of each an army starts with
 config/basic_config.mk   build config included by the Makefile
 include/                 public headers
 src/main.c               startup order: hw_detect → vsync_detect → paging lock
@@ -91,7 +91,9 @@ src/game.c               the game loop + states
 assets/goo.scr           the Great Old One (example graphic)
 assets/tiles_map.zxp     16x16 terrain tiles for the campaign overview
 assets/tiles_view.zxp    32x32 terrain tiles for the play view
-assets/maps/overworld.tmx  the world, authored in Tiled
+assets/units_map.zxp     16x16 unit sprites for the campaign overview
+assets/units_view.zxp    32x32 unit sprites for the play view
+assets/maps/level_*.tmx  the ten campaign levels, authored in Tiled
 assets/music/            Tritone template/engine + one example tune
 tools/                   asset + music converters, ZRCP profiler
 tests/fbprobe.c          floating bus diagnostic histogram
@@ -113,6 +115,8 @@ the Makefile pattern rules do the rest:
   `NAME_gids[]`
 - `assets/tiles_*.zxp` → `include/tiles_*.h` — terrain tile strip, ZX0 blob as
   `tiles_*_zx0[]` plus per-tile attributes
+- `assets/units_*.zxp` → `include/units_*.h` — unit sprite strip, same format
+  and converter as the terrain strips
 
 At runtime: `dzx0_decompress(NAME_zx0, SCREEN);`. The compressor is
 `$Z88DK/bin/z88dk-zx0` by default (`make ZX0=/path/to/zx0` to override).
@@ -134,35 +138,44 @@ dzx0check` verifies the pair. See `.claude/skills/compile-scr`.
 
 ## Maps (Tiled)
 
-`assets/maps/overworld.tmx` is the world, authored in [Tiled](https://www.mapeditor.org)
-(orthogonal, CSV layer data, tileset embedded in the `.tmx`). Each tileset tile
-carries a `terrain` property — `PLAIN`, `FOREST`, `WATER`, `HILLS` — and the map
-uses all four. A point object named `start` marks the party's starting tile.
+The campaign is ten maps, `assets/maps/level_1.tmx` .. `level_10.tmx`, authored
+in [Tiled](https://www.mapeditor.org) (orthogonal, CSV layer data, tileset
+embedded in the `.tmx`). All ten are 14x7 and share one tileset whose tiles
+carry a `terrain` property — `PLAIN`, `FOREST`, `WATER`, `HILLS`, `CITY`. A
+point object named `start` marks the party's starting tile.
 
-`tools/tmx2header.py` converts it at build time into `include/overworld.h`:
+`tools/tmx2header.py` converts each at build time into `include/level_N.h`,
+ZX0-compressing the GID array (98 bytes → 28-36):
 
 ```c
-#define OVERWORLD_COLS 14           /* ROWS, START_X, START_Y ...        */
-#define OVERWORLD_GID_FIRST 1       /* terrain id = GID - GID_FIRST      */
-#define OVERWORLD_TERRAIN_COUNT 4
-#define OVERWORLD_GID_PLAIN 1       /* ... FOREST 2, WATER 3, HILLS 4    */
-static const char *const overworld_terrain_names[4] = { ... };  /* labels  */
-static const uint8_t overworld_terrain_blocked[4] = { ... };    /* movement */
-static const uint8_t overworld_gids[14 * 7] = { ... };
+#define LEVEL_1_COLS 14           /* ROWS, START_X, START_Y ...        */
+#define LEVEL_1_GID_FIRST 1       /* terrain id = GID - GID_FIRST      */
+#define LEVEL_1_TERRAIN_COUNT 5
+#define LEVEL_1_TERRAIN_SIG 0xFD41 /* tileset hash: order/names/blocked */
+#define LEVEL_1_GID_PLAIN 1       /* ... FOREST 2, WATER 3, HILLS 4, CITY 5 */
+static const char *const level_1_terrain_names[5] = { ... };  /* labels  */
+static const uint8_t level_1_terrain_blocked[5] = { ... };    /* movement */
+static const uint8_t level_1_gids_zx0[36] = { ... };          /* the map  */
 ```
 
-The header holds the **raw Tiled GIDs**, so re-ordering the tileset in Tiled can
-never silently change what the data means. `load_map()` in `src/game.c` does the
-conversion in memory at load time (terrain id = `GID - OVERWORLD_GID_FIRST`) and
-seeds the party from `OVERWORLD_START_*`. Status labels come from the tileset's
-`terrain` properties and impassability from its `impassable` bools, so a new
-terrain type needs no C changes. `GRID_COLS` / `GRID_ROWS` come from the header
-too, and `#error` guards fire if a map or tile size outgrows either renderer.
+The data stays the **raw Tiled GIDs**, so re-ordering the tileset in Tiled can
+never silently change what the data means. `load_map()` in `src/game.c`
+decompresses the current level straight into `terrain[]` (both are `COLS*ROWS`
+bytes) and converts the GIDs in place (terrain id = `GID - LEVEL_1_GID_FIRST`),
+then seeds the party from that level's `START_*`. Status labels come from the
+tileset's `terrain` properties and impassability from its `impassable` bools,
+so a new terrain type needs no C changes.
 
-To add a map: drop `assets/maps/NAME.tmx` in place (CSV tile layer, embedded
-tileset, `terrain` properties) and append `include/NAME.h` to
-`GENERATED_HEADERS`. See `.claude/skills/tiled-maps` for the full recipe,
-including a hand-authorable `.tmx` template and how to add a terrain type.
+Levels 2-10 are built with `--shared-terrain`: since every level uses the same
+tileset, only `level_1.h` carries the name and passability tables and the rest
+borrow them. `LEVEL_*_TERRAIN_SIG` hashes each tileset and `src/game.c`
+`#error`s if one has drifted — as it does if a level is a different size from
+level 1, which `terrain[]` and both renderers are sized from.
+
+To add level 11: author `assets/maps/level_11.tmx`, append `11` to `LEVELS` in
+the Makefile, and add it to `level_maps[]` / `level_start[]` in `src/game.c`.
+See `.claude/skills/tiled-maps` for the full recipe, including a
+hand-authorable `.tmx` template and how to add a terrain type.
 
 ## Terrain tiles (ZX-Paintbrush + ZX0)
 

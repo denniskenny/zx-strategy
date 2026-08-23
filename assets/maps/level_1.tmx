@@ -2,10 +2,10 @@
 <!-- Overworld map, authored in Tiled (orthogonal, CSV layer data).
      One tile per terrain type, in the same order as the columns of
      assets/tiles_map.zxp and assets/tiles_view.zxp; tools/tmx2header.py
-     converts this into include/overworld.h at build time and src/game.c
+     converts this into include/level_1.h at build time and src/game.c
      converts the GIDs into its runtime terrain array. -->
 <map version="1.10" tiledversion="1.10.2" orientation="orthogonal" renderorder="right-down" width="14" height="7" tilewidth="16" tileheight="16" infinite="0" nextlayerid="3" nextobjectid="2">
- <tileset firstgid="1" name="terrain" tilewidth="16" tileheight="16" tilecount="4" columns="0">
+ <tileset firstgid="1" name="terrain" tilewidth="16" tileheight="16" tilecount="5" columns="0">
   <grid orientation="orthogonal" width="1" height="1"/>
   <tile id="0">
    <properties>
@@ -26,6 +26,11 @@
   <tile id="3">
    <properties>
     <property name="terrain" value="HILLS"/>
+   </properties>
+  </tile>
+  <tile id="4">
+   <properties>
+    <property name="terrain" value="CITY"/>
    </properties>
   </tile>
  </tileset>

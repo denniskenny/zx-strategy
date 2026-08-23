@@ -12,20 +12,22 @@
  *               the party walks off its edge
  *   ST_MAP      campaign overview, opened with M from ST_PLAY and
  *               dismissed with SPACE; free cursor over the terrain grid
- *   ST_PAUSE    play view frozen, party left in place
  *   ST_GALLERY  the ZX0-compressed Great Old One
  *   ST_MUSIC    Tritone tune (blocking; returns to the previous state)
+ *   ST_OVER     a level ended: a win loads the next one, a loss quits
+ *   ST_WON      the last level was won; the campaign is over
  *
  * Controls:  Q/A/O/P or Kempston  move the party (map: move cursor)
  *            ENTER / Z / fire 1   select (in play: end turn)
  *            X / fire 2           back
- *            SPACE                pause / resume; dismiss the map
+ *            SPACE                dismiss the map
  *            M                    map (play) / music (title)
  *            G                    gallery
  *
- * The world comes from assets/maps/overworld.tmx (Tiled).  The build
- * converts it to include/overworld.h as raw Tiled GIDs; load_map()
- * converts those into the runtime terrain array in memory.
+ * The worlds come from assets/maps/level_N.tmx (Tiled), N = 1..10.
+ * The build ZX0's each one into include/level_N.h as Tiled GIDs;
+ * load_map() decompresses the current level straight into terrain[]
+ * and converts the GIDs into terrain ids in place.
  *
  * Terrain graphics come from two ZX-Paintbrush tile strips, ZX0'd by the
  * build: assets/tiles_map.zxp (2x2-character overview tiles) and
@@ -45,8 +47,17 @@
 #include "../include/goo_data.h"
 #include "../include/hw.h"
 #include "../include/input.h"
+#include "../include/level_1.h"
+#include "../include/level_2.h"
+#include "../include/level_3.h"
+#include "../include/level_4.h"
+#include "../include/level_5.h"
+#include "../include/level_6.h"
+#include "../include/level_7.h"
+#include "../include/level_8.h"
+#include "../include/level_9.h"
+#include "../include/level_10.h"
 #include "../include/music.h"
-#include "../include/overworld.h"
 #include "../include/tiles_map.h"
 #include "../include/tiles_view.h"
 #include "../include/vsync.h"
@@ -61,7 +72,7 @@
 
 /* Terrain ids are tile indices: the .tmx tileset order, the .zxp tile
    column order and the generated tables all line up. */
-#define TER_COUNT   OVERWORLD_TERRAIN_COUNT
+#define TER_COUNT   LEVEL_1_TERRAIN_COUNT
 
 #if (TILES_MAP_TILES != TER_COUNT) || (TILES_VIEW_TILES != TER_COUNT)
 #error "tile sheets and the .tmx tileset disagree on the terrain count"
@@ -75,7 +86,7 @@
 #define ACT_RIGHT   0x08
 #define ACT_SELECT  0x10
 #define ACT_BACK    0x20
-#define ACT_PAUSE   0x40
+#define ACT_SPACE   0x40
 #define ACT_EXTRA   0x80    /* G or M, disambiguated by extra_key */
 
 #define ACT_DIRS    (ACT_UP | ACT_DOWN | ACT_LEFT | ACT_RIGHT)
@@ -97,8 +108,8 @@
 
 /* --- Campaign overview: the whole world in tiles_map.zxp cells.  Size
        comes from the Tiled map, cell size from the tile sheet. --- */
-#define GRID_COLS   OVERWORLD_COLS
-#define GRID_ROWS   OVERWORLD_ROWS
+#define GRID_COLS   LEVEL_1_COLS
+#define GRID_ROWS   LEVEL_1_ROWS
 #define CELL_W      TILES_MAP_TILE_W
 #define CELL_ROWS   TILES_MAP_TILE_ROWS
 #define MAP_COL     2
@@ -129,10 +140,63 @@
 /* Both renderers must fit above the status panel. */
 #if (MAP_COL + GRID_COLS * CELL_W > 32) \
  || (MAP_ROW + GRID_ROWS * CELL_ROWS > ROW_TURN)
-#error "overworld.tmx is too large for the campaign overview"
+#error "level_1.tmx is too large for the campaign overview"
 #endif
 #if (VIEW_COL < 0) || (VIEW_ROW + VIEW_ROWS * VIEW_CH > ROW_TURN)
 #error "the play view does not fit on screen; shrink the page or the tiles"
+#endif
+
+/* --- The campaign: one ZX0'd GID array per level, all the same size
+       and all sharing level_1's terrain tables (the build enforces the
+       shared tileset with _TERRAIN_SIG, checked below).  A level costs
+       ~35 bytes here instead of the 98 it occupies in terrain[]. --- */
+#define LEVEL_COUNT 10
+
+static const uint8_t *const level_maps[LEVEL_COUNT] = {
+    level_1_gids_zx0, level_2_gids_zx0, level_3_gids_zx0,
+    level_4_gids_zx0, level_5_gids_zx0, level_6_gids_zx0,
+    level_7_gids_zx0, level_8_gids_zx0, level_9_gids_zx0,
+    level_10_gids_zx0
+};
+
+/* Where the party starts on each level (the .tmx "start" object). */
+static const uint8_t level_start[LEVEL_COUNT][2] = {
+    { LEVEL_1_START_X,  LEVEL_1_START_Y  },
+    { LEVEL_2_START_X,  LEVEL_2_START_Y  },
+    { LEVEL_3_START_X,  LEVEL_3_START_Y  },
+    { LEVEL_4_START_X,  LEVEL_4_START_Y  },
+    { LEVEL_5_START_X,  LEVEL_5_START_Y  },
+    { LEVEL_6_START_X,  LEVEL_6_START_Y  },
+    { LEVEL_7_START_X,  LEVEL_7_START_Y  },
+    { LEVEL_8_START_X,  LEVEL_8_START_Y  },
+    { LEVEL_9_START_X,  LEVEL_9_START_Y  },
+    { LEVEL_10_START_X, LEVEL_10_START_Y }
+};
+
+/* terrain[] and the two renderers are sized from level 1, and levels
+   2-10 borrow its terrain names and passability, so a level that
+   disagrees on either would silently mis-draw or read out of bounds. */
+#if (LEVEL_2_COLS != GRID_COLS)  || (LEVEL_2_ROWS != GRID_ROWS)  \
+ || (LEVEL_3_COLS != GRID_COLS)  || (LEVEL_3_ROWS != GRID_ROWS)  \
+ || (LEVEL_4_COLS != GRID_COLS)  || (LEVEL_4_ROWS != GRID_ROWS)  \
+ || (LEVEL_5_COLS != GRID_COLS)  || (LEVEL_5_ROWS != GRID_ROWS)  \
+ || (LEVEL_6_COLS != GRID_COLS)  || (LEVEL_6_ROWS != GRID_ROWS)  \
+ || (LEVEL_7_COLS != GRID_COLS)  || (LEVEL_7_ROWS != GRID_ROWS)  \
+ || (LEVEL_8_COLS != GRID_COLS)  || (LEVEL_8_ROWS != GRID_ROWS)  \
+ || (LEVEL_9_COLS != GRID_COLS)  || (LEVEL_9_ROWS != GRID_ROWS)  \
+ || (LEVEL_10_COLS != GRID_COLS) || (LEVEL_10_ROWS != GRID_ROWS)
+#error "every level must be the same size as level_1.tmx"
+#endif
+#if (LEVEL_2_TERRAIN_SIG != LEVEL_1_TERRAIN_SIG)  \
+ || (LEVEL_3_TERRAIN_SIG != LEVEL_1_TERRAIN_SIG)  \
+ || (LEVEL_4_TERRAIN_SIG != LEVEL_1_TERRAIN_SIG)  \
+ || (LEVEL_5_TERRAIN_SIG != LEVEL_1_TERRAIN_SIG)  \
+ || (LEVEL_6_TERRAIN_SIG != LEVEL_1_TERRAIN_SIG)  \
+ || (LEVEL_7_TERRAIN_SIG != LEVEL_1_TERRAIN_SIG)  \
+ || (LEVEL_8_TERRAIN_SIG != LEVEL_1_TERRAIN_SIG)  \
+ || (LEVEL_9_TERRAIN_SIG != LEVEL_1_TERRAIN_SIG)  \
+ || (LEVEL_10_TERRAIN_SIG != LEVEL_1_TERRAIN_SIG)
+#error "a level's tileset differs from level_1's; they cannot share a terrain table"
 #endif
 
 /* Frames between cursor steps while a direction is held. */
@@ -154,6 +218,8 @@ static uint8_t redraw_status;
 static uint8_t page_x, page_y;      /* top-left world cell of the page */
 static uint8_t cells_left;          /* cells still to repaint on a flip */
 static uint8_t key_idle, key_down;
+static uint8_t level;       /* 1-based; selects level_maps[] */
+static uint8_t player_won;  /* outcome of the level ST_OVER is reporting */
 static uint16_t turn;
 
 /* Tile pixels, decompressed once from the ZX0 blobs in the headers. */
@@ -182,7 +248,7 @@ static uint8_t scan_actions(void)
     if (k & INPUT_FIRE2) a |= ACT_BACK;     /* X / Kempston fire 2 */
 
     if (!(read_keys(KEY_ENTER_ROW) & 0x01)) a |= ACT_SELECT;
-    if (!(read_keys(KEY_SPACE_ROW) & 0x01)) a |= ACT_PAUSE;
+    if (!(read_keys(KEY_SPACE_ROW) & 0x01)) a |= ACT_SPACE;
 
     if (!(read_keys(KEY_ASDFG) & 0x10)) {    /* G */
         a |= ACT_EXTRA;
@@ -271,21 +337,26 @@ static void load_tiles(void)
     dzx0_decompress(tiles_view_zx0, view_tiles);
 }
 
-/* Tiled stores a GID per tile; the header keeps them verbatim, and the
-   terrain id is the tile's index in the tileset — which is also its
-   column in both .zxp sheets.  This is the only place that conversion
-   happens, and out-of-range GIDs fall back to terrain 0. */
+/* Load the current level.  Tiled stores a GID per tile; the header
+   keeps them verbatim (ZX0'd), and the terrain id is the tile's index
+   in the tileset — which is also its column in both .zxp sheets.  This
+   is the only place that conversion happens, and out-of-range GIDs fall
+   back to terrain 0. */
 static void load_map(void)
 {
     uint8_t i, t;
 
+    /* The compressed GIDs unpack straight into terrain[] — same 98
+       bytes — and are converted in place, so no staging buffer. */
+    dzx0_decompress(level_maps[level - 1], terrain);
+
     for (i = 0; i < GRID_COLS * GRID_ROWS; i++) {
-        t = (uint8_t)(overworld_gids[i] - OVERWORLD_GID_FIRST);
+        t = (uint8_t)(terrain[i] - LEVEL_1_GID_FIRST);
         terrain[i] = (t < TER_COUNT) ? t : 0;
     }
 
-    party_x = OVERWORLD_START_X;
-    party_y = OVERWORLD_START_Y;
+    party_x = level_start[level - 1][0];
+    party_y = level_start[level - 1][1];
     cur_x = party_x;
     cur_y = party_y;
 }
@@ -325,7 +396,7 @@ static void draw_status(const char *label, uint8_t x, uint8_t y)
     print_num(13, ROW_COORD, y, 2);
 
     print_at(1, ROW_TERRAIN, "TERRAIN:");
-    print_at(10, ROW_TERRAIN, overworld_terrain_names[t]);
+    print_at(10, ROW_TERRAIN, level_1_terrain_names[t]);
 
     set_attr_rect(0, ROW_TURN, 32, 3, ATTR_TEXT);
 }
@@ -424,7 +495,7 @@ static void enter_play(void)
     cells_left = 0;
     draw_status("PARTY  :", party_x, party_y);
 
-    print_at(1, 21, "FIRE END TURN  M MAP  SPC PAUSE");
+    print_at(1, 21, "FIRE END TURN  M MAP  X TITLE  ");
     set_attr_rect(0, 21, 32, 1, ATTR_HINT);
 }
 
@@ -442,10 +513,38 @@ static void enter_map(void)
     set_attr_rect(0, 21, 32, 1, ATTR_HINT);
 }
 
-static void enter_pause(void)
+/* A level ended.  player_won says which message to show; the exit is
+   handled in handle_input(), which is where the level advances. */
+static void enter_over(void)
 {
-    print_at(1, 21, "PAUSED - SPACE TO RESUME       ");
+    draw_header(player_won ? "VICTORY" : "DEFEAT");
+
+    print_at(1, 10, player_won ? "LEVEL TAKEN    :" : "LEVEL LOST     :");
+    print_num(18, 10, level, 2);
+    set_attr_rect(0, 10, 32, 1, ATTR_TEXT);
+
+    print_at(1, 21, player_won ? "FIRE FOR THE NEXT LEVEL        "
+                               : "FIRE TO RETURN TO THE TITLE    ");
     set_attr_rect(0, 21, 32, 1, ATTR_HINT);
+}
+
+/* Past the last level: the campaign is over.  Any key goes back to the
+   title, using the same release-then-press debounce as the gallery so
+   the key that won the game cannot dismiss this immediately. */
+static void enter_won(void)
+{
+    draw_header("CAMPAIGN COMPLETE");
+
+    print_at(4, 9,  "EVERY LEVEL TAKEN");
+    print_at(4, 11, "LEVELS WON     :");
+    print_num(21, 11, LEVEL_COUNT, 2);
+    set_attr_rect(0, 9, 32, 3, ATTR_TEXT);
+
+    print_at(1, 21, "PRESS A KEY                    ");
+    set_attr_rect(0, 21, 32, 1, ATTR_HINT);
+
+    key_idle = 0;
+    key_down = 0;
 }
 
 static void enter_gallery(void)
@@ -479,9 +578,10 @@ static void enter_state(uint8_t s)
         case ST_TITLE:   enter_title();   break;
         case ST_PLAY:    enter_play();    break;
         case ST_MAP:     enter_map();     break;
-        case ST_PAUSE:   enter_pause();   break;
         case ST_GALLERY: enter_gallery(); break;
         case ST_MUSIC:   enter_music();   break;
+        case ST_OVER:    enter_over();    break;
+        case ST_WON:     enter_won();     break;
     }
     flush_input();
 }
@@ -546,7 +646,7 @@ static void move_party(void)
         return;
     }
     if (!nav_step(party_x, party_y, &nx, &ny)) return;
-    if (overworld_terrain_blocked[terrain[ny * GRID_COLS + nx]]) return;
+    if (level_1_terrain_blocked[terrain[ny * GRID_COLS + nx]]) return;
 
     ox = (uint8_t)(party_x - page_x);
     oy = (uint8_t)(party_y - page_y);
@@ -615,6 +715,7 @@ static void handle_input(void)
         case ST_TITLE:
             if (edge & ACT_SELECT) {
                 turn = 1;
+                level = 1;
                 load_map();
                 set_state(ST_PLAY);
             }
@@ -625,19 +726,13 @@ static void handle_input(void)
                 turn++;
                 redraw_status = 1;
             }
-            if (edge & ACT_PAUSE) set_state(ST_PAUSE);
             if (edge & ACT_BACK)  set_state(ST_TITLE);
             break;
 
         case ST_MAP:
             /* Read-only overview: SPACE (or back) dismisses it. */
-            if (edge & (ACT_PAUSE | ACT_BACK | ACT_SELECT))
+            if (edge & (ACT_SPACE | ACT_BACK | ACT_SELECT))
                 set_state(ST_PLAY);
-            break;
-
-        case ST_PAUSE:
-            if (edge & (ACT_PAUSE | ACT_SELECT)) set_state(ST_PLAY);
-            if (edge & ACT_BACK) set_state(ST_TITLE);
             break;
 
         case ST_GALLERY:
@@ -654,6 +749,33 @@ static void handle_input(void)
             break;
 
         case ST_MUSIC:
+            break;
+
+        case ST_OVER:
+            /* A loss ends the campaign.  A win advances: level 11 does
+               not exist, so passing the last level is the campaign
+               being complete rather than another map to load. */
+            if (edge & ACT_SELECT) {
+                if (!player_won) {
+                    set_state(ST_TITLE);
+                } else if (++level > LEVEL_COUNT) {
+                    set_state(ST_WON);
+                } else {
+                    turn = 1;
+                    load_map();
+                    set_state(ST_PLAY);
+                }
+            }
+            break;
+
+        case ST_WON:
+            /* Same two-sample release-then-press rule as the gallery. */
+            if (key_idle < 2) {
+                key_idle = any_key() ? 0 : (uint8_t)(key_idle + 1);
+            } else {
+                key_down = any_key() ? (uint8_t)(key_down + 1) : 0;
+                if (key_down >= 2) set_state(ST_TITLE);
+            }
             break;
     }
 
@@ -674,6 +796,7 @@ static void handle_input(void)
 void game_run(void)
 {
     turn = 0;
+    level = 1;
     load_tiles();
     load_map();
 

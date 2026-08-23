@@ -1,30 +1,37 @@
 ---
 name: zx-tiles
-description: Add or edit terrain tiles for ZX Strategy — draw them in the ZX-Paintbrush tile strips (assets/tiles_map.zxp, assets/tiles_view.zxp), declare them in the Tiled tileset, and let the build ZX0-compress and wire them in with no C changes.
-when_to_use: "add a tile" or "new terrain" or "new tile type" or "edit tile art" or "tile sheet" or "zxp tiles" or "change terrain colour" or "make swamp impassable"
+description: Add or edit terrain tiles and unit sprites for ZX Strategy — draw them in the ZX-Paintbrush strips (assets/tiles_{map,view}.zxp, assets/units_{map,view}.zxp), declare terrain in the Tiled tileset, and let the build ZX0-compress and wire them in with no C changes.
+when_to_use: "add a tile" or "new terrain" or "new tile type" or "edit tile art" or "tile sheet" or "zxp tiles" or "change terrain colour" or "make swamp impassable" or "unit sprite" or "new unit type" or "edit unit art"
 allowed-tools: Bash Read Write Edit
 effort: low
 ---
 
-# Terrain Tiles: Draw → Declare → Build
+# Terrain Tiles & Unit Sprites: Draw → Declare → Build
 
-Terrain graphics live in two ZX-Paintbrush tile strips, one per renderer:
+Graphics live in ZX-Paintbrush **strips**, one per renderer, at that renderer's
+cell size — terrain and units use the same format and the same converter:
 
-| Sheet | Tile size | Used by |
+| Sheet | Cell size | Used by |
 |-------|-----------|---------|
 | `assets/tiles_map.zxp` | 16x16 px (2x2 chars) | `ST_MAP` campaign overview |
 | `assets/tiles_view.zxp` | 32x32 px (4x4 chars) | `ST_PLAY` paged field view |
+| `assets/units_map.zxp` | 16x16 px (2x2 chars) | units on `ST_MAP` |
+| `assets/units_view.zxp` | 32x32 px (4x4 chars) | units on `ST_PLAY` |
 
-Both hold **N tiles side by side, in tileset order**: column *i* is terrain *i*
-is GID `firstgid + i` in `assets/maps/overworld.tmx`. The build converts each
-sheet with `tools/zxp_tiles_zx0.py` into a ZX0 blob plus a per-tile attribute
-table; `load_tiles()` in `src/game.c` decompresses both into RAM once at
-startup, and `draw_cell()` / `draw_view_cell()` blit out of them.
+Each holds **N cells side by side, in table order**. For terrain, column *i* is
+terrain *i* is GID `firstgid + i` in `assets/maps/level_1.tmx`; for units,
+column *i* is the *i*th entry of the unit table in `docs/DESIGN.md`. The build
+converts each sheet with `tools/zxp_tiles_zx0.py` into a ZX0 blob plus a
+per-cell attribute table; `load_tiles()` in `src/game.c` decompresses the
+terrain sheets into RAM once at startup, and `draw_cell()` / `draw_view_cell()`
+blit out of them.
 
 ```
 assets/tiles_map.zxp  ──zxp_tiles_zx0.py──▶ include/tiles_map.h  (tiles_map_zx0[], tiles_map_attr[])
 assets/tiles_view.zxp ──zxp_tiles_zx0.py──▶ include/tiles_view.h (tiles_view_zx0[], tiles_view_attr[])
-assets/maps/overworld.tmx ──tmx2header.py──▶ include/overworld.h  (names, blocked, GIDs)
+assets/units_map.zxp  ──zxp_tiles_zx0.py──▶ include/units_map.h  (units_map_zx0[],  units_map_attr[])
+assets/units_view.zxp ──zxp_tiles_zx0.py──▶ include/units_view.h (units_view_zx0[], units_view_attr[])
+assets/maps/level_1.tmx ──tmx2header.py──▶ include/level_1.h  (names, blocked, GIDs)
 ```
 
 Everything the game needs about a terrain type is data: **art + colour** from
@@ -36,7 +43,7 @@ the `.zxp`, **name + passability** from the `.tmx`. Adding a type needs no C.
    `assets/tiles_map.zxp` (16x16) and `assets/tiles_view.zxp` (32x32), and give
    its character cells an attribute in the sheet's attribute block. See *The
    .zxp format* below to do this without the GUI.
-2. **Declare it in the tileset** — append a `<tile>` to `assets/maps/overworld.tmx`
+2. **Declare it in the tileset** — append a `<tile>` to `assets/maps/level_1.tmx`
    with the next id, in the same order as the sheet column:
    ```xml
    <tile id="4">
@@ -47,7 +54,7 @@ the `.zxp`, **name + passability** from the `.tmx`. Adding a type needs no C.
    </tile>
    ```
    Bump the tileset's `tilecount`. Names become status-panel labels (truncated
-   or padded to 8 characters) and `OVERWORLD_GID_SWAMP`.
+   or padded to 8 characters) and `LEVEL_1_GID_SWAMP`.
 3. **Bump the tile count** in the Makefile: `TILE_COUNT = 5`.
 4. **Paint it into the map** — use the new GID in the layer CSV.
 5. **Build**: `make assets && make`. Both converters print what they emitted;
@@ -56,6 +63,32 @@ the `.zxp`, **name + passability** from the `.tmx`. Adding a type needs no C.
 
 To *edit* an existing tile, only step 1 and `make` are needed. To recolour one,
 change its attribute cells in the sheet — nothing else.
+
+## Adding a unit type
+
+Units are simpler — there is no `.tmx` side, so it is draw + count:
+
+1. **Draw it in both unit sheets**, same column position in each:
+   `assets/units_map.zxp` (16x16) and `assets/units_view.zxp` (32x32).
+2. **Bump `UNIT_COUNT`** in the Makefile (currently 4).
+3. **Extend the unit table** in `docs/DESIGN.md` in the same order —
+   INFANTRY, TANK, CANNON, BASE — and the runtime stat table when it exists.
+
+Two differences from terrain worth knowing:
+
+- **Colour is not authored.** Both sides share one sprite, so `units_*_attr[]`
+  holds a neutral default (0x47) and the runtime picks the attribute per side
+  when it blits. Recolouring the sheet changes nothing on screen.
+- **Sprites are opaque**, like tiles: blitting one over a terrain cell replaces
+  the whole cell rather than compositing. Masked or XOR'd units over terrain
+  need `gfx.c`'s XOR sprite path plus a second mask strip — decide that before
+  the art gets detailed, because it changes how the sheets are drawn.
+
+Nothing in `src/game.c` includes the unit headers yet (there is no unit system,
+see the open questions in `docs/DESIGN.md`), so today the sheets cost zero bytes
+in the binary. Wiring them up means `unit_tiles[]` buffers alongside
+`map_tiles[]` / `view_tiles[]`, two more `dzx0_decompress()` calls in
+`load_tiles()`, and a side attribute in the two draw functions.
 
 ## The .zxp format
 

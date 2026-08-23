@@ -19,6 +19,8 @@ tools/__pycache__/
 
 # generated asset headers (rebuilt by make assets)
 include/goo_data.h
-include/overworld.h
+include/level_*.h
 include/tiles_map.h
 include/tiles_view.h
+include/units_map.h
+include/units_view.h

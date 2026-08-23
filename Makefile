@@ -43,6 +43,25 @@ include/%.h: assets/%.scr tools/zx0_to_header.py
 	$(ZX0) $< /tmp/$*.zx0
 	$(PYTHON) tools/zx0_to_header.py $@ $*_zx0:/tmp/$*.zx0
 
+# --- Campaign levels ---------------------------------------------------------
+# One .tmx per level, all the same size and all sharing level_1's tileset.
+# The GIDs are ZX0'd (98 raw bytes each -> ~35), and load_map() decompresses
+# the level it needs straight into terrain[] before converting GIDs in place.
+# level_1 carries the terrain name/passability tables; the rest are built with
+# --shared-terrain and borrow them, which is why every level's tileset has to
+# match — src/game.c compares LEVEL_*_TERRAIN_SIG and fails the build if one
+# has drifted.  To add level 11: author the .tmx, append 11 to LEVELS, and add
+# it to the tables in src/game.c.  See .claude/skills/tiled-maps.
+LEVELS = 1 2 3 4 5 6 7 8 9 10
+LEVEL_HEADERS = $(foreach n,$(LEVELS),include/level_$(n).h)
+
+include/level_1.h: assets/maps/level_1.tmx tools/tmx2header.py
+	$(PYTHON) tools/tmx2header.py $< $@ --name level_1 --zx0 $(ZX0)
+
+include/level_%.h: assets/maps/level_%.tmx tools/tmx2header.py
+	$(PYTHON) tools/tmx2header.py $< $@ --name level_$* --zx0 $(ZX0) \
+	    --shared-terrain
+
 # assets/maps/NAME.tmx → include/NAME.h  (Tiled map: raw GIDs + constants)
 # The runtime converts the GIDs into its own terrain ids in memory, so the
 # header stays a faithful dump of what Tiled saved.
@@ -69,7 +88,7 @@ include/goo_data.h: $(GOO_SRC) tools/scr_crop_zx0.py
 # ZX-Paintbrush).  The runtime decompresses each blob once and blits tiles out
 # of it; tile column order must match the .tmx tileset (see
 # .claude/skills/zx-tiles).
-TILE_COUNT = 4
+TILE_COUNT = 5
 
 include/tiles_map.h: assets/tiles_map.zxp tools/zxp_tiles_zx0.py
 	$(ZXP_TILES_ZX0) $< $@ --name tiles_map --tiles $(TILE_COUNT) --zx0 $(ZX0)
@@ -77,9 +96,22 @@ include/tiles_map.h: assets/tiles_map.zxp tools/zxp_tiles_zx0.py
 include/tiles_view.h: assets/tiles_view.zxp tools/zxp_tiles_zx0.py
 	$(ZXP_TILES_ZX0) $< $@ --name tiles_view --tiles $(TILE_COUNT) --zx0 $(ZX0)
 
+# Unit sprite sheets: same strip format and converter as the terrain tiles,
+# one sheet per renderer, sprite column order = INFANTRY, TANK, CANNON, BASE
+# (the unit table in docs/DESIGN.md).  The sheet attribute is a neutral
+# default; the runtime recolours a sprite per side when it blits it.
+UNIT_COUNT = 4
+
+include/units_map.h: assets/units_map.zxp tools/zxp_tiles_zx0.py
+	$(ZXP_TILES_ZX0) $< $@ --name units_map --tiles $(UNIT_COUNT) --zx0 $(ZX0)
+
+include/units_view.h: assets/units_view.zxp tools/zxp_tiles_zx0.py
+	$(ZXP_TILES_ZX0) $< $@ --name units_view --tiles $(UNIT_COUNT) --zx0 $(ZX0)
+
 # List generated headers here so `make assets` and `make clean` know them.
-GENERATED_HEADERS = include/goo_data.h include/overworld.h \
-                    include/tiles_map.h include/tiles_view.h
+GENERATED_HEADERS = include/goo_data.h $(LEVEL_HEADERS) \
+                    include/tiles_map.h include/tiles_view.h \
+                    include/units_map.h include/units_view.h
 
 assets: $(GENERATED_HEADERS) $(MUSIC_LINKABLE)
 
@@ -117,7 +149,7 @@ assets/music/%_linkable.asm: assets/music/%.asm tools/gen_tritone_module.py
 SRCS = src/main.c src/game.c src/gfx.c src/input.c src/hw_detect.c \
        src/vsync.c src/prng.c src/dzx0.c
 
-HEADERS = config/app_config.h include/gfx.h include/input.h include/hw.h \
+HEADERS = config/app_config.h config/game_config.h include/gfx.h include/input.h include/hw.h \
           include/vsync.h include/prng.h include/game.h include/dzx0.h \
           include/music.h $(GENERATED_HEADERS)
 

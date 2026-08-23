@@ -1,31 +1,85 @@
 # ZX Strategy — Design
 
-Living design document. This first pass covers **only the game states**: what
-each one shows, what it does per frame, and how the player moves between them.
-Game rules (turns, units, combat, economy) are deliberately not specified yet —
-see [Open questions](#open-questions).
-
-
 ## Game overview
 
 This is a single-player strategy game for the ZX Spectrum. The player controls a cursor that allows them to select units with the space bar. 
 
-When selected, the unit's stats, movement range, and attack range are displayed. The player can move the unit by selecting any tiles hightlighted by the movement range.
+When selected, the unit's stats, movement range, and attack range are displayed. The player can move the unit by selecting any tiles highlighted by the movement range.
 
 When all the player's units have been moved or used their action, the player can press the enter key to end their turn.
 
-The enemy units will then take their turn.
+The enemy units will then take their turn. Enemy units are red, player units are cyan.
+
+### Game Init
+
+The game starts with level_1.tmx. 
+The global starting values for each unit type are defined in `config/game_config.h`.
+
+A populate_map() function creates a friendly base and an enemy base at opposite corners of the map. It takes the level as a parameter, reads that level's roster from `config/game_config.h`, and places the created units within N tiles of the base (N = `UNITS_PLACE_RADIUS`, currently 4) but not on water.
+
+Each subsequent odd-numbered level will have an additional unit of each type.
 
 ### Movement Range
 
 Movement range is calculated using a simple pathfinding algorithm that calculates the distance from the unit to all reachable tiles.
 
-### Attack Range
+### Tiles
 
-Attack range is calculated using a simple pathfinding algorithm that calculates the distance from the unit to all reachable enemy units. The player can cycle through the enemy units in attack range using the left and right arrow keys and select the target with the space bar.
+Tiles have an impassable flag and a movement cost. They also offer cover benefits to units standing on them. `impassable` is the name of the Tiled tile property the build actually reads, so the flag here and the flag in the tileset say the same thing the same way round.
 
-### Units
-Units have an attack range and damage value. They have a health value and can be killed. They also havea movement range
+The order below is load-bearing: it is the tileset order in
+`assets/maps/level_1.tmx` and the column order in both terrain sheets
+(`assets/tiles_map.zxp`, `assets/tiles_view.zxp`), because terrain id =
+`GID - firstgid` = sheet column. New types are therefore **appended**, never
+inserted — renumbering an existing tile silently reinterprets every map that
+uses it.
+
+1. Plain
+  impassable: false
+  movement cost : 1
+  cover : 0
+2. Forest
+  impassable: false
+  movement cost : 2
+  cover : 50
+3. Water
+  impassable: true
+  movement cost : 0
+  cover : 0
+4. Hills
+  impassable: false
+  movement cost : 2
+  cover : 25
+5. City 
+  impassable: false
+  movement cost : 1
+  cover : 75
+
+### Cover 
+Cover is a percentage of damage reduction that units receive when standing on tiles with cover.
+
+Damage lands as whole points, and the reduction **rounds up** — the defender
+never gains a fraction of a point from cover:
+
+```
+damage = (attack damage * (100 - cover) + 99) / 100      integer division
+```
+
+So a Cannon's 30 into a city's 75% cover is 7.5, dealt as **8**. Rounding up
+also means any attack that would otherwise land still does at least 1 point
+while cover is under 100%, so no unit is ever unkillable by position alone.
+
+### Attack Range
+
+Attack range is calculated using a simple algorithm that calculates the distance from the unit to all reachable enemy units. The player can cycle through the enemy units in attack range using the O and P keys and select the target with the space bar.
+
+### Units
+Units have an attack range and damage value. They have a health value and can be killed. They also have a movement range
+
+Art: `assets/units_view.zxp` (32x32 sprites, `ST_PLAY`) and
+`assets/units_map.zxp` (16x16, `ST_MAP`), one sprite column per unit in the
+order below. Both sides share a sprite; the runtime picks the attribute per
+side.
 
 #### Infantry
 
@@ -48,16 +102,47 @@ Damage : 30
 Health : 200
 Movement : 0
 
-#### Base : 
-
+#### Base 
+Range : 0
+Damage : 0
 Health : 500
 Movement : 0
 
-### Enemy movement
+### Enemy turn
 
-Implementation: `src/game.c`, state ids in `include/game.h`.
+The enemy will cycle through their units and perform an action for each unit. 
+
+They will attack if in range.
+If no attack is possible, they will choose a unit to attack and move to that unit.
+They will not path through impassable tiles and will avoid player unit attack ranges.
+Once all enemy units have been processed, the enemy will end their turn.
+
+This logic will be elaborated in subsequent reviews.
+
+
+### Win Conditions
+
+The first side to destroy the enemy base or destroy all enemy units wins. This
+is tested every time a unit is destroyed — a base counts as a unit, so the two
+conditions are one check over the loser's remaining roster. Either outcome
+transitions to `ST_OVER`, which displays a win or lose message and owns what
+happens next:
+
+- **Lose** → `ST_TITLE`. The campaign is over; starting again from the title
+  resets the level to 1.
+- **Win** → increment the level, decompress that level's map, and return to
+  `ST_PLAY`. The turn counter resets, `populate_map()` rebuilds both armies
+  from `config/game_config.h` at the new level, and play resumes on the new
+  field.
+
+The level counter lives with the game state, not the map: `ST_TITLE` sets it to
+1 and `ST_OVER` increments it on a win. There are ten levels, so an increment to
+**11** is the campaign being finished rather than another map to load, and
+`ST_OVER` sends the player to `ST_WON` instead of `ST_PLAY`.
 
 ## The loop
+
+Implementation: `src/game.c`, state ids in `include/game.h`.
 
 One iteration of `game_run()` is one 50 Hz frame:
 
@@ -90,26 +175,25 @@ Consequences the design has to respect:
 | `ST_TITLE` | "ZX STRATEGY" + hardware report | Front end; entry to a game |
 | `ST_PLAY` | "THE FIELD" — 8x4 page of terrain | The game proper |
 | `ST_MAP` | "CAMPAIGN MAP" — whole world | Read-only overview, opened from play |
-| `ST_PAUSE` | play screen, hint line replaced | Freeze play |
+| `ST_OVER` | win / lose message | Ends a level; advances or abandons the campaign |
+| `ST_WON` | "CAMPAIGN COMPLETE" | The last level was won; the campaign is over |
 | `ST_GALLERY` | full-screen artwork | Show a decompressed graphic |
 | `ST_MUSIC` | "PLAYING" banner | Play a tune (blocks) |
 
 ```
-                  ┌─────────────────────── X ────────────────────────┐
-                  ▼                                                  │
-            ┌──────────┐  ENTER/FIRE   ┌──────────┐  SPACE   ┌────────┴──┐
-            │ ST_TITLE │ ────────────▶ │ ST_PLAY  │ ───────▶ │ ST_PAUSE  │
-            └────┬─────┘               └──┬────┬──┘ ◀─SPACE─ └───────────┘
-                 │                        │    │
-            G/M  │                    M   │    │  G
-                 │                        ▼    │
-                 │                  ┌──────────┐
-                 │                  │  ST_MAP  │ ──── SPACE / X / FIRE ──▶ ST_PLAY
-                 │                  └──────────┘
-                 ▼
-        ┌──────────────┐   ┌───────────┐
-        │  ST_GALLERY  │   │ ST_MUSIC  │   both return to whichever state
-        └──────────────┘   └───────────┘   opened them (`back_state`)
+            ┌──────────┐  ENTER/FIRE   ┌──────────┐   M    ┌──────────┐
+            │ ST_TITLE │ ────────────▶ │ ST_PLAY  │ ─────▶ │  ST_MAP  │
+            │          │ ◀─────── X ── │          │ ◀───── │          │
+            └───┬───┬──┘               └──┬────┬──┘ SPACE  └──────────┘
+              M │   │ G                 G │    │ a base or an army is lost
+                │   └──────────┬──────────┘    ▼
+                ▼              ▼          ┌──────────┐
+        ┌───────────┐  ┌──────────────┐   │ ST_OVER  │
+        │ ST_MUSIC  │  │  ST_GALLERY  │   └────┬─────┘
+        └───────────┘  └──────────────┘        │
+          both return to whichever             ├─ WIN, level < 10 ─▶ level++, load ─▶ ST_PLAY
+          state opened them (`back_state`)     ├─ WIN, level 10 ─▶ ST_WON ─ any key ─▶ ST_TITLE
+                                               └─ LOSE ───────────────────────────────▶ ST_TITLE
 ```
 
 ### ST_TITLE
@@ -137,8 +221,8 @@ Consequences the design has to respect:
 - **Movement**: one cell per step, blocked by terrain whose Tiled tile carries
   `impassable` (currently water). Diagonals fall out of two directions being
   held at once.
-- **Exits**: `SELECT` ends the turn (turn counter only, for now), `SPACE` →
-  `ST_PAUSE`, `M` → `ST_MAP`, `G` → gallery, `X` → title.
+- **Exits**: `SELECT` ends the turn (turn counter only, for now), `M` →
+  `ST_MAP`, `G` → gallery, `X` → title.
 
 ### ST_MAP
 
@@ -152,13 +236,34 @@ Consequences the design has to respect:
 - **Exits**: `SPACE` (also `X` or fire) returns to `ST_PLAY`. The cursor is
   seeded at the party's cell each time it opens.
 
-### ST_PAUSE
+### ST_OVER
 
-- **Shows**: the play screen untouched, with the hint line replaced by
-  "PAUSED — SPACE TO RESUME". Entering does **not** repaint the field, so
-  resuming is instant and the frozen frame is exactly what the player left.
-- **Per frame**: nothing — this is also the state to hang a menu off.
-- **Exits**: `SPACE` / `SELECT` resumes, `X` abandons to the title.
+- **Shows**: a win or lose message on a cleared screen, the level just played,
+  and a prompt for the key that continues.
+- **Per frame**: nothing.
+- **Exits**: `SELECT`. On a **loss** that goes back to `ST_TITLE` — the campaign
+  is over and the next game starts at level 1. On a **win** it increments the
+  level, loads that level's map, repopulates both armies and enters `ST_PLAY`;
+  past the last level, it goes to `ST_WON`.
+- The load happens in `enter_*`, outside the vblank window: rebuilding
+  `terrain[]` and placing an army is far more than a frame's work, and the
+  screen is repainted by `enter_play()` afterwards anyway.
+- **Past the last level** → `ST_WON`. `++level > LEVEL_COUNT` is the test.
+- **Loading another level** already works: the campaign is ten 14x7 maps,
+  `assets/maps/level_1.tmx` .. `level_10.tmx`, ZX0'd into `include/level_N.h`
+  by the build and reached through `level_maps[]` in `src/game.c`. `load_map()`
+  decompresses whichever level `level` names into `terrain[]` and seeds the
+  party from that level's `start` object. All ten cost ~330 bytes compressed.
+
+### ST_WON
+
+- **Shows**: "CAMPAIGN COMPLETE" on a cleared screen, with the number of levels
+  won and a prompt.
+- **Per frame**: nothing.
+- **Exits**: any key returns to `ST_TITLE`, which resets the level to 1 when
+  the player starts again. It uses the gallery's release-then-press debounce so
+  the keypress that finished the last level cannot dismiss the ending.
+- Reached only from `ST_OVER`, when a win takes the level past `LEVEL_COUNT`.
 
 ### ST_GALLERY
 
@@ -189,14 +294,3 @@ Screen budget to respect: row 0 is the title bar, rows 18-21 the status panel
 and hint line, **row 22 must stay pixel-blank** (the floating bus sync marker
 lives in its attributes), and no attribute anywhere may be `0x03`.
 
-## Open questions
-
-Not designed yet — each is a rules layer on top of the state machine above:
-
-- **Turns**: what "end turn" resolves. Currently it only increments a counter.
-- **Units**: is the `@` a party, an army, or a cursor for selecting units?
-- **Orders**: does `ST_MAP` become interactive (issue moves), or does a new
-  `ST_ORDERS` state own that?
-- **Combat**: resolved on the field page, on the overview, or in its own state?
-- **Economy / objectives**: what the player is accumulating and what ends a game.
-- **Save/load**: 48K tape realities probably mean a password/seed, not a save.

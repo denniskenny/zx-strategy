@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Convert a Tiled .tmx map into a C header of raw tile GIDs.
+"""Convert a Tiled .tmx map into a C header of tile GIDs.
 
 The map is emitted exactly as Tiled stored it — one byte per tile, row
-major, holding the layer's GID.  Alongside it the tileset becomes a small
+major, holding the layer's GID — either raw (NAME_gids[]) or ZX0'd
+(NAME_gids_zx0[], with --zx0).  Alongside it the tileset becomes a small
 terrain table: NAME_GID_* constants, NAME_terrain_names[] (status labels)
 and NAME_terrain_blocked[] (from each tile's "impassable" property), all
 in tileset order.  Terrain index = GID - NAME_GID_FIRST, which is also
@@ -15,16 +16,49 @@ NAME_START_X / NAME_START_Y in tile coordinates.
 Only orthogonal maps with a single CSV-encoded tile layer are supported:
 that is what Tiled writes by default and all the ZX runtime needs.
 
+Every map in a campaign normally shares one tileset, so --shared-terrain
+omits the per-map terrain tables (the levels would otherwise carry ten
+identical copies of the names and blocked flags).  NAME_TERRAIN_SIG is
+still emitted either way: it hashes the tileset, so src/game.c can fail
+the build when a level's tileset has drifted from the one whose tables it
+is borrowing.
+
 Usage:
     python3 tools/tmx2header.py map.tmx output.h [--name NAME]
+                                [--zx0 /path/to/zx0] [--shared-terrain]
 """
 
 import os
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
 
 LABEL_W = 8     # status-panel label width in src/game.c
+
+
+def terrain_sig(first_gid, terrains):
+    """A cheap 16-bit hash of the tileset: order, names and passability.
+
+    Two maps that agree on this can share one terrain table."""
+    h = first_gid & 0xFFFF
+    for gid in sorted(terrains):
+        name, blocked = terrains[gid]
+        for ch in name:
+            h = (h * 33 + ord(ch)) & 0xFFFF
+        h = (h * 33 + (1 if blocked else 0)) & 0xFFFF
+    return h
+
+
+def compress(data, zx0, name):
+    """ZX0 the GID array; returns the compressed bytes."""
+    raw = f"/tmp/{name}_map.bin"
+    comp = f"/tmp/{name}_map.zx0"
+    open(raw, "wb").write(bytes(data))
+    if os.path.exists(comp):
+        os.remove(comp)
+    subprocess.run([zx0, "-f", raw, comp], check=True, capture_output=True)
+    return open(comp, "rb").read()
 
 
 def die(msg):
@@ -88,12 +122,22 @@ def parse_start(root, tw, th):
 def main():
     args = [a for a in sys.argv[1:]]
     name = None
+    zx0 = None
+    shared = False
+    if "--shared-terrain" in args:
+        args.remove("--shared-terrain")
+        shared = True
     if "--name" in args:
         i = args.index("--name")
         name = args[i + 1]
         del args[i:i + 2]
+    if "--zx0" in args:
+        i = args.index("--zx0")
+        zx0 = args[i + 1]
+        del args[i:i + 2]
     if len(args) != 2:
-        print(f"Usage: {sys.argv[0]} map.tmx output.h [--name NAME]")
+        print(f"Usage: {sys.argv[0]} map.tmx output.h [--name NAME] "
+              "[--zx0 /path/to/zx0] [--shared-terrain]")
         sys.exit(1)
 
     src, dst = args
@@ -124,6 +168,8 @@ def main():
         print(f"  note: terrain types not used by the map: {', '.join(unused)}")
 
     start = parse_start(root, tw, th)
+    sig = terrain_sig(first_gid, terrains)
+    zdata = compress(gids, zx0, name) if zx0 else None
     upper = name.upper()
     guard = f"_{os.path.basename(dst).replace('.', '_').upper()}_"
 
@@ -141,34 +187,61 @@ def main():
                 f" sheets. */\n")
         f.write(f"#define {upper}_GID_FIRST {first_gid}\n")
         f.write(f"#define {upper}_TERRAIN_COUNT {len(terrains)}\n")
+        f.write(f"#define {upper}_TERRAIN_SIG 0x{sig:04X}"
+                "   /* tileset hash: order, names, passability */\n")
         for gid in sorted(terrains):
             f.write(f"#define {upper}_GID_{terrains[gid][0]} {gid}\n")
-        f.write(f"\n/* Status-panel labels, padded to {LABEL_W}"
-                " characters. */\n")
-        f.write(f"static const char *const {name}_terrain_names"
-                f"[{len(terrains)}] = {{\n")
-        for gid in sorted(terrains):
-            label = terrains[gid][0][:LABEL_W].ljust(LABEL_W)
-            f.write(f"    \"{label}\",\n")
-        f.write("};\n")
-        f.write("\n/* 1 = the party cannot enter (Tiled property"
-                " \"impassable\"). */\n")
-        f.write(f"static const uint8_t {name}_terrain_blocked"
-                f"[{len(terrains)}] = {{\n    ")
-        f.write(", ".join("1" if terrains[g][1] else "0"
-                          for g in sorted(terrains)))
-        f.write("\n};\n")
-        f.write(f"\n/* Layer \"{layer_name}\": {cols}x{rows} GIDs, row major. */\n")
-        f.write(f"static const uint8_t {name}_gids[{cols} * {rows}] = {{\n")
-        for r in range(rows):
-            row = gids[r * cols:(r + 1) * cols]
-            f.write("    " + ", ".join(str(g) for g in row))
-            f.write(",\n" if r + 1 < rows else "\n")
-        f.write("};\n\n")
+        if shared:
+            f.write("\n/* --shared-terrain: the names/blocked tables live"
+                    " with the first map of\n   the campaign; every map"
+                    " with the same _TERRAIN_SIG can use them. */\n")
+        else:
+            f.write(f"\n/* Status-panel labels, padded to {LABEL_W}"
+                    " characters. */\n")
+            f.write(f"static const char *const {name}_terrain_names"
+                    f"[{len(terrains)}] = {{\n")
+            for gid in sorted(terrains):
+                label = terrains[gid][0][:LABEL_W].ljust(LABEL_W)
+                f.write(f"    \"{label}\",\n")
+            f.write("};\n")
+            f.write("\n/* 1 = the party cannot enter (Tiled property"
+                    " \"impassable\"). */\n")
+            f.write(f"static const uint8_t {name}_terrain_blocked"
+                    f"[{len(terrains)}] = {{\n    ")
+            f.write(", ".join("1" if terrains[g][1] else "0"
+                              for g in sorted(terrains)))
+            f.write("\n};\n")
+        if zdata is None:
+            f.write(f"\n/* Layer \"{layer_name}\": {cols}x{rows} GIDs,"
+                    " row major. */\n")
+            f.write(f"static const uint8_t {name}_gids[{cols} * {rows}]"
+                    " = {\n")
+            for r in range(rows):
+                row = gids[r * cols:(r + 1) * cols]
+                f.write("    " + ", ".join(str(g) for g in row))
+                f.write(",\n" if r + 1 < rows else "\n")
+            f.write("};\n\n")
+        else:
+            f.write(f"\n/* Layer \"{layer_name}\": {cols}x{rows} GIDs,"
+                    f" row major, ZX0\n   ({len(zdata)} <-"
+                    f" {cols * rows} bytes).  load_map() decompresses this"
+                    " straight\n   into terrain[] and converts the GIDs"
+                    " in place. */\n")
+            f.write(f"#define {upper}_RAW_SIZE ({cols} * {rows})\n")
+            f.write(f"static const uint8_t {name}_gids_zx0[{len(zdata)}]"
+                    " = {\n")
+            for i in range(0, len(zdata), 16):
+                chunk = zdata[i:i + 16]
+                f.write("    " + ", ".join(f"0x{b:02X}" for b in chunk))
+                f.write(",\n" if i + 16 < len(zdata) else "\n")
+            f.write("};\n\n")
         f.write(f"#endif /* {guard} */\n")
 
-    print(f"Written {dst}: {cols}x{rows} = {cols * rows} tiles"
-          + (f", start ({start[0]},{start[1]})" if start else ""))
+    size = (f"ZX0 {len(zdata)} B <- {cols * rows} B" if zdata is not None
+            else f"{cols * rows} tiles raw")
+    print(f"Written {dst}: {cols}x{rows}, {size}"
+          + (f", start ({start[0]},{start[1]})" if start else "")
+          + (", shared terrain table" if shared else ""))
 
 
 if __name__ == "__main__":

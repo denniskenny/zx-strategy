@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Level 5 of the ZX Strategy campaign.  Authored by hand; Tiled opens
+     and re-saves it fine.  tools/tmx2header.py converts this into
+     include/level_5.h (ZX0'd GIDs) at build time; the tileset must match
+     level_1's, which src/game.c checks with LEVEL_*_TERRAIN_SIG.
+     See .claude/skills/tiled-maps. -->
+<map version="1.10" tiledversion="1.10.2" orientation="orthogonal"
+     renderorder="right-down" width="14" height="7" tilewidth="16"
+     tileheight="16" infinite="0" nextlayerid="3" nextobjectid="2">
+ <tileset firstgid="1" name="terrain" tilewidth="16" tileheight="16" tilecount="5" columns="0">
+  <grid orientation="orthogonal" width="1" height="1"/>
+  <tile id="0">
+   <properties>
+    <property name="terrain" value="PLAIN"/>
+   </properties>
+  </tile>
+  <tile id="1">
+   <properties>
+    <property name="terrain" value="FOREST"/>
+   </properties>
+  </tile>
+  <tile id="2">
+   <properties>
+    <property name="impassable" type="bool" value="true"/>
+    <property name="terrain" value="WATER"/>
+   </properties>
+  </tile>
+  <tile id="3">
+   <properties>
+    <property name="terrain" value="HILLS"/>
+   </properties>
+  </tile>
+  <tile id="4">
+   <properties>
+    <property name="terrain" value="CITY"/>
+   </properties>
+  </tile>
+ </tileset>
+ <layer id="1" name="terrain" width="14" height="7">
+  <data encoding="csv">
+1,1,3,3,4,4,3,3,1,1,5,1,1,1,
+1,3,3,1,1,3,3,1,1,3,3,3,3,1,
+1,1,3,1,5,1,1,3,3,1,1,3,3,1,
+1,1,1,1,1,1,1,1,1,1,1,1,1,1,
+1,1,3,1,1,5,1,1,3,3,1,1,3,1,
+1,3,3,3,1,1,3,3,1,1,3,3,3,1,
+1,1,5,3,1,1,3,3,4,4,3,3,1,1
+</data>
+ </layer>
+ <objectgroup id="2" name="markers">
+  <object id="1" name="start" x="112" y="48"><point/></object>
+ </objectgroup>
+</map>

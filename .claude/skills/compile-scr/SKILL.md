@@ -22,6 +22,7 @@ Convert screens and sprites in `assets/` into C headers in `include/`, compresse
 | `.scr` → dithered reveal frames | `tools/scr_dither_reveal.py` |
 | `.zxp` (ZX-Paintbrush) → sprite header | `tools/zxp2header.py` (`--frames N --horizontal --downscale --name X`) |
 | `.zxp` → screen-layout pixels + ZX0 | `tools/zxp2zx0.py` |
+| `.zxp` strip → ZX0 blob + per-cell attributes | `tools/zxp_tiles_zx0.py` (`--tiles N`) — terrain tiles and unit sprites, see `.claude/skills/zx-tiles` |
 
 ZX0 refuses to overwrite an existing output file — always `rm -f` the `.zx0` first (or pass `-f`).
 

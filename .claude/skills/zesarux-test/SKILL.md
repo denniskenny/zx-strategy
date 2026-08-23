@@ -145,7 +145,7 @@ set-ui-io-ports ffffffffffffffff00    # release
 
 `game_run()` acts on *edges* of a combined keyboard+Kempston action byte, so always release between presses. Kempston is only polled when `has_kempston` is set by `hw_detect()`.
 
-Keyboard equivalents (half-rows, active low): Q up on `0xFBFE` bit 0, A down on `0xFDFE` bit 0, O/P on `0xDFFE` bits 1/0, ENTER select on `0xBFFE` bit 0, SPACE pause/close on `0x7FFE` bit 0, G gallery on `0xFDFE` bit 4, M on `0x7FFE` bit 2 (map while playing, music on the title screen). Z/X (select/back) sit on the CAPS SHIFT row only because `scan_input()` reads them.
+Keyboard equivalents (half-rows, active low): Q up on `0xFBFE` bit 0, A down on `0xFDFE` bit 0, O/P on `0xDFFE` bits 1/0, ENTER select on `0xBFFE` bit 0, SPACE close-the-map on `0x7FFE` bit 0, G gallery on `0xFDFE` bit 4, M on `0x7FFE` bit 2 (map while playing, music on the title screen). Z/X (select/back) sit on the CAPS SHIFT row only because `scan_input()` reads them.
 
 The byte order for `set-ui-io-ports` is `0xFEFE, 0xFDFE, 0xFBFE, 0xF7FE, 0xEFFE, 0xDFFE, 0xBFFE, 0x7FFE` then the joystick; each row uses only bits 0-4. So holding G is `set-ui-io-ports ffefffffffffffff00`.
 
