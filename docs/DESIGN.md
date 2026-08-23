@@ -15,7 +15,9 @@ The enemy units will then take their turn. Enemy units are red, player units are
 The game starts with level_1.tmx. 
 The global starting values for each unit type are defined in `config/game_config.h`.
 
-A populate_map() function creates a friendly base and an enemy base at opposite corners of the map. It takes the level as a parameter, reads that level's roster from `config/game_config.h`, and places the created units within N tiles of the base (N = `UNITS_PLACE_RADIUS`, currently 4) but not on water.
+A populate_map() function creates a friendly base and an enemy base at opposite corners of the map. It takes the level as a parameter, reads that level's roster from `config/game_config.h`, and places the created units within N tiles of the base (N = `UNITS_PLACE_RADIUS`, currently 4) but not on impassable tiles.
+
+Because the bases sit in opposite corners, every map has to keep those corners passable and joined by a land path — otherwise a base is unreachable and the level cannot be won. The map converter checks both.
 
 Each subsequent odd-numbered level will have an additional unit of each type.
 
@@ -71,7 +73,7 @@ while cover is under 100%, so no unit is ever unkillable by position alone.
 
 ### Attack Range
 
-Attack range is calculated using a simple algorithm that calculates the distance from the unit to all reachable enemy units. The player can cycle through the enemy units in attack range using the O and P keys and select the target with the space bar.
+Attack range is calculated using a simple algorithm that calculates the distance from the unit to every enemy unit, and takes those within range. Terrain does not block it, so no path is needed. The player can cycle through the enemy units in attack range using the O and P keys and select the target with the space bar.
 
 ### Units
 Units have an attack range and damage value. They have a health value and can be killed. They also have a movement range
@@ -136,9 +138,9 @@ happens next:
   field.
 
 The level counter lives with the game state, not the map: `ST_TITLE` sets it to
-1 and `ST_OVER` increments it on a win. There are ten levels, so an increment to
-**11** is the campaign being finished rather than another map to load, and
-`ST_OVER` sends the player to `ST_WON` instead of `ST_PLAY`.
+1 and `ST_OVER` increments it on a win. There are ten levels, so winning **past
+the last level** is the campaign being finished rather than another map to
+load, and `ST_OVER` sends the player to `ST_WON` instead of `ST_PLAY`.
 
 ## The loop
 
@@ -158,11 +160,14 @@ handle_input()        state transitions
 
 Consequences the design has to respect:
 
-- **Everything visible is drawn in the vblank window.** A state may repaint at
-  most ~1 KB of screen per frame; anything larger must be spread across frames
-  (see `ST_PLAY`) or done in `enter_*`, which runs outside the window.
-- **One state is active at a time.** There is no state stack; a state that
-  interrupts another records where to return in `back_state`.
+- **Everything visible is drawn in the vblank window.** A state may repaint
+  around 256 bytes of screen per frame — two 4x4-character tiles, which is what
+  `PAGE_CELLS` is set to; anything larger must be spread across frames (see
+  `ST_PLAY`) or done in `enter_*`, which runs outside the window.
+- **One state is active at a time.** There is no state stack; a state that can
+  be opened from more than one place records where to return in `back_state`
+  (`ST_GALLERY` and `ST_MUSIC`). States with a single caller — `ST_MAP` — just
+  name their destination.
 - **Input is edge-triggered and debounced**: an action must appear in two
   consecutive frames, then fires once on its rising edge. Held directions
   repeat every `NAV_DELAY` frames. Keyboard and Kempston fold into one action
@@ -202,14 +207,17 @@ Consequences the design has to respect:
   vsync modes is active, and the key legend. The hardware report doubles as a
   smoke test — if vsync fell back to HALT, the player sees it.
 - **Per frame**: nothing.
-- **Exits**: `SELECT` (ENTER / Z / fire 1) starts a game — resets the turn
-  counter, loads the map and enters `ST_PLAY`. `G` → gallery, `M` → music.
+- **Exits**: `SELECT` (ENTER / Z / fire 1) starts a game — sets the level to 1
+  and the turn counter to 1, loads that level's map and enters `ST_PLAY`.
+  `G` → gallery, `M` → music.
 
 ### ST_PLAY
 
 - **Shows**: an **8x4 page** of the world in 4x4-character tiles (rows 1-16,
   full screen width), the party as `@` on its terrain tile, and a status panel:
-  turn number, party position, terrain under the party.
+  turn number, party position, terrain under the party. A page that runs off
+  the edge of the world — the right and bottom pages of a 14x7 map — blanks the
+  cells beyond it with `ATTR_VOID`.
 - **Per frame**: move the party (held directions repeat), repaint the two cells
   a step changed, advance a page flip if one is in progress, refresh the status
   panel when dirty.
@@ -244,11 +252,10 @@ Consequences the design has to respect:
 - **Exits**: `SELECT`. On a **loss** that goes back to `ST_TITLE` — the campaign
   is over and the next game starts at level 1. On a **win** it increments the
   level, loads that level's map, repopulates both armies and enters `ST_PLAY`;
-  past the last level, it goes to `ST_WON`.
+  past the last level — `++level > LEVEL_COUNT` — it goes to `ST_WON` instead.
 - The load happens in `enter_*`, outside the vblank window: rebuilding
   `terrain[]` and placing an army is far more than a frame's work, and the
   screen is repainted by `enter_play()` afterwards anyway.
-- **Past the last level** → `ST_WON`. `++level > LEVEL_COUNT` is the test.
 - **Loading another level** already works: the campaign is ten 14x7 maps,
   `assets/maps/level_1.tmx` .. `level_10.tmx`, ZX0'd into `include/level_N.h`
   by the build and reached through `level_maps[]` in `src/game.c`. `load_map()`
@@ -259,7 +266,8 @@ Consequences the design has to respect:
 
 - **Shows**: "CAMPAIGN COMPLETE" on a cleared screen, with the number of levels
   won and a prompt.
-- **Per frame**: nothing.
+- **Per frame**: sample the keyboard once, the same release-then-press wait the
+  gallery uses.
 - **Exits**: any key returns to `ST_TITLE`, which resets the level to 1 when
   the player starts again. It uses the gallery's release-then-press debounce so
   the keypress that finished the last level cannot dismiss the ending.
@@ -291,6 +299,7 @@ Consequences the design has to respect:
    another state and must return to it.
 
 Screen budget to respect: row 0 is the title bar, rows 18-21 the status panel
-and hint line, **row 22 must stay pixel-blank** (the floating bus sync marker
+and hint line (a state without a status panel may use them for its own text,
+as `ST_TITLE` does with row 20), **row 22 must stay pixel-blank** (the floating bus sync marker
 lives in its attributes), and no attribute anywhere may be `0x03`.
 
