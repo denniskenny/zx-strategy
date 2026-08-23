@@ -52,6 +52,13 @@
  *
  * DELETE THIS, and the code it guards, in P4 when the real win check
  * over the loser's roster replaces it.  See docs/PLAN.md. */
+/* Overridable from the Makefile: the 128k target builds without it.
+   That build has a hard 16 KB ceiling and the debug keys are the one
+   thing in here that is not the game.  tests/p0_state_walk.py drives
+   the campaign through them, so the 48k build — the one the tests
+   use — keeps them. */
+#ifndef DEBUG_STATE_WALK
 #define DEBUG_STATE_WALK 1
+#endif
 
 #endif /* _APP_CONFIG_H_ */

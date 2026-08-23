@@ -114,6 +114,7 @@ extern uint8_t player_won;      /* the outcome ST_OVER is reporting     */
 uint8_t attack_reach(uint8_t u);
 uint8_t is_target(uint8_t cell);   /* selected can hit whoever is here  */
 void attack(uint8_t cell);         /* ...so do it, and spend the action */
+uint8_t damage_at(uint8_t attacker, uint8_t cell);
 
 /* Set when a side has lost its base or its last unit.  logic.c cannot
    change game state — that belongs to the loop — so it raises this and

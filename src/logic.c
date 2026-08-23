@@ -503,15 +503,28 @@ static void check_win(uint8_t loser_side)
    attacker's damage and ROUNDS UP, so an attack that lands always takes
    at least one point while cover is under 100% — no unit is ever
    unkillable by standing somewhere good. */
+/* What `attacker` would take off whatever stands on `cell`.  Cover is a
+   percentage off the raw damage and ROUNDS UP, so a landed attack always
+   costs at least a point while cover is under 100% — no unit is ever
+   unkillable by standing somewhere good.
+
+   Shared with the enemy's target picker, which has to know the outcome
+   before it commits: two copies of this drifting apart is exactly the
+   sort of thing that makes an AI look broken. */
+uint8_t damage_at(uint8_t attacker, uint8_t cell)
+{
+    uint16_t raw = unit_damage[u_type[attacker]];
+    uint8_t cover = terrain_cover[terrain[cell]];
+    uint8_t dmg = (uint8_t)((raw * (100u - cover) + 99u) / 100u);
+
+    return dmg ? dmg : 1;
+}
+
 void attack(uint8_t cell)
 {
     uint8_t v = occupancy[cell];
-    uint8_t cover = terrain_cover[terrain[cell]];
-    uint16_t raw = unit_damage[u_type[selected]];
-    uint8_t dmg = (uint8_t)((raw * (100u - cover) + 99u) / 100u);
+    uint8_t dmg = damage_at(selected, cell);
     uint8_t side;
-
-    if (dmg == 0) dmg = 1;
 
     u_flags[selected] |= U_ACTED;
 
@@ -659,17 +672,14 @@ static uint8_t pick_target(uint8_t u)
     uint8_t i, best = NO_CELL, best_score = 0;
 
     for (i = 0; i < unit_count; i++) {
-        uint8_t cell, cover, score;
-        uint16_t raw;
+        uint8_t cell, score;
 
         if (u_type[i] == NO_UNIT) continue;
         if (u_flags[i] & U_SIDE) continue;          /* player units only */
         cell = u_cell[i];
         if (cell_dist(u_cell[u], cell) > unit_range[u_type[u]]) continue;
 
-        cover = terrain_cover[terrain[cell]];
-        raw = unit_damage[u_type[u]];
-        score = (uint8_t)((raw * (100u - cover) + 99u) / 100u);
+        score = damage_at(u, cell);
         if (score >= u_hp[i]) score = 200;          /* a kill outranks all */
         if (u_type[i] == UNIT_BASE) score = (uint8_t)(score / 2 + 150);
         if (best == NO_CELL || score > best_score) {

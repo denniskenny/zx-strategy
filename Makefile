@@ -15,8 +15,9 @@ UNAME_S := $(shell uname -s)
 #   48k   no shadow screen, so nothing pages and code may run all the
 #         way to 0xFFFF: 32 KB, twice the room, at the cost of tearing.
 #
-#   make            both
-#   make TARGET=48k / TARGET=128k    just one
+#   make            the 48k tap (the default: it runs everywhere)
+#   make both       both taps
+#   make TARGET=128k   just the 128k one
 #   make run        the 48k tap in Fuse
 #
 # The 48k build still runs on a 128K or +3 — it simply does not use the
@@ -25,7 +26,7 @@ TARGET ?= 48k
 
 ifeq ($(TARGET),128k)
 APP        = zxstrategy128
-TARGET_DEF = -DBUILD_SHADOW=1
+TARGET_DEF = -DBUILD_SHADOW=1 -DDEBUG_STATE_WALK=0
 MEM_LIMIT  = 0xC000
 else
 APP        = zxstrategy
@@ -192,6 +193,15 @@ map:
 	$(MAKE) clean
 	$(MAKE) USER_CFLAGS="-m"
 	$(PYTHON) tools/checkmem.py $(APP).map --limit $(MEM_LIMIT)
+
+# Both taps in one go.  Recursive rather than parallel: the two share
+# every intermediate name, so building them at once would have them
+# overwrite each other's objects.
+.PHONY: both
+both:
+	$(MAKE) TARGET=48k
+	$(MAKE) TARGET=128k
+	@ls -l zxstrategy.tap zxstrategy128.tap
 
 .PHONY: checkmem memmap
 checkmem: map

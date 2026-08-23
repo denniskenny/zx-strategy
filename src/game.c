@@ -367,7 +367,7 @@ static uint8_t enemy_beat;
    there would take longer than the move itself. */
 static void view_to(uint8_t cell)
 {
-    cursor_x = (uint8_t)(cell % GRID_COLS);
+    cursor_x = col_of[cell];        /* a table, not a divide */
     cursor_y = (uint8_t)(cell / GRID_COLS);
     render_play();          /* set_page, whole window, one clean reveal */
     render_hint("      ENEMY TURN");
