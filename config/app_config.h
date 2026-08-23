@@ -43,8 +43,4 @@
  * holds a known NON-marker value.  Attr row 23, col 0. */
 #define VSYNC_PRELOAD_ADDR 0x5AE0
 
-/* --- Demo tuning --- */
-#define BAR_Y       96      /* pixel row of the moving tear-test bar */
-#define BAR_SPEED   4       /* pixels per frame */
-
 #endif /* _APP_CONFIG_H_ */

@@ -86,7 +86,7 @@ This project uses **0x03** (black paper, magenta ink — invisible on the blank 
 #define VSYNC_PRELOAD_ADDR 0x5AE0   /* attr row 23, col 0 */
 ```
 
-Attributes used elsewhere by the demo are 0x45, 0x46, 0x47 and 0x07 — none of them (nor `| 1`) equals 0x03. **Re-verify this whenever you add new attribute values.**
+Attributes used elsewhere by `src/game.c` are 0x00, 0x04, 0x07, 0x44, 0x45, 0x46, 0x47 and 0x78 — none of them (nor `| 1`) equals 0x03. **Re-verify this whenever you add new attribute values.**
 
 ## Marker Placement — use a full row
 

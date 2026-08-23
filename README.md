@@ -9,9 +9,9 @@ graphics/input/PRNG helpers, a ZX0 asset pipeline with a runtime decompressor,
 the Tritone (Beepola) beeper music pipeline, and the Claude skills that document
 all of it.
 
-The current program is a demo/scaffold: a status panel reporting the detected
-machine and vsync mode, a fast moving bar that visibly tears when the sync is
-switched off, and a Tritone tune on the M key.
+The current program is a scaffold: a frame-synced game loop with switchable
+states (title, play, campaign map, pause, graphic gallery, music), polling
+keyboard and Kempston input once per frame.
 
 ## Requirements
 
@@ -42,19 +42,36 @@ make USER_CFLAGS="-m"
 
 | Key | Kempston | Action |
 |-----|----------|--------|
-| O / P | left / right | Bar speed (1–8) |
-| S | fire 1 | Toggle floating bus sync on/off |
-| R | fire 2 | Reset the frame counter |
-| G | — | Show the ZX0-compressed Great Old One (any key returns) |
-| M | — | Play the Tritone tune (blocks; any key returns) |
+| Q / A / O / P | up / down / left / right | Move the party, or the map cursor (repeats when held) |
+| ENTER, Z | fire 1 | Select — start the game / end the turn |
+| X | fire 2 | Back — return to the title |
+| SPACE | — | Pause / resume play; dismiss the map |
+| M | — | Campaign map while playing; Tritone tune on the title screen |
+| G | — | Gallery: the ZX0-compressed Great Old One (any key returns) |
 
-Z and X also work as fire 1 / fire 2 (that's what `scan_input()` reads), but the
-demo's own bindings are S/R/M so nothing sits on the CAPS SHIFT row.
+Actions from the keyboard and the joystick are folded into one byte, so a single
+edge test debounces both: a bit must be seen in two consecutive frames and then
+fires on its rising edge.
 
-With sync **on** the bar is redrawn entirely during the border/vblank window and
-stays solid; with sync **off** the redraw races the beam and the bar tears. The
-border turns **red** while the frame's work runs and black while waiting, so the
-red band shows how much of the frame budget is actually used.
+The border turns **red** while the frame's work runs and black while waiting for
+the beam, so the red band shows how much of the frame budget is actually used.
+
+## Game loop
+
+`game_run()` in `src/game.c` is one frame per iteration: `vsync_wait()` →
+update the active state → poll input → optional state switch. States are
+`ST_TITLE`, `ST_PLAY`, `ST_MAP`, `ST_PAUSE`, `ST_GALLERY` and `ST_MUSIC`; each
+has an `enter_*` function that paints its screen once, and only play and map do
+per-frame work. To add a state: add the `ST_` id in `include/game.h`, an
+`enter_*` case, and its transitions in `handle_input()`. The states, their
+screens and their transitions are specified in [`docs/DESIGN.md`](docs/DESIGN.md).
+
+`ST_PLAY` is entered from the title and is the game proper: an **8x4 page** of
+4x4-character terrain cells filling the screen width, with the party (`@`)
+walking the grid loaded from the Tiled map (water is impassable) and a
+turn/position/terrain panel below. **M** opens `ST_MAP`, the overview grid with a free
+cursor and the party's cell highlighted; **SPACE** dismisses it back to play.
+**SPACE** in play pauses.
 
 ## Layout
 
@@ -70,14 +87,18 @@ src/gfx.c                screen address maths, blits, XOR sprites, ROM-font text
 src/input.c              keyboard half-rows + Kempston
 src/prng.c               16-bit LFSR/Weyl PRNG
 src/dzx0.c               ZX0 decompression (wraps z88dk's dzx0_standard)
-src/demo.c               the demo loop
+src/game.c               the game loop + states
 assets/goo.scr           the Great Old One (example graphic)
+assets/tiles_map.zxp     16x16 terrain tiles for the campaign overview
+assets/tiles_view.zxp    32x32 terrain tiles for the play view
+assets/maps/overworld.tmx  the world, authored in Tiled
 assets/music/            Tritone template/engine + one example tune
 tools/                   asset + music converters, ZRCP profiler
 tests/fbprobe.c          floating bus diagnostic histogram
 tests/dzx0check.c        ZX0 decompression regression harness
-.claude/skills/          floating-bus-vsync, compile-scr, tritone-music,
-                         zesarux-test
+docs/DESIGN.md           design doc: game states and transitions
+.claude/skills/          floating-bus-vsync, compile-scr, tiled-maps,
+                         zx-tiles, tritone-music, zesarux-test
 ```
 
 ## Assets (ZX0)
@@ -88,6 +109,10 @@ the Makefile pattern rules do the rest:
 - `assets/NAME.scr` → `include/NAME.h` — whole screen, ZX0-compressed as
   `NAME_zx0[]`
 - `assets/NAME.zxp` → `include/NAME.h` — ZX-Paintbrush sprite, row-major
+- `assets/maps/NAME.tmx` → `include/NAME.h` — Tiled map, raw GIDs as
+  `NAME_gids[]`
+- `assets/tiles_*.zxp` → `include/tiles_*.h` — terrain tile strip, ZX0 blob as
+  `tiles_*_zx0[]` plus per-tile attributes
 
 At runtime: `dzx0_decompress(NAME_zx0, SCREEN);`. The compressor is
 `$Z88DK/bin/z88dk-zx0` by default (`make ZX0=/path/to/zx0` to override).
@@ -97,7 +122,7 @@ Converters live in `tools/` (`zx0_to_header.py`, `zxp2header.py`, `zxp2zx0.py`,
 The worked example is **the Great Old One**, `assets/goo.scr`:
 `tools/scr_crop_zx0.py` crops it to its bounding box and ZX0-compresses it
 (6144 raw → 3768 cropped → 2010 bytes), emitting `include/goo_data.h` with the
-data plus `GOO_CROP_*` placement constants. Press **G** in the demo: it is
+data plus `GOO_CROP_*` placement constants. Press **G** in the game: it is
 decompressed into a low-RAM staging buffer and blitted back at its original
 screen position.
 
@@ -106,6 +131,66 @@ compressor. z88dk ships ZX0 v1.5 and the matching `dzx0_standard`, so
 `src/dzx0.c` wraps the library routine rather than vendoring the widely copied
 68-byte v2 decoder — which silently corrupts RAM when fed v1 data. `make
 dzx0check` verifies the pair. See `.claude/skills/compile-scr`.
+
+## Maps (Tiled)
+
+`assets/maps/overworld.tmx` is the world, authored in [Tiled](https://www.mapeditor.org)
+(orthogonal, CSV layer data, tileset embedded in the `.tmx`). Each tileset tile
+carries a `terrain` property — `PLAIN`, `FOREST`, `WATER`, `HILLS` — and the map
+uses all four. A point object named `start` marks the party's starting tile.
+
+`tools/tmx2header.py` converts it at build time into `include/overworld.h`:
+
+```c
+#define OVERWORLD_COLS 14           /* ROWS, START_X, START_Y ...        */
+#define OVERWORLD_GID_FIRST 1       /* terrain id = GID - GID_FIRST      */
+#define OVERWORLD_TERRAIN_COUNT 4
+#define OVERWORLD_GID_PLAIN 1       /* ... FOREST 2, WATER 3, HILLS 4    */
+static const char *const overworld_terrain_names[4] = { ... };  /* labels  */
+static const uint8_t overworld_terrain_blocked[4] = { ... };    /* movement */
+static const uint8_t overworld_gids[14 * 7] = { ... };
+```
+
+The header holds the **raw Tiled GIDs**, so re-ordering the tileset in Tiled can
+never silently change what the data means. `load_map()` in `src/game.c` does the
+conversion in memory at load time (terrain id = `GID - OVERWORLD_GID_FIRST`) and
+seeds the party from `OVERWORLD_START_*`. Status labels come from the tileset's
+`terrain` properties and impassability from its `impassable` bools, so a new
+terrain type needs no C changes. `GRID_COLS` / `GRID_ROWS` come from the header
+too, and `#error` guards fire if a map or tile size outgrows either renderer.
+
+To add a map: drop `assets/maps/NAME.tmx` in place (CSV tile layer, embedded
+tileset, `terrain` properties) and append `include/NAME.h` to
+`GENERATED_HEADERS`. See `.claude/skills/tiled-maps` for the full recipe,
+including a hand-authorable `.tmx` template and how to add a terrain type.
+
+## Terrain tiles (ZX-Paintbrush + ZX0)
+
+Two tile strips hold the terrain art, one per renderer:
+
+| Sheet | Tile | Used by |
+|-------|------|---------|
+| `assets/tiles_map.zxp` | 16x16 px (2x2 chars) | `ST_MAP` overview |
+| `assets/tiles_view.zxp` | 32x32 px (4x4 chars) | `ST_PLAY` field view |
+
+Each sheet holds the tiles side by side **in tileset order** — column *i* is
+terrain *i*. `tools/zxp_tiles_zx0.py` slices them, ZX0-compresses the tile blob
+(512 → ~177 bytes for the view sheet) and emits the per-tile attribute table
+read from the sheet's own attribute cells, so **ink/paper is authored in
+ZX-Paintbrush** next to the art. `load_tiles()` decompresses both blobs into RAM
+once at startup and the renderers blit tiles out of them.
+
+Tile size drives the layout: `CELL_W`, `VIEW_CW` and friends in `src/game.c`
+come from the generated headers.
+
+**Why the field view pages instead of scrolling:** an 8x4 page of 4x4 tiles is
+32x16 characters, ~4 KB of screen writes. Even with a hand-written blit that is
+several frames' worth of work, so a party-centred scrolling window is off the
+table at this tile size. Instead the party walks around inside a fixed page —
+two cells redrawn per step — and the page flips only when it steps off the edge,
+repainting `PAGE_CELLS` tiles per frame so no frame overruns the vblank window.
+
+Adding or editing a tile is data-only — see `.claude/skills/zx-tiles`.
 
 ## Music (Tritone / Beepola)
 

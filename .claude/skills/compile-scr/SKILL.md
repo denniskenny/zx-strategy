@@ -75,7 +75,7 @@ include/goo_data.h: $(GOO_SRC) tools/scr_crop_zx0.py
 #define GOO_CROP_SIZE 3768
 ```
 
-6144 raw → 3768 cropped → 2010 bytes ZX0. `src/demo.c` decompresses it to a
+6144 raw → 3768 cropped → 2010 bytes ZX0. `src/game.c` decompresses it to a
 low-RAM staging buffer and blits it back at its original position:
 
 ```c
@@ -90,7 +90,7 @@ data); the runtime must then bit-reverse each byte to rebuild the right half,
 and the header gains `GOO_MIRROR_COL`.
 
 Note `scr_crop_zx0.py` handles **pixels only**. This .scr's attributes are a
-flat 0x07, so the demo just paints a solid attribute rect; for coloured art,
+flat 0x07, so the gallery state just paints a solid attribute rect; for coloured art,
 compress the trailing 768 bytes separately with `zx0_to_header.py`.
 
 To add an asset:
@@ -135,7 +135,7 @@ Notes:
 ## Regression harness
 
 `tests/dzx0check.c` (`make dzx0check`) decompresses the goo blob into the same
-staging buffer the demo uses and writes a result block at 0xF000:
+staging buffer the gallery state uses and writes a result block at 0xF000:
 
 | Address | Meaning |
 |---------|---------|

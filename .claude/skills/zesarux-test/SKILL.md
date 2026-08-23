@@ -137,15 +137,15 @@ def render(pix, attrs, path):
 Prefer Kempston — `set-ui-io-ports` takes 8 keyboard half-rows (`ff` = nothing pressed) plus one Kempston byte (active-high: bit0 right, bit1 left, bit2 down, bit3 up, bit4 fire1, bit5 fire2):
 
 ```
-set-ui-io-ports ffffffffffffffff01    # right → speed up the bar
-set-ui-io-ports ffffffffffffffff10    # fire1 → toggle sync
-set-ui-io-ports ffffffffffffffff20    # fire2 → reset the frame counter
+set-ui-io-ports ffffffffffffffff01    # right → move the cursor right
+set-ui-io-ports ffffffffffffffff10    # fire1 → select / end turn
+set-ui-io-ports ffffffffffffffff20    # fire2 → back
 set-ui-io-ports ffffffffffffffff00    # release
 ```
 
-`demo_run()` acts on *edges* of a combined keyboard+Kempston action byte, so always release between presses. Kempston is only polled when `has_kempston` is set by `hw_detect()`.
+`game_run()` acts on *edges* of a combined keyboard+Kempston action byte, so always release between presses. Kempston is only polled when `has_kempston` is set by `hw_detect()`.
 
-Keyboard equivalents (half-rows, active low): O/P speed on `0xDFFE`, S sync on `0xFDFE` bit 1, G graphic on `0xFDFE` bit 4, R reset on `0xFBFE` bit 3, M music on `0x7FFE` bit 2. Nothing is bound to the CAPS SHIFT row.
+Keyboard equivalents (half-rows, active low): Q up on `0xFBFE` bit 0, A down on `0xFDFE` bit 0, O/P on `0xDFFE` bits 1/0, ENTER select on `0xBFFE` bit 0, SPACE pause/close on `0x7FFE` bit 0, G gallery on `0xFDFE` bit 4, M on `0x7FFE` bit 2 (map while playing, music on the title screen). Z/X (select/back) sit on the CAPS SHIFT row only because `scan_input()` reads them.
 
 The byte order for `set-ui-io-ports` is `0xFEFE, 0xFDFE, 0xFBFE, 0xF7FE, 0xEFFE, 0xDFFE, 0xBFFE, 0x7FFE` then the joystick; each row uses only bits 0-4. So holding G is `set-ui-io-ports ffefffffffffffff00`.
 
@@ -153,9 +153,9 @@ The byte order for `set-ui-io-ports` is `0xFEFE, 0xFDFE, 0xFBFE, 0xF7FE, 0xEFFE,
 
 If the app appears to press its own keys (sync toggling, counters resetting with no input), check `has_kempston` first. With no joystick configured, port 0x1F is unattached and answers from the floating bus; a detector that accepts "any zero read" as proof of an interface will latch on and then feed random directions into `scan_input()`.
 
-`hw_detect()` therefore requires **all 16 samples** of `in a,(0x1F) & 0x1F` to be zero. After that fix, ZEsarUX reports `has_kempston = 0` and the demo runs for minutes with zero spurious actions.
+`hw_detect()` therefore requires **all 16 samples** of `in a,(0x1F) & 0x1F` to be zero. After that fix, ZEsarUX reports `has_kempston = 0` and the app runs for minutes with zero spurious actions.
 
-The demo also debounces: `demo_run()` needs an action bit in two consecutive frames before acting, and `wait_key()` samples once per frame with the same two-sample rule. Sampling once per frame matters — hammering the ULA port in a tight loop invites bus noise.
+`game.c` also debounces: `poll_input()` needs an action bit in two consecutive frames before acting, and the gallery state's exit check samples once per frame with the same two-sample rule. Sampling once per frame matters — hammering the ULA port in a tight loop invites bus noise.
 
 ## 6. Profiling
 

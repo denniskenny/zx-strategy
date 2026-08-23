@@ -2,12 +2,12 @@
  * main.c — Entry point for ZX Strategy
  *
  * Detects hardware and the floating bus technique BEFORE locking
- * paging, then runs the demo loop.
+ * paging, then runs the game loop.
  */
 
 #include "../include/hw.h"
 #include "../include/vsync.h"
-#include "../include/demo.h"
+#include "../include/game.h"
 
 int main(void)
 {
@@ -29,6 +29,6 @@ int main(void)
         __endasm;
     }
 
-    demo_run();
+    game_run();
     return 0;
 }

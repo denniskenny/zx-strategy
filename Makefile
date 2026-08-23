@@ -35,12 +35,19 @@ LDFLAGS=-lm -create-app
 ZX0 ?= $(firstword $(wildcard $(Z88DK)/bin/z88dk-zx0) /tmp/ZX0/src/zx0)
 ZXP2HEADER = $(PYTHON) tools/zxp2header.py
 SCR_CROP_ZX0 = $(PYTHON) tools/scr_crop_zx0.py
+ZXP_TILES_ZX0 = $(PYTHON) tools/zxp_tiles_zx0.py
 
 # assets/NAME.scr  → include/NAME.h   (full 6912-byte screen, ZX0, NAME_zx0[])
 include/%.h: assets/%.scr tools/zx0_to_header.py
 	rm -f /tmp/$*.zx0
 	$(ZX0) $< /tmp/$*.zx0
 	$(PYTHON) tools/zx0_to_header.py $@ $*_zx0:/tmp/$*.zx0
+
+# assets/maps/NAME.tmx → include/NAME.h  (Tiled map: raw GIDs + constants)
+# The runtime converts the GIDs into its own terrain ids in memory, so the
+# header stays a faithful dump of what Tiled saved.
+include/%.h: assets/maps/%.tmx tools/tmx2header.py
+	$(PYTHON) tools/tmx2header.py $< $@ --name $*
 
 # assets/NAME.zxp  → include/NAME.h   (row-major sprite, uncompressed)
 # Add --frames N / --horizontal / --downscale in a per-asset rule if needed.
@@ -57,8 +64,22 @@ GOO_SRC = assets/goo.scr
 include/goo_data.h: $(GOO_SRC) tools/scr_crop_zx0.py
 	$(SCR_CROP_ZX0) $@ $(ZX0) goo_final:$(GOO_SRC)
 
+# Terrain tile sheets: N tiles side by side in one .zxp, ZX0-compressed into
+# one blob per sheet plus a per-tile attribute table (colours are authored in
+# ZX-Paintbrush).  The runtime decompresses each blob once and blits tiles out
+# of it; tile column order must match the .tmx tileset (see
+# .claude/skills/zx-tiles).
+TILE_COUNT = 4
+
+include/tiles_map.h: assets/tiles_map.zxp tools/zxp_tiles_zx0.py
+	$(ZXP_TILES_ZX0) $< $@ --name tiles_map --tiles $(TILE_COUNT) --zx0 $(ZX0)
+
+include/tiles_view.h: assets/tiles_view.zxp tools/zxp_tiles_zx0.py
+	$(ZXP_TILES_ZX0) $< $@ --name tiles_view --tiles $(TILE_COUNT) --zx0 $(ZX0)
+
 # List generated headers here so `make assets` and `make clean` know them.
-GENERATED_HEADERS = include/goo_data.h
+GENERATED_HEADERS = include/goo_data.h include/overworld.h \
+                    include/tiles_map.h include/tiles_view.h
 
 assets: $(GENERATED_HEADERS) $(MUSIC_LINKABLE)
 
@@ -93,11 +114,11 @@ assets/music/%_linkable.asm: assets/music/%.asm tools/gen_tritone_module.py
 .SECONDARY:
 
 # --- Source files ---
-SRCS = src/main.c src/demo.c src/gfx.c src/input.c src/hw_detect.c \
+SRCS = src/main.c src/game.c src/gfx.c src/input.c src/hw_detect.c \
        src/vsync.c src/prng.c src/dzx0.c
 
 HEADERS = config/app_config.h include/gfx.h include/input.h include/hw.h \
-          include/vsync.h include/prng.h include/demo.h include/dzx0.h \
+          include/vsync.h include/prng.h include/game.h include/dzx0.h \
           include/music.h $(GENERATED_HEADERS)
 
 # --- Top-level targets ---
