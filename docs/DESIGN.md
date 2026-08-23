@@ -425,7 +425,7 @@ port `0x1FFD`, which is the obvious probe — the lock stays and the shadow
 screen with it. A tear-free scroll on one model is not worth a crash on
 another.
 
-**A flip only happens on a state change.** `render_compose()` and
+**Flips happen on state changes and on every scroll sub-step.** `render_compose()` and
 `render_show()` bracket the whole-screen painters and nothing else, so the
 buffers swap on the keys that move between screens and never while the cursor
 is moving. A cursor step presents into the screen already on show — that

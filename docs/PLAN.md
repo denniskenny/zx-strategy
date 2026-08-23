@@ -16,9 +16,8 @@ Two smaller things remain open and neither blocks P4:
 - **No +3 coverage in the tests.** ZEsarUX will not run the tap on
   `--machine P341`; a `.sna` snapshot bypasses the ROM menu on every model.
   The +3 bug survived a fully green suite for a whole session because of this.
-- **A tear-free scroll.** The shadow screen is armed on 128K and +3 and state
-  changes flip cleanly, but scroll sub-steps still present into the screen on
-  show. Flipping those needs the chrome in both buffers.
+- **Tearing on a 48K.** Accepted by design: one screen, nowhere to compose.
+  128K and +3 are tear-free throughout, state changes and scrolling alike.
 
 Two things drove the ordering:
 
@@ -533,9 +532,17 @@ writing the assembly, because it changes what the assembly looks like.
    - Paging is left OPEN (bit 5 clear) and bit 4 always set. `screens_init()`
      still proves a page-in survives before arming, so a locked port degrades
      to the 48K path rather than composing where nobody is looking.
-   - **The scroll still tears** on every machine: sub-steps present into the
-     screen already on show. Flipping those is now possible and needs the
-     chrome painted into both buffers first.
+   - **The scroll is tear-free too**, on any machine with a second screen.
+     Every sub-step composes off-display and is revealed whole, so a cursor
+     step is four clean reveals rather than four visible repaints. A 48K has
+     nowhere to hide the work and still tears — that is the machine, not the
+     design.
+   - What made that safe is `copy_chrome()`. Flipping per sub-step shows both
+     screens in turn, and the header, panel and legend were painted into one
+     of them only — the board would have appeared over the previous state's
+     furniture on alternate frames, a strobe rather than a tear. Copying the
+     chrome **once** before the first sub-step is enough: four flips show each
+     screen twice, so both are correct for the whole slide.
 
 5. **Assembly.**  ✓ **done for the present.** `present_pixels()` is now Z80:
    128 rows of 32 unrolled `LDI`, with the screen offset per row read from

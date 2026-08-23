@@ -227,15 +227,8 @@ void render_compose(void)
    up blank or stale while the ones composed into page 5 looked fine.
    A 128K tolerated it, which is why it took a +3 to find.
 
-   Only whole-screen painters call this pair, so a FLIP ONLY HAPPENS ON A
-   STATE CHANGE — the SPACE and ENTER that move between screens.  Cursor
-   movement deliberately does not flip: it presents into the screen
-   already on show.  Flipping per scroll sub-step would be tear-free, but
-   the header, status panel and key legend live only in the screen they
-   were painted into, so the other buffer would show the board with no
-   chrome and the movement would strobe.  Fixing that means painting the
-   chrome into both buffers, which is a bigger change than the tear is
-   worth today. */
+   State changes flip, and so does every sub-step of a scroll — see
+   copy_chrome() for what makes the second one safe. */
 void render_show(void)
 {
     if (!shadow_ok) return;
@@ -999,6 +992,36 @@ static void slice_attr_row(uint8_t vy, uint8_t sub, uint8_t drow)
     }
 }
 
+/* Give the OTHER screen the same chrome as the one on show.
+
+   A scroll flips on every sub-step, so both screens are displayed in
+   turn.  The view area needs no help — present_all() writes all of it
+   every time — but the header, status panel and key legend were painted
+   into one screen only, by whichever render_*() last ran.  Without this
+   the board would appear over the previous state's furniture on alternate
+   frames, which is a strobe rather than a tear: worse than what it
+   replaces.
+
+   Once per scroll is enough, not once per sub-step.  Four flips means
+   each screen is shown twice, and copying before the first one leaves
+   both correct for the whole slide.
+
+   Copied: character row 0, character rows 16-23 (the third third of the
+   display file, contiguous), and the whole attribute area.  Row 16 is
+   part of the view and gets overwritten immediately — including it costs
+   nothing and saves picking rows out of an interleaved layout. */
+static void copy_chrome(void)
+{
+    uint8_t *shown = (uint8_t *)(back ? 0xC000 : 0x4000);
+    uint8_t *other = (uint8_t *)(back ? 0x4000 : 0xC000);
+    uint8_t r;
+
+    for (r = 0; r < 8; r++)                       /* row 0, interleaved */
+        memcpy(other + (uint16_t)r * 256, shown + (uint16_t)r * 256, 32);
+    memcpy(other + 0x1000, shown + 0x1000, 2048); /* rows 16-23 */
+    memcpy(other + 6144, shown + 6144, 768);      /* attributes */
+}
+
 /* Scroll the window one cell, in VIEW_CW sub-steps, presenting each.
 
    Colour arrives with the art, a character at a time — the incoming
@@ -1009,6 +1032,12 @@ static void slice_attr_row(uint8_t vy, uint8_t sub, uint8_t drow)
 void scroll_view(int8_t dx, int8_t dy)
 {
     uint8_t sub;
+
+    /* Tear-free where there are two screens to swap between: each
+       sub-step is composed off-display and revealed whole.  A 48K has
+       nowhere to hide the work and presents into the live screen, which
+       tears — that is the machine, not the design. */
+    if (shadow_ok) copy_chrome();
 
     for (sub = 0; sub < VIEW_CW; sub++) {
         if (dx) {
@@ -1029,7 +1058,13 @@ void scroll_view(int8_t dx, int8_t dy)
             slice_row(vy, src, drow);
             slice_attr_row(vy, src, arow);
         }
-        present_all();
+        if (shadow_ok) {
+            render_compose();
+            present_all();
+            render_show();
+        } else {
+            present_all();
+        }
     }
 }
 
