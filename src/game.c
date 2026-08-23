@@ -262,6 +262,29 @@ static uint8_t scan_actions(void)
     return a;
 }
 
+#if DEBUG_STATE_WALK
+/* P0 state walk: W wins the level, L loses it.  Kept out of the action
+   byte — every bit of it is taken, and this is temporary scaffolding
+   that comes out with the real win check in P4. */
+#define DBG_WIN     0x01
+#define DBG_LOSE    0x02
+
+static uint8_t dbg_last, dbg_prev, dbg_edge;
+
+static void poll_debug(void)
+{
+    uint8_t a = 0, stable;
+
+    if (!(read_keys(KEY_QWERT) & 0x02))     a |= DBG_WIN;    /* W */
+    if (!(read_keys(KEY_ENTER_ROW) & 0x02)) a |= DBG_LOSE;   /* L */
+
+    stable = (uint8_t)(a & dbg_last);
+    dbg_last = a;
+    dbg_edge = (uint8_t)(stable & ~dbg_prev);
+    dbg_prev = stable;
+}
+#endif
+
 /* An action counts only when the same bit is seen in two consecutive
    frames, then fires on its rising edge: held keys act once, and a
    single noisy read is ignored. */
@@ -283,6 +306,10 @@ static void flush_input(void)
     last_acts = prev_stable = 0xFF;
     edge = 0;
     nav_delay = NAV_DELAY;
+#if DEBUG_STATE_WALK
+    dbg_last = dbg_prev = 0xFF;
+    dbg_edge = 0;
+#endif
 }
 
 /* True if any key on the whole keyboard, or the joystick, is down.
@@ -495,7 +522,11 @@ static void enter_play(void)
     cells_left = 0;
     draw_status("PARTY  :", party_x, party_y);
 
+#if DEBUG_STATE_WALK
+    print_at(1, 21, "FIRE TURN M MAP X TITLE W/L END");
+#else
     print_at(1, 21, "FIRE END TURN  M MAP  X TITLE  ");
+#endif
     set_attr_rect(0, 21, 32, 1, ATTR_HINT);
 }
 
@@ -727,6 +758,13 @@ static void handle_input(void)
                 redraw_status = 1;
             }
             if (edge & ACT_BACK)  set_state(ST_TITLE);
+#if DEBUG_STATE_WALK
+            /* Stand in for the win check until P4 gives us one. */
+            if (dbg_edge & (DBG_WIN | DBG_LOSE)) {
+                player_won = (uint8_t)((dbg_edge & DBG_WIN) ? 1 : 0);
+                set_state(ST_OVER);
+            }
+#endif
             break;
 
         case ST_MAP:
@@ -815,6 +853,9 @@ void game_run(void)
         border(0);              /* BLACK: work done, idle from here */
 
         poll_input();
+#if DEBUG_STATE_WALK
+        poll_debug();
+#endif
         handle_input();
 
         if (next_state != game_state) {

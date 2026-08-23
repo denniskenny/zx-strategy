@@ -43,4 +43,15 @@
  * holds a known NON-marker value.  Attr row 23, col 0. */
 #define VSYNC_PRELOAD_ADDR 0x5AE0
 
+/* --- Debug: P0 state walk ------------------------------------------
+ * There is no combat yet, so nothing can win or lose a level and
+ * ST_OVER / ST_WON are unreachable.  With this set, ST_PLAY takes two
+ * extra keys — W wins the level, L loses it — so the whole campaign
+ * loop (play → ST_OVER → next level → ... → ST_WON → title) can be
+ * walked and tested before a single unit exists.
+ *
+ * DELETE THIS, and the code it guards, in P4 when the real win check
+ * over the loser's roster replaces it.  See docs/PLAN.md. */
+#define DEBUG_STATE_WALK 1
+
 #endif /* _APP_CONFIG_H_ */
