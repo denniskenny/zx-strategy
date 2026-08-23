@@ -120,6 +120,21 @@ void attack(uint8_t cell);         /* ...so do it, and spend the action */
    src/game.c turns it into ST_OVER on the next pass. */
 extern uint8_t outcome_ready;
 
+/* --- The enemy turn --------------------------------------------------
+ * Driven a unit at a time by src/game.c so the player can watch it
+ * happen; logic.c decides, the loop paces and draws.
+ *
+ * enemy_begin() builds the threat map — one pass over the player's
+ * units instead of a range test per candidate cell per unit — and
+ * enemy_step() then acts for the next enemy that still has its action,
+ * returning the cell it ended on, or NO_CELL when the army is done. */
+#define NO_CELL     0xFF
+
+#define threat    ((uint8_t *)MEM_THREAT)
+
+void enemy_begin(void);
+uint8_t enemy_step(void);
+
 void load_map(void);            /* terrain + costs + both armies        */
 void select_unit(uint8_t u);    /* pick up, and flood its range         */
 void deselect(void);            /* put down                             */

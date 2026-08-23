@@ -76,11 +76,19 @@
 #define MEM_U_HP        (MEM_U_CELL  + 40)
 #define MEM_U_FLAGS     (MEM_U_HP    + 40)
 
-#define MEM_END         (MEM_U_FLAGS + 40)
+/* One byte per cell: how many player units can strike it.  Built once
+   per enemy turn, then read O(1) per candidate cell (docs/PLAN.md
+   § Enemy decisions). */
+#define MEM_THREAT      (MEM_U_FLAGS + 40)
+
+#define MEM_END         (MEM_THREAT + 98)
 
 /* The stack lives near 0x7FA0 and grows down.  Leave it room: this is
-   the check that stops a buffer quietly eating return addresses. */
-#if MEM_END > 0x7C80
+   the check that stops a buffer quietly eating return addresses.  At
+   0x7D00 that is ~670 bytes of headroom, which is generous for this
+   program's call depth but is the number to re-check before adding
+   anything else down here. */
+#if MEM_END > 0x7D00
 #error "the hand-placed buffers are encroaching on the stack below 0x7FA0"
 #endif
 #if MEM_VBUF < 0x5B00

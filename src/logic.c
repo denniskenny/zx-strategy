@@ -617,6 +617,145 @@ void move_selected(void)
     recolour_page();
 }
 
+/* --- The enemy turn --------------------------------------------------
+ * The expensive-looking rule is "avoid the player's attack ranges".
+ * Done naively that is every enemy x every candidate cell x every
+ * player unit. Done once into threat[], it is a single byte read per
+ * candidate afterwards (docs/PLAN.md § Enemy decisions). */
+
+static uint8_t ai_next;         /* next roster slot to consider */
+
+/* Manhattan distance between two cells.  The board is small enough that
+   this beats a lookup table and it is the only distance the game has —
+   attacks ignore terrain entirely. */
+static uint8_t cell_dist(uint8_t a, uint8_t b)
+{
+    uint8_t ax = col_of[a], bx = col_of[b];
+    uint8_t ay = (uint8_t)(a / GRID_COLS), by = (uint8_t)(b / GRID_COLS);
+
+    return (uint8_t)((ax > bx ? ax - bx : bx - ax) +
+                     (ay > by ? ay - by : by - ay));
+}
+
+void enemy_begin(void)
+{
+    uint8_t i, c;
+
+    memset(threat, 0, CELL_COUNT);
+    for (i = 0; i < unit_count; i++) {
+        if (u_type[i] == NO_UNIT) continue;
+        if (u_flags[i] & U_SIDE) continue;          /* player units only */
+        for (c = 0; c < CELL_COUNT; c++)
+            if (cell_dist(u_cell[i], c) <= unit_range[u_type[i]])
+                threat[c]++;
+    }
+    ai_next = 0;
+}
+
+/* The best thing this unit can hit from where it stands, or NO_CELL.
+   Prefer a kill, then the Base, then the lowest survivor. */
+static uint8_t pick_target(uint8_t u)
+{
+    uint8_t i, best = NO_CELL, best_score = 0;
+
+    for (i = 0; i < unit_count; i++) {
+        uint8_t cell, cover, score;
+        uint16_t raw;
+
+        if (u_type[i] == NO_UNIT) continue;
+        if (u_flags[i] & U_SIDE) continue;          /* player units only */
+        cell = u_cell[i];
+        if (cell_dist(u_cell[u], cell) > unit_range[u_type[u]]) continue;
+
+        cover = terrain_cover[terrain[cell]];
+        raw = unit_damage[u_type[u]];
+        score = (uint8_t)((raw * (100u - cover) + 99u) / 100u);
+        if (score >= u_hp[i]) score = 200;          /* a kill outranks all */
+        if (u_type[i] == UNIT_BASE) score = (uint8_t)(score / 2 + 150);
+        if (best == NO_CELL || score > best_score) {
+            best = cell;
+            best_score = score;
+        }
+    }
+    return best;
+}
+
+/* Nowhere to shoot from here: walk somewhere better.  cost[] already
+   holds the reachable set from movement_range(), so this is a scan of
+   98 cells and a byte read of threat[] each, not a search. */
+static void ai_move(uint8_t u)
+{
+    uint8_t c, from = u_cell[u], best = from, best_score = 0;
+
+    for (c = 0; c < CELL_COUNT; c++) {
+        uint8_t score, pen;
+        uint8_t i, near = 255;
+
+        if (cost[c] == NO_COST) continue;           /* cannot reach it */
+        if (c != from && occupancy[c] != NO_UNIT) continue;
+
+        for (i = 0; i < unit_count; i++) {
+            uint8_t d;
+            if (u_type[i] == NO_UNIT || (u_flags[i] & U_SIDE)) continue;
+            d = cell_dist(c, u_cell[i]);
+            if (d < near) near = d;
+        }
+        if (near == 255) return;                    /* no player units left */
+
+        /* All of this stays inside a byte on purpose: 16-bit arithmetic
+           costs SDCC a great deal of code for a score that only has to
+           order 98 candidates. */
+        pen = (uint8_t)(near * AI_W_DIST + threat[c] * AI_W_THREAT);
+        score = pen >= AI_SCORE_BASE ? 0
+              : (uint8_t)(AI_SCORE_BASE - pen
+                          + terrain_cover[terrain[c]] / AI_W_COVER);
+        if (best == from || score > best_score) {
+            best_score = score;
+            best = c;
+        }
+    }
+
+    if (best != from) {
+        occupancy[from] = NO_UNIT;
+        occupancy[best] = u;
+        u_cell[u] = best;
+        mark_dirty(col_of[from], (uint8_t)(from / GRID_COLS));
+        mark_dirty(col_of[best], (uint8_t)(best / GRID_COLS));
+    }
+}
+
+/* Act for the next enemy that still has its action.  Returns the cell it
+   ended on so the caller can bring the view to it, or NO_CELL when the
+   army has finished. */
+uint8_t enemy_step(void)
+{
+    while (ai_next < unit_count) {
+        uint8_t u = ai_next++;
+        uint8_t target;
+
+        if (u_type[u] == NO_UNIT) continue;
+        if (!(u_flags[u] & U_SIDE)) continue;       /* enemy units only */
+        if (u_flags[u] & U_ACTED) continue;
+        if (u_type[u] == UNIT_BASE) continue;       /* bases do not move */
+
+        /* attack() and is_target() both read `selected`, so the unit is
+           held for the duration exactly as a player-driven order is. */
+        selected = u;
+        target = pick_target(u);
+        if (target != NO_CELL) {
+            attack(target);                         /* also clears selected */
+        } else {
+            movement_range(u_cell[u], unit_movement[u_type[u]]);
+            ai_move(u);
+            u_flags[u] |= U_ACTED;
+            selected = NO_UNIT;
+            recolour_page();
+        }
+        return u_cell[u];
+    }
+    return NO_CELL;
+}
+
 /* End the player's turn.  Every unit gets its action back and the
    counter moves on; anything the player did not spend is forfeit, which
    is what makes SELECT a decision rather than a formality

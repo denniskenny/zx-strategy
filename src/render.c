@@ -163,6 +163,11 @@ static void screens_init(void)
 {
     back = 0;
     shadow_ok = 0;
+#if !BUILD_SHADOW
+    /* The 48k build never pages, which is what lets its code run past
+       0xC000.  It still runs on a 128K; it just draws in place. */
+    return;
+#else
     if (!is_128k) return;
 
     /* A +2A/+3 gets this too.  It did not, briefly, because the
@@ -202,6 +207,7 @@ static void screens_init(void)
         return;
     }
     vsync_marker_addr = gfx_attr + MARKER_ROW * 32;
+#endif
 }
 
 /* Start a full-screen repaint.  On a 128K that means aiming at the

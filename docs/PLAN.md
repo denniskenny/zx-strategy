@@ -645,20 +645,38 @@ Two lessons worth more than the fix:
   `--machine P341` at all. That gap is still open and is the obvious next
   investment: a `.sna` snapshot bypasses the ROM menu on every model.
 
-### P5 — Enemy turn
+### P5 — Enemy turn  ✓ **done in the 48k build**, blocked in the 128k one
 
-Threat map, per-unit AI, unit-by-unit pacing, end-of-turn handback. The whole
-turn is one long operation: banner up, input discarded, banner down and the
-legend back when control returns to the player.
+Threat map built once per turn, per-unit AI, unit-by-unit pacing with the view
+travelling to whoever is acting, input discarded until control returns.
 
-- **Acceptance**: an enemy adjacent to a player unit attacks rather than
-  moving; an enemy with no target in range closes the distance and prefers
-  cells with `threat == 0`; each enemy move is visible as it happens rather
-  than the board changing all at once; keys pressed during the enemy turn do
-  nothing once it ends.
-- **Depends on P7.** "Visible as it happens" means the view has to travel to
-  each acting unit, which is P7's scroll. Taken in this order it is a call per
-  unit; taken the other way round it is a rewrite of the enemy turn.
+- `enemy_begin()` fills `threat[]` — one pass over the player's units, then a
+  byte read per candidate cell instead of a range test per unit per cell.
+- `pick_target()` prefers a kill, then the Base, then the lowest survivor.
+- `ai_move()` scores every reachable cell on distance, threat and cover, with
+  the weights in `config/game_config.h` so tuning is a rebuild.
+- `game.c` paces one unit every 14 frames and brings the window to it. logic.c
+  still never draws: it returns the cell and the loop does the rest.
+
+**It does not fit the 128k target.** P5 costs 1 266 bytes and that build has
+1 001 to spare, against a hard 16 KB ceiling it can never exceed — page 7 sits
+at 0xC000, so code cannot live above it.
+
+Two things were measured and are *not* the answer:
+
+- **Strings are ~716 bytes in total**, padding included. Deleting every
+  literal in the program still leaves the 128k build 285 bytes short.
+- **P5's own code is a few hundred bytes.** Halving it does not close the gap.
+
+The one item large enough is **`CRT_FONT_64`: 768 unused bytes** pulled in by
+z88dk's zx crt. Nothing in this program references it — `print_at()` reads the
+ROM font at 0x3D00. `-pragma-define:CRT_ENABLE_STDIO=0` does not remove it and
+every alternative `-startup=` value fails to build. Finding that switch is the
+bounded piece of work that unblocks the 128k target.
+
+Beyond that, the 128k build's route to more room is **paging tile and
+animation data into the spare RAM banks** (1, 3, 4 and 6 are unused). Data
+pages cleanly; code does not.
 
 ### P6 — Balance and polish
 

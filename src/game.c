@@ -349,6 +349,50 @@ static void move_play_cursor(void)
     scroll_view(dx, dy);
 }
 
+/* --- The enemy turn --------------------------------------------------
+ * logic.c decides; this paces it and moves the view.  One unit every
+ * ENEMY_BEAT frames, with the window travelling to whoever is acting —
+ * the player has to see what happened, and a board that changes all at
+ * once tells them nothing.
+ *
+ * Input is discarded throughout (poll_input() still runs, so nothing is
+ * queued up to fire the moment control returns). */
+#define ENEMY_BEAT  14          /* frames between enemy actions */
+
+static uint8_t enemy_active;
+static uint8_t enemy_beat;
+
+/* Bring the window to a cell without a scroll.  The enemy can act
+   anywhere on the board, including several cells away, and sliding
+   there would take longer than the move itself. */
+static void view_to(uint8_t cell)
+{
+    cursor_x = (uint8_t)(cell % GRID_COLS);
+    cursor_y = (uint8_t)(cell / GRID_COLS);
+    render_play();          /* set_page, whole window, one clean reveal */
+    render_hint("      ENEMY TURN       ");
+    redraw_status = 1;
+}
+
+static void enemy_tick(void)
+{
+    uint8_t cell;
+
+    if (enemy_beat) {
+        enemy_beat--;
+        return;
+    }
+    enemy_beat = ENEMY_BEAT;
+
+    cell = enemy_step();
+    if (cell == NO_CELL) {
+        enemy_active = 0;
+        render_hint(PLAY_HINT);
+        return;
+    }
+    view_to(cell);
+}
+
 /* Per-frame work for the active state, run inside the vblank window. */
 /* Everything the active state owes the screen this frame, inside the
    vblank window.  The renderer decides how much of its debt fits;
@@ -357,6 +401,15 @@ static void update_state(void)
 {
     switch (game_state) {
         case ST_PLAY:
+            if (enemy_active) {
+                enemy_tick();
+                render_tick();
+                if (redraw_status) {
+                    draw_status("ENEMY  :", cursor_x, cursor_y);
+                    redraw_status = 0;
+                }
+                break;
+            }
             move_play_cursor();
             render_tick();
             if (redraw_status) {
@@ -408,6 +461,8 @@ static void handle_input(void)
                the page, so a move made now could have its two cells
                drawn before the unit had left one and reached the
                other. */
+            if (enemy_active) break;    /* their turn: input is ignored */
+
             if (edge & ACT_SPACE) {
                 uint8_t cell = cell_of(cursor_x, cursor_y);
                 uint8_t u = occupancy[cell];
@@ -444,6 +499,12 @@ static void handle_input(void)
                source, but one keypress should still mean one action. */
             if ((edge & ACT_SELECT) && !(edge & ACT_SPACE)) {
                 end_turn();
+                /* Hand straight over to the enemy.  The turn counter has
+                   already moved on, so what follows belongs to them. */
+                enemy_begin();
+                enemy_active = 1;
+                enemy_beat = ENEMY_BEAT;
+                render_hint("      ENEMY TURN       ");
                 redraw_status = 1;
             }
             /* X drops the held unit first and only quits on a second

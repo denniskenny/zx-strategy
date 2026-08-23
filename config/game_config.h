@@ -132,6 +132,20 @@ static const uint8_t unit_movement[UNIT_TYPES] = { 3, 2, 0, 0 };
 #define TER_CITY        4
 #define TER_TYPES       5
 
+/* --- Enemy scoring ---------------------------------------------------
+ * A candidate cell is worth
+ *     -distance_to_nearest_target * AI_W_DIST
+ *     -threat[cell]               * AI_W_THREAT
+ *     +cover[terrain[cell]]       * AI_W_COVER
+ * Distance dominates so the army actually advances; threat and cover
+ * decide between cells that are equally close.  Cover is a percentage,
+ * so its weight is the smallest of the three by a wide margin.
+ * Tuning these is a rebuild, not a code change. */
+#define AI_W_DIST        8
+#define AI_W_THREAT      4
+#define AI_W_COVER       8      /* divisor, not multiplier: cover / 8 */
+#define AI_SCORE_BASE  200      /* keeps the sum inside a byte */
+
 static const uint8_t terrain_move_cost[TER_TYPES] = { 1, 2, 0, 2, 1 };
 
 /* Percent of incoming damage cancelled by standing here.  The formula

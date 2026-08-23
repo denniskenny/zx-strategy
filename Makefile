@@ -5,7 +5,33 @@ ZCCCFG ?= $(Z88DK)/lib/config
 PYTHON ?= python3
 UNAME_S := $(shell uname -s)
 
-APP = zxstrategy
+# --- Build targets ----------------------------------------------------
+# Two of them, from one source, because the shadow screen costs address
+# space rather than RAM.
+#
+#   128k  code must end below 0xC000, because page 7 is banked in there
+#         for the shadow screen.  That is a hard 16 KB ceiling for code
+#         and rodata together, and it is why this split exists.
+#   48k   no shadow screen, so nothing pages and code may run all the
+#         way to 0xFFFF: 32 KB, twice the room, at the cost of tearing.
+#
+#   make            both
+#   make TARGET=48k / TARGET=128k    just one
+#   make run        the 48k tap in Fuse
+#
+# The 48k build still runs on a 128K or +3 — it simply does not use the
+# second screen.  The 128k build is the one to hand those machines.
+TARGET ?= 48k
+
+ifeq ($(TARGET),128k)
+APP        = zxstrategy128
+TARGET_DEF = -DBUILD_SHADOW=1
+MEM_LIMIT  = 0xC000
+else
+APP        = zxstrategy
+TARGET_DEF = -DBUILD_SHADOW=0
+MEM_LIMIT  = 0x10000
+endif
 
 ifeq ($(UNAME_S),Darwin)
 FUSE ?= open -a Fuse
@@ -23,7 +49,7 @@ include $(CONFIG_MK)
 
 # -zorg=32768 keeps all code in NON-CONTENDED RAM, which the floating bus
 # timed loops require for stable sync.
-CFLAGS=+zx -vn -SO3 -zorg=32768 -startup=31 --opt-code-speed -compiler=sdcc -mz80 \
+CFLAGS=+zx -vn -SO3 -zorg=32768 -startup=31 --opt-code-speed -compiler=sdcc -mz80 -pragma-define:CRT_ENABLE_STDIO=0 $(TARGET_DEF) \
        --reserve-regs-iy --allow-unsafe-read -Cc--max-allocs-per-node=50000
 USER_CFLAGS ?=
 LDFLAGS=-lm -create-app
@@ -165,7 +191,7 @@ run: $(APP).tap
 map:
 	$(MAKE) clean
 	$(MAKE) USER_CFLAGS="-m"
-	$(PYTHON) tools/checkmem.py $(APP).map
+	$(PYTHON) tools/checkmem.py $(APP).map --limit $(MEM_LIMIT)
 
 .PHONY: checkmem memmap
 checkmem: map
@@ -174,7 +200,7 @@ checkmem: map
 # by hand, and how much room is left in each.  Neither half is visible
 # from the other, which is how the layout has gone wrong before.
 memmap: map
-	@$(PYTHON) tools/checkmem.py $(APP).map --layout
+	@$(PYTHON) tools/checkmem.py $(APP).map --layout --limit $(MEM_LIMIT)
 
 # --- Compile, link & package ---
 $(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE)
