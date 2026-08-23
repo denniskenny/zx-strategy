@@ -80,10 +80,12 @@ it discarded. Loading a level and playing the tune both work that way — see
 § Long operations in the design doc.
 
 `ST_PLAY` is entered from the title and is the game proper: an **8x4 page** of
-4x4-character terrain cells filling the screen width, with the party (`@`)
-walking the grid loaded from the Tiled map (water is impassable) and a
-turn/position/terrain panel below. **M** opens `ST_MAP`, the overview grid with a free
-cursor and the party's cell highlighted; **SPACE** dismisses it back to play.
+4x4-character terrain cells filling the screen width, both armies standing on
+the grid loaded from the Tiled map, a free cursor, and a four-line status panel
+below. **SPACE** picks up the unit under the cursor, washes the ground it can
+reach in blue, and sends it there; **ENTER** ends the turn. **M** opens
+`ST_MAP`, the whole-world overview with its own cursor and the play cursor's
+cell marked; **SPACE** dismisses it back to play.
 
 ## Layout
 
@@ -158,7 +160,8 @@ The campaign is ten maps, `assets/maps/level_1.tmx` .. `level_10.tmx`, authored
 in [Tiled](https://www.mapeditor.org) (orthogonal, CSV layer data, tileset
 embedded in the `.tmx`). All ten are 14x7 and share one tileset whose tiles
 carry a `terrain` property — `PLAIN`, `FOREST`, `WATER`, `HILLS`, `CITY`. A
-point object named `start` marks the party's starting tile.
+point object named `start` marks where the cursor begins; the armies are placed
+by `populate_map()` around the two opposite corners, not by the map.
 
 `tools/tmx2header.py` converts each at build time into `include/level_N.h`,
 ZX0-compressing the GID array (98 bytes → 28-36):
@@ -178,7 +181,7 @@ The data stays the **raw Tiled GIDs**, so re-ordering the tileset in Tiled can
 never silently change what the data means. `load_map()` in `src/game.c`
 decompresses the current level straight into `terrain[]` (both are `COLS*ROWS`
 bytes) and converts the GIDs in place (terrain id = `GID - LEVEL_1_GID_FIRST`),
-then seeds the party from that level's `START_*`. Status labels come from the
+then parks the cursor on that level's `START_*`. Status labels come from the
 tileset's `terrain` properties and impassability from its `impassable` bools,
 so a new terrain type needs no C changes.
 
@@ -216,9 +219,9 @@ come from the generated headers.
 
 **Why the field view pages instead of scrolling:** an 8x4 page of 4x4 tiles is
 32x16 characters, ~4 KB of screen writes. Even with a hand-written blit that is
-several frames' worth of work, so a party-centred scrolling window is off the
-table at this tile size. Instead the party walks around inside a fixed page —
-two cells redrawn per step — and the page flips only when it steps off the edge,
+several frames' worth of work, so a cursor-centred scrolling window is off the
+table at this tile size. Instead the cursor moves inside a fixed page — two
+cells redrawn per step — and the page flips only when it steps off the edge,
 repainting `PAGE_CELLS` tiles per frame so no frame overruns the vblank window.
 
 Adding or editing a tile is data-only — see `.claude/skills/zx-tiles`.

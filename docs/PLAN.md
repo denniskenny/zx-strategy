@@ -1,15 +1,20 @@
 # ZX Strategy — Implementation Plan
 
-How to get from the current scaffold to the game in `docs/DESIGN.md`.
+How to get from the scaffold to the game in `docs/DESIGN.md`.
 
-Two things drive the ordering:
+**Where we are: P0–P3 are done. P4 (combat and the real win condition) is
+next.** The game today places two armies on any of the ten maps, lets the
+player select a unit, shows what it can reach, moves it, spends its action and
+ends the turn — but nothing can shoot, so nothing can win except by the
+`DEBUG_STATE_WALK` keys, and the enemy never moves.
 
-1. **Walk the whole state graph first.** Every state in the design exists in
-   `include/game.h` today, but `ST_OVER` and `ST_WON` are unreachable because
-   nothing can win. Phase 0 makes the entire campaign loop walkable — title →
-   play → level end → next level → campaign complete → title — before a single
-   unit exists. After that, every phase is a vertical slice added to a game
-   that already runs end to end.
+Two things drove the ordering:
+
+1. **Walk the whole state graph first.** P0 made the entire campaign loop
+   walkable — title → play → level end → next level → campaign complete →
+   title — before a single unit existed. Every phase since has been a vertical
+   slice added to a game that already ran end to end, which is why each one
+   could be tested in the emulator the moment it was written.
 2. **The board is tiny; exploit it.** 14x7 = **98 cells**. A full Dijkstra over
    the map is 98 nodes, a bitmap of the board is 13 bytes, and a byte per cell
    is 98 bytes. Algorithms that would be extravagant on a bigger grid are free
@@ -40,20 +45,20 @@ bytes and a full page flip is ~4 KB, so both go out N cells per frame —
 `RANGE_CELLS` and `PAGE_CELLS` respectively.
 
 
-## Decisions needed before Phase 1
+## Decisions that shaped the data structures  ✓ all settled
 
-Each of these changes the data structures, so all six were settled before any
-of them got expensive. **All are now recorded in `docs/DESIGN.md`**; the table
-is kept as the index of where each rule came from.
+Each of these changes the data structures, so all were settled before any of
+them got expensive. **All are now recorded in `docs/DESIGN.md`**; the table is
+kept as the index of where each rule came from, and every one of them is built.
 
-| Question | Recommendation | Why |
-|----------|----------------|-----|
-| ~~Unit stacking~~ | **Decided: one unit per tile, occupied tiles impassable** | Lets `occupancy[98]` be a single byte per cell and makes "who is here" O(1) |
-| ~~Adjacency~~ | **Decided: 4-way, cursor included** | Matches per-tile movement costs; diagonals would need cost 1.4 or break the cost model |
-| ~~Action model~~ | **Decided: one action per unit; a move ending adjacent to an enemy may also attack** | One `acted` bit per unit, set by either action |
-| ~~Unit HP width~~ | **Decided: `uint8`** — Base is 255, not 500 | Saves 38 bytes and every damage subtraction is 8-bit |
-| ~~Cursor vs paging~~ | **Decided: the cursor drives the page**, flipping when it leaves | The far base is on another page; the player must be able to look at it |
-| ~~Turn order~~ | **Decided: all player units, then all enemy units; `SELECT` forfeits unspent actions** | One `acted` bit clears per side, and the turn counter is per round |
+| Question | Decision | Why |
+|----------|----------|-----|
+| Unit stacking | One unit per tile, occupied tiles impassable | Lets `occupancy[98]` be a single byte per cell and makes "who is here" O(1) |
+| Adjacency | 4-way, cursor included | Matches per-tile movement costs; diagonals would need cost 1.4 or break the cost model |
+| Action model | One action per unit; a move ending adjacent to an enemy may also attack | One `acted` bit per unit, set by either action. The attack half lands in P4 |
+| Unit HP width | `uint8` — Base is 255, not 500 | Saves 38 bytes and every damage subtraction is 8-bit |
+| Cursor vs paging | The cursor drives the page, flipping when it leaves | The far base is on another page; the player must be able to look at it |
+| Turn order | All player units, then all enemy units; `ENTER` forfeits unspent actions | One `acted` bit clears per side, and the turn counter is per round |
 
 **Stalemate** is settled too, and the opposite way to the turn cap this plan
 once proposed: there is none. A side reduced to immobile out-of-range units
@@ -66,6 +71,8 @@ message, because nothing was decided (`docs/DESIGN.md` § Stalemate).
 Structure-of-arrays, not array-of-structs: SDCC on Z80 pays a multiply for
 every `unit[i].field`, but an indexed byte array is `LD A,(HL)`.
 
+This is what is actually in `src/game.c`, not a proposal:
+
 ```c
 /* --- units: parallel arrays, index 0..UNITS_MAX-1 (38) --- */
 uint8_t  u_type[UNITS_MAX];    /* UNIT_INFANTRY..UNIT_BASE, 0xFF = slot free */
@@ -74,26 +81,41 @@ uint8_t  u_hp[UNITS_MAX];      /* 1..255; 0 is death                          */
 uint8_t  u_flags[UNITS_MAX];   /* bit0 side (0 player, 1 enemy), bit1 acted   */
                                /* 4 x 38 = 152 bytes                          */
 
-/* --- board-sized scratch, one byte per cell (98 each) --- */
+/* --- board-sized, one byte per cell --- */
 uint8_t occupancy[98];         /* unit index, or 0xFF                          */
 uint8_t cost[98];              /* Dial's output: movement cost, 0xFF = unreached */
-uint8_t came_from[98];         /* direction stepped from, for path replay      */
-uint8_t threat[98];            /* how many enemy units can hit this cell       */
+uint8_t cell_cost[98];         /* cost to ENTER this cell, 0 = impassable      */
 
-/* --- Dial's bucket queue --- */
-uint8_t q[128];                /* cells, monotonically non-decreasing cost     */
-uint8_t bucket_end[MAX_MOVE + 1];
+/* --- Dial's bucket queue: 4 buckets of 32 --- */
+uint8_t  q[(MAX_MOVE + 1) * 32];
+uint8_t *bucket_end[MAX_MOVE + 1];          /* write cursor per bucket        */
+static uint8_t *const bucket_start[MAX_MOVE + 1] = { q, q+32, q+64, q+96 };
 
-/* --- avoid the multiply in y * GRID_COLS + x --- */
-static const uint8_t row_base[7] = { 0, 14, 28, 42, 56, 70, 84 };
+/* --- ROM tables that kill a multiply and a divide --- */
+static const uint8_t row_base[7]  = { 0, 14, 28, 42, 56, 70, 84 };
+static const uint8_t col_of[98]   = { 0,1,2,...,13, 0,1,2,... };
 ```
 
-Total 679 bytes of new RAM. There is room: the binary is ~12.5 KB at
-`-zorg=32768`.
+606 bytes of game state, plus `terrain[98]` and 1 620 bytes of decompressed
+tile and sprite buffers — 2 324 bytes of RAM all told. The binary is 15 750
+bytes at `-zorg=32768`, so there is plenty of room above it.
+
+Two structures the plan originally listed are **not** built:
+
+- `came_from[98]` — for replaying a path backwards to animate a move. Nothing
+  animates a move; the unit is redrawn at its destination. 98 bytes unspent
+  until something wants to watch a unit walk.
+- `threat[98]` — the enemy's threat map, which belongs to P5 and arrives with
+  it.
 
 **Cell index, not (x,y).** One byte per position, neighbours are `±1` and
-`±14`, and the only care needed is the left/right edge wrap — check `x` via a
-`col_of[98]` table or `cell % 14` at setup, not in the inner loop.
+`±14`, and the only care needed is the left/right edge wrap — `col_of[]` gives
+a cell's column in one indexed read, which is what the fill's inner loop needs.
+
+**`cell_cost[]` is derived, never authored.** `load_map()` folds
+`terrain_move_cost[]` and the `.tmx` passability flags into one byte per cell,
+so the fill takes a single lookup where it would otherwise take three, and
+passability still has exactly one source.
 
 **Deaths**: mark `u_type = 0xFF` and clear `occupancy`. Do *not* swap-remove —
 compaction would invalidate the indices stored in `occupancy`, and iterating 38
@@ -102,7 +124,7 @@ slots is 38 byte compares.
 
 ## Algorithms
 
-### Movement range — Dial's algorithm, not Dijkstra
+### Movement range — Dial's algorithm, not Dijkstra  ✓ built (P3)
 
 Movement costs are 1 or 2 and budgets are ≤ 3, so a priority queue is
 overkill. Dial's bucket queue processes cells in non-decreasing cost order with
@@ -110,25 +132,27 @@ no comparisons at all:
 
 ```
 cost[all] = 0xFF; cost[start] = 0; push start into bucket 0
-for c = 0 .. MAX_MOVE:
+for c = 0 .. budget:
     for each cell in bucket c:
         if cost[cell] != c: continue                  /* stale entry */
-        for each of the 4 neighbours n:
-            if impassable[terrain[n]] or occupancy[n] != 0xFF: continue
-            nc = c + move_cost[terrain[n]]
-            if nc <= MAX_MOVE and nc < cost[n]:
-                cost[n] = nc; came_from[n] = dir; push n into bucket nc
+        for each legal neighbour n:
+            if cell_cost[n] == 0 or occupancy[n] != 0xFF: continue
+            nc = c + cell_cost[n]
+            if nc <= budget and nc < cost[n]:
+                cost[n] = nc; push n into bucket nc
 ```
 
-O(cells + edges) = at most 98 + 350 steps, and in practice a movement-3 unit
-reaches at most 24 cells on open plains (9 from a corner, fewer again through
-forest). One frame, comfortably. `cost[]` doubles as the highlight
-set (`cost[i] != 0xFF`) and as the path source: `came_from[]` replays the route
-backwards for animation without a second search.
+A movement-3 unit reaches at most **25** cells — the Manhattan disc of radius
+3 — and far fewer hemmed into a corner or crossing forest. `cost[]` is the
+whole result: a cell is reachable exactly when `cost[cell] != 0xFF`, so it
+doubles as the highlight set and nothing else is stored.
 
-The same routine serves the enemy: it is the only pathfinder in the game.
+Only cells within the disc are ever queued, which is what bounds each bucket at
+32 entries and `q[]` at 128 bytes.
 
-### Attack range — no pathfinding at all
+The same routine will serve the enemy: it is the only pathfinder in the game.
+
+### Attack range — no pathfinding at all  (P4)
 
 Attack range is a distance, not a path (design § Attack Range). For a unit at
 `c` with range `r`, walk the Manhattan disc around it — 41 cells at r=4 — and
@@ -136,7 +160,7 @@ test `occupancy`. Or, cheaper for target *cycling*: iterate the ≤19 enemy unit
 and test `|dx| + |dy| <= r`. 19 subtractions beats 41 cell lookups, and it
 yields the target list already ordered for O/P cycling.
 
-### Enemy decisions — one threat map per turn, then O(1) lookups
+### Enemy decisions — one threat map per turn, then O(1) lookups  (P5)
 
 The expensive-looking rule is "avoid player unit attack ranges". Computed
 naively that is (enemy units) x (candidate cells) x (player units) = ~5 000
@@ -205,22 +229,25 @@ to "win this level" and "lose this level" (set `player_won`, enter `ST_OVER`).
 - `u_hp[i]` is seeded from `unit_health[type]`; the rest of the stats table is
   unread until P2's status panel and P3's movement.
 - `draw_view_cell()` / `draw_cell()` gain a unit layer: blit the terrain tile,
-  then the unit sprite from `units_view`/`units_map`, then set the cell
-  attribute by side (cyan player, red enemy — the sheets' 0x47 is a neutral
-  default that the runtime overrides).
+  then the unit sprite from `units_view`/`units_map`, then colour the cell by
+  side (cyan player, red enemy). The colour pipeline was reworked later — see
+  *Colour* below — so the side's ink is now ORed over the sheet's BRIGHT flags
+  rather than replacing a flat default.
 - **Acceptance**: **7** units per side visible on level 1 in both views
   (3 infantry + 2 tanks + 1 cannon + 1 base — `UNITS_AT_LEVEL` at level 1 is
   just the start counts); a screenshot per view; no cell shows two units.
 
 ### P2 — Selection and information  ✓ done
 
-Cursor replaces the `@` party; SPACE selects the unit under it; the status
-panel shows type / HP / range / movement. Cursor movement drives page flips.
+A free cursor replaced the scaffold's `@` party marker; SPACE selects the unit
+under it; the status panel shows type / HP / range / movement. Cursor movement
+drives page flips.
 
-- The panel grows a fourth line above the existing three (`ROW_UNIT` = 17), so
+- The panel grew a fourth line above the existing three (`ROW_UNIT` = 17), so
   both renderers now have to fit above `PANEL_TOP` rather than above `ROW_TURN`.
-- The cursor is not the party: terrain no longer blocks it, only the edge of
-  the map (`docs/DESIGN.md` § Movement Range).
+- The cursor is not a thing standing on the board, so terrain stopped blocking
+  it — only the edge of the map does (`docs/DESIGN.md` § Movement Range).
+  Passability constrains the unit being *ordered*, and is checked then.
 - **Acceptance**: select and deselect every unit on the board; the panel
   matches the config table; walking the cursor off a page flips it.
 
@@ -234,9 +261,10 @@ flag + end turn clears all acted flags and bumps the turn counter.
   That is a separate, cheaper repaint pass from the page flip's
   (`RANGE_CELLS` = 8 a frame against `PAGE_CELLS` = 2), and the two are
   mutually exclusive per frame.
-- `view_cell_attr()` is the single place that decides a cell's colour —
-  selected, occupied, in range, or bare terrain — so every repaint path (flip,
-  cursor step, recolour) agrees without any of them knowing about the others.
+- `attr_view_cell()` is the single place that decides a play-view cell's colour
+  — cursor, selected, occupied, in range, or bare terrain — so every repaint
+  path (flip, cursor step, recolour) agrees without any of them knowing about
+  the others. `attr_map_cell()` is its opposite number for the overview.
 - **Acceptance**: an infantry on plains reaches exactly 3 tiles, 1 through
   forest+forest; water and occupied cells are never in the set. Verified
   against an independent Dijkstra over five boards — open plains, forest,
@@ -250,6 +278,27 @@ flag + end turn clears all acted flags and bumps the turn counter.
   multiply, and inlining the relaxation to kill an IX-frame function call
   ninety times a fill. Recorded because P5 calls the same fill up to 19 times
   a turn, not because anything requires it to be smaller.
+
+### Colour — per-cell attributes  ✓ done (not a numbered phase)
+
+Asked for after P3 and done on its own: the build imports the attribute grid
+from each `.zxp` and the runtime paints it, so colour is authored with the art
+instead of being one flat byte per tile.
+
+- Each sheet is now **one ZX0 stream**: the pixels for every tile, then one
+  attribute block per tile. One decompression per sheet, and tile *t*'s colours
+  at `NAME_ATTR_OFF + t * NAME_ATTR_SIZE`.
+- Terrain uses `--attr-mode full` — the authored ink/paper/bright per character
+  cell, so a 32x32 tile can be sixteen colours. Units use `--attr-mode bright`,
+  which keeps only bit 6 and throws ink and paper away: a unit is cyan or red
+  by side, but *which cells are lit* is the artist's, and that is the shading.
+- `blit_attr_rect(col,row,w,h,src,or_mask)` in `gfx.c` does both jobs — mask 0
+  copies an authored block, a side colour paints a shaded sprite.
+- **The one thing the hardware refuses**: enemy units cannot be dimmed.
+  Non-bright red on black is `0x02`, and `0x02 | 1` is the floating bus sync
+  marker, so enemy ink carries BRIGHT permanently and the sheet's flags cannot
+  take it away. Shading reads on player units only. The converter rejects
+  `0x02`/`0x03` per cell in full mode, naming the tile and the cell.
 
 ### P4 — Combat and the real win condition
 
@@ -286,6 +335,7 @@ whatever the ten maps show up as unplayable.
 |------|------------|
 | Highlight repaint tears | Paint N cells/frame in the vblank window, reusing the `PAGE_CELLS` pattern — this is a raster constraint and does not go away |
 | SDCC multiplies in inner loops | Cell indices + `row_base[]`; no `y * GRID_COLS` at runtime |
-| Binary growth on 48K | ~17 KB now; measure per phase, and the maps are already ZX0'd |
+| Binary growth on 48K | 15 750 bytes at `-zorg=32768` plus 2 324 bytes of RAM; measure per phase, and every asset is already ZX0'd |
 | A long operation looks like a crash | Banner before the work, input flushed after (`docs/DESIGN.md` § Long operations) |
-| Sprites are opaque, so units overwrite terrain | Accept for P1; masked sprites need `gfx.c`'s XOR path and a mask strip |
+| Sprites are opaque, so units overwrite terrain | **Still true, still accepted.** A unit hides its tile rather than standing on it. Masked sprites need `gfx.c`'s XOR path and a second mask strip per sheet — decide before the art gets detailed |
+| A new colour collides with the sync marker | The converter rejects `0x02`/`0x03` per cell; `make assets` prints every colour each sheet uses. Keep the inventory in `.claude/skills/floating-bus-vsync` current |

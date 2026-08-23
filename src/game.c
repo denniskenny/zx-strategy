@@ -338,7 +338,7 @@ static uint8_t unit_view_tiles[UNITS_VIEW_RAW_SIZE];
 #define NO_UNIT     0xFF
 
 #define U_SIDE      0x01    /* 0 = player, 1 = enemy */
-#define U_ACTED     0x02    /* spent for this turn; unused until P3 */
+#define U_ACTED     0x02    /* spent: has moved (or, from P4, attacked) */
 
 #define SIDE_PLAYER 0
 #define SIDE_ENEMY  1

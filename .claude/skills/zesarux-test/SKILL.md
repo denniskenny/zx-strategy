@@ -107,7 +107,9 @@ addr = 0x4000 | ((y >> 6) << 11) | ((y & 7) << 8) | (((y >> 3) & 7) << 5) | col
 Attribute byte: bit7 flash, bit6 bright, bits5-3 paper, bits2-0 ink.
 Colours: 0 Black 1 Blue 2 Red 3 Magenta 4 Green 5 Cyan 6 Yellow 7 White.
 
-Expected in this app: row 0 = 0x45, rows 2-7 = 0x47, rows 9-17 = 0x46, row 22 = 0x03 (the sync marker), everything else 0x07.
+Expected on the **title screen**: row 0 = 0x45 (the banner), rows 3-5 = 0x47 (the hardware report), rows 10-11 and 20-21 = 0x46 (legend and hint, 0x42 while the tune plays), row 22 = 0x03 (the sync marker), everything else 0x07.
+
+In `ST_PLAY` rows 1-16 are tile art and carry whatever the sheets author per character cell, so there is no single expected value there — see `.claude/skills/floating-bus-vsync` for the colour inventory and how to audit it.
 
 ### Render to PNG
 

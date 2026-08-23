@@ -86,7 +86,22 @@ This project uses **0x03** (black paper, magenta ink — invisible on the blank 
 #define VSYNC_PRELOAD_ADDR 0x5AE0   /* attr row 23, col 0 */
 ```
 
-The full inventory on screen is 0x00, 0x04, 0x05, 0x07, 0x42, 0x44, 0x45, 0x46, 0x47, 0x4F and 0x78 — `src/game.c`'s `ATTR_*` defines plus the terrain sheets' authored cells. None of them (nor `| 1`) equals 0x03. `make assets` prints each sheet's colours, which is the quickest way to re-check after editing art.
+The full inventory on screen is 0x00, 0x01, 0x04, 0x05, 0x06, 0x07, 0x41, 0x42, 0x44, 0x45, 0x46, 0x47, 0x4F and 0x78 — `src/game.c`'s `ATTR_*` defines plus the terrain sheets' authored cells. None of them (nor `| 1`) equals 0x03.
+
+Re-check it after editing art. `make assets` prints every colour each sheet uses, and this one-liner recomputes the union:
+
+```bash
+make assets 2>&1 | grep -o 'attrs: .*'   # sheet colours
+grep '^#define ATTR_' src/game.c          # runtime colours
+```
+
+Or audit the live screen, which catches anything the runtime composites that no sheet contains:
+
+```python
+a = read_bytes(s, 0x5800, 768)
+bad = [(i % 32, i // 32) for i in range(768) if a[i] in (2, 3) and i // 32 != 22]
+# expect [] — and row 22 should be all 0x03
+```
 
 The art sheets are the other source. Terrain tiles carry a **per-character-cell** attribute block authored in ZX-Paintbrush, and `tools/zxp_tiles_zx0.py` rejects any cell that is 0x02 or 0x03, naming the tile and cell. Unit sheets are converted with `--attr-mode bright`, which keeps only bit 6, so they cannot introduce a bad value at all.
 

@@ -1,5 +1,21 @@
 # ZX Strategy — Design
 
+This document is the **specification**: what the game is, and why each rule is
+the way it is. `docs/PLAN.md` is how it gets built, and tracks progress.
+
+Most of it describes a game that runs today. These parts do not yet:
+
+| Section | Status |
+|---------|--------|
+| § Cover, § Attack Range | **Not built.** Specified only; combat arrives in plan phase P4. |
+| § Win Conditions | **Not built.** `ST_OVER` is reachable, but only through the `DEBUG_STATE_WALK` keys — nothing can actually win or lose a level yet (P4). |
+| § Enemy turn | **Not built.** The enemy army is placed and drawn, but never acts (P5). |
+| § Actions — the attack half | **Partly built.** A unit spends its action by moving; attacking, and the "move into contact and strike" exception, are P4. |
+| § Stalemate | **Not built** as such — `X` already quits to the title, which is the whole mechanism, but nothing detects the stalemate. |
+
+Everything else — the board, terrain, unit placement, selection, movement,
+turns, the campaign loop and the two views — is implemented and verified.
+
 ## Game overview
 
 This is a single-player strategy game for the ZX Spectrum. The player controls a cursor that allows them to select units with the space bar. 
@@ -25,7 +41,10 @@ Each subsequent odd-numbered level will have an additional unit of each type.
 
 ### Movement Range
 
-Movement range is calculated using a simple pathfinding algorithm that calculates the distance from the unit to all reachable tiles.
+Movement range is the set of tiles a unit can reach on its movement budget,
+counting each tile's own cost to enter. It is recomputed the moment a unit is
+picked up, never cached — units block each other, so the answer goes stale as
+soon as anything moves. (`docs/PLAN.md` § Movement range has the algorithm.)
 
 **Movement is 4-way**: north, south, east and west only. There are no diagonal
 steps, so a tile's movement cost is the whole cost of entering it and no step
@@ -156,8 +175,13 @@ Movement : 0
 ### Actions
 
 **One action per unit per turn.** A unit either moves or attacks; taking either
-one uses the unit up for that turn, and the turn ends when every unit has acted
-or the player ends it.
+one uses the unit up for that turn.
+
+**The turn ends when the player says so**, not when the last unit is spent.
+There is no auto-end: a player who has moved everything still presses `ENTER`.
+That is deliberate — the alternative snatches the turn away mid-thought, and
+the board is worth looking at once all the moves are in. It also means
+"forfeit" below has something to forfeit.
 
 The exception is a move that closes with the enemy: **a unit whose movement
 ends adjacent to an enemy unit may attack it in the same turn**. Adjacent means
@@ -180,14 +204,19 @@ army is processed, and any key pressed during it is discarded. The AI is under
 no obligation to fit a frame — it steps unit by unit so the player can follow
 what happened, not because the loop needs servicing.
 
-The enemy will cycle through their units and perform an action for each unit. 
+The enemy cycles through its units and performs one action for each:
 
-They will attack if in range.
-If no attack is possible, they will choose a unit to attack and move to that unit.
-They will not path through impassable tiles and will avoid player unit attack ranges.
-Once all enemy units have been processed, the enemy will end their turn.
+- Attack if a target is in range.
+- Otherwise pick a target, and move towards it.
+- Never path through impassable tiles, and prefer cells outside the player's
+  attack ranges.
 
-This logic will be elaborated in subsequent reviews.
+Once every enemy unit has been processed, the turn returns to the player.
+
+`docs/PLAN.md` § Enemy decisions works this into something implementable — a
+threat map built once per turn, then a scored choice per unit — and P5 builds
+it. The scoring weights are the part still open, and they belong in
+`config/game_config.h` so tuning is a rebuild rather than a code change.
 
 
 ### Win Conditions
@@ -416,8 +445,10 @@ already spoken for on that screen.
 - **Loading another level** already works: the campaign is ten 14x7 maps,
   `assets/maps/level_1.tmx` .. `level_10.tmx`, ZX0'd into `include/level_N.h`
   by the build and reached through `level_maps[]` in `src/game.c`. `load_map()`
-  decompresses whichever level `level` names into `terrain[]` and seeds the
-  party from that level's `start` object. All ten cost ~330 bytes compressed.
+  decompresses whichever level `level` names into `terrain[]`, flattens it into
+  the per-cell entry costs the movement fill reads, parks the cursor on that
+  level's `start` object and calls `populate_map()`. All ten maps cost ~330
+  bytes compressed.
 
 ### ST_WON
 

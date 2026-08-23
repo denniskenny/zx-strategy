@@ -96,14 +96,18 @@ data that looks plausible and plays wrong:
   the tileset tab > *Embed Tileset*.
 - **Every tileset tile carries a `terrain` string property** — the name becomes
   `NAME_GID_<TERRAIN>` and its status label. Existing names: `PLAIN`, `FOREST`,
-  `WATER`, `HILLS`, `CITY`. Optional `impassable` (bool) blocks the party.
+  `WATER`, `HILLS`, `CITY`. Optional `impassable` (bool) stops units entering
+  the tile — it does not stop the cursor, which goes anywhere on the map.
 - **Tileset GIDs must be contiguous** and terrain names unique — the runtime
   uses `GID - firstgid` as an index into the terrain and tile-sheet tables.
 - **GIDs must fit in a byte** (≤ 255 tiles, and no flipped/rotated tiles — Tiled
   encodes flips in the high bits of the GID).
 - Only the **first tile layer** is read. Object layers are scanned for a point
   object named `start`, which becomes `NAME_START_X` / `NAME_START_Y` in tile
-  coordinates (pixel position floor-divided by the tile size).
+  coordinates (pixel position floor-divided by the tile size). That is where
+  the **cursor** begins on the level — armies are placed by `populate_map()`
+  around the two corners, not by the map — so it is worth putting somewhere the
+  player can see something from.
 
 ## Hand-authoring template
 
@@ -162,8 +166,8 @@ can get:
   `MAP_ROW`, above the status panel. A `#error` guard in `src/game.c` fires if a
   map exceeds that; either shrink the map or write a scrolling/1x1 overview.
 - `ST_PLAY` shows a `VIEW_COLS` x `VIEW_ROWS` **page** of the world, flipping
-  pages as the party walks, so it is size-independent; cells past the world edge
-  are blanked with `ATTR_VOID`.
+  pages as the cursor moves, so it is size-independent; cells past the world
+  edge are blanked with `ATTR_VOID`.
 
 `terrain[]` is one byte per tile in RAM, plus the same again for the GID array
 in the header — a 32x24 map costs ~1.5 KB total, which is fine at
@@ -184,7 +188,7 @@ count.
 make assets              # runs tmx2header.py; prints size + start tile
 cat include/level_1.h    # eyeball the GIDs against the .tmx CSV
 make                     # compiles; the #error guard catches oversized maps
-make run                 # Fuse: ENTER to play, M for the overview
+make run                 # Fuse: a key stops the tune, SPACE plays, M = overview
 ```
 
 The converter prints `WxH = N tiles, start (x,y)` on success, and a `note:` line

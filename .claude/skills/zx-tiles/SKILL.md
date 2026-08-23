@@ -79,7 +79,11 @@ Units are simpler — there is no `.tmx` side, so it is draw + count:
    `assets/units_map.zxp` (16x16) and `assets/units_view.zxp` (32x32).
 2. **Bump `UNIT_COUNT`** in the Makefile (currently 4).
 3. **Extend the unit table** in `docs/DESIGN.md` in the same order —
-   INFANTRY, TANK, CANNON, BASE — and the runtime stat table when it exists.
+   INFANTRY, TANK, CANNON, BASE — and the stat tables in
+   `config/game_config.h` (`unit_range`, `unit_damage`, `unit_health`,
+   `unit_movement`, and the start/per-level counts), which are indexed by the
+   same id. `src/game.c` has a `#if` that fails the build if the sheets and
+   `UNIT_TYPES` disagree, so a missed column is caught at compile time.
 
 Two differences from terrain worth knowing:
 
@@ -167,13 +171,13 @@ T-states available after `vsync_wait()` (even `LDI` needs 16 T per byte). Two
 consequences baked into `ST_PLAY`:
 
 - The view **pages** instead of scrolling. A step inside the page repaints only
-  the two cells that changed (~256 bytes); the page flips only when the party
-  walks off the edge.
+  the two cells that changed (~256 bytes); the page flips only when the cursor
+  steps off the edge.
 - A flip repaints `PAGE_CELLS` (2) cells per frame and freezes movement until it
   finishes, so no frame overruns the window. Raise the tile size or
   `VIEW_COLS`/`VIEW_ROWS` and you lower `PAGE_CELLS`, never the other way round.
 
-If you want a party-centred scrolling view instead, it has to come with small
+If you want a cursor-centred scrolling view instead, it has to come with small
 tiles (2x2 chars) — that is the only way a whole window fits in a frame.
 
 ## Verifying
