@@ -159,10 +159,16 @@ all: $(APP).tap
 run: $(APP).tap
 	$(FUSE_RUN)
 
-# Build with a symbol map (needed by the ZEsarUX profiler / ZRCP debugging)
+# Build with a symbol map (needed by the ZEsarUX profiler / ZRCP debugging),
+# then check the binary still clears 0xC000 — the 128K render path banks page 7
+# in there and anything of ours above it would vanish.  See tools/checkmem.py.
 map:
 	$(MAKE) clean
 	$(MAKE) USER_CFLAGS="-m"
+	$(PYTHON) tools/checkmem.py $(APP).map
+
+.PHONY: checkmem
+checkmem: map
 
 # --- Compile, link & package ---
 $(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE)

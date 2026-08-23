@@ -2,8 +2,8 @@
 
 How to get from the scaffold to the game in `docs/DESIGN.md`.
 
-**Where we are: P0–P3 are done. P4 (combat and the real win condition) is
-next.** The game today places two armies on any of the ten maps, lets the
+**Where we are: P0–P3 are done. Next is P4 (combat and the real win
+condition), then P7 (the scrolling view) before P5 picks it up.** The game today places two armies on any of the ten maps, lets the
 player select a unit, shows what it can reach, moves it, spends its action and
 ends the turn — but nothing can shoot, so nothing can win except by the
 `DEBUG_STATE_WALK` keys, and the enemy never moves.
@@ -62,7 +62,7 @@ kept as the index of where each rule came from, and every one of them is built.
 | Adjacency | 4-way, cursor included | Matches per-tile movement costs; diagonals would need cost 1.4 or break the cost model |
 | Action model | One action per unit; a move ending adjacent to an enemy may also attack | One `acted` bit per unit, set by either action. The attack half lands in P4 |
 | Unit HP width | `uint8` — Base is 255, not 500 | Saves 38 bytes and every damage subtraction is 8-bit |
-| Cursor vs paging | The cursor drives the page, flipping when it leaves | The far base is on another page; the player must be able to look at it |
+| ~~Cursor vs paging~~ | **Superseded by P7**: the cursor is pinned and the world scrolls under it | The paging answer below was right for a static view; the design now asks for a moving one |
 | Turn order | All player units, then all enemy units; `ENTER` forfeits unspent actions | One `acted` bit clears per side, and the turn counter is per round |
 
 **Stalemate** is settled too, and the opposite way to the turn cap this plan
@@ -235,7 +235,7 @@ to "win this level" and "lose this level" (set `player_won`, enter `ST_OVER`).
   unread until P2's status panel and P3's movement.
 - `draw_view_cell()` / `draw_cell()` gain a unit layer: blit the terrain tile,
   then the unit sprite from `units_view`/`units_map`, then colour the cell by
-  side (cyan player, red enemy). The colour pipeline was reworked later — see
+  side (green player, red enemy). The colour pipeline was reworked later — see
   *Colour* below — so the side's ink is now ORed over the sheet's BRIGHT flags
   rather than replacing a flat default.
 - **Acceptance**: **7** units per side visible on level 1 in both views
@@ -295,7 +295,7 @@ instead of being one flat byte per tile.
   at `NAME_ATTR_OFF + t * NAME_ATTR_SIZE`.
 - Terrain uses `--attr-mode full` — the authored ink/paper/bright per character
   cell, so a 32x32 tile can be sixteen colours. Units use `--attr-mode bright`,
-  which keeps only bit 6 and throws ink and paper away: a unit is cyan or red
+  which keeps only bit 6 and throws ink and paper away: a unit is green or red
   by side, but *which cells are lit* is the artist's, and that is the shading.
 - `blit_attr_rect(col,row,w,h,src,or_mask)` in `gfx.c` does both jobs — mask 0
   copies an authored block, a side colour paints a shaded sprite.
@@ -348,6 +348,163 @@ P0 debug keys.
   `docs/DESIGN.md` § Cover); kill a base in the emulator and land in `ST_OVER`;
   win level 10 and land in `ST_WON`.
 
+### 48K / 128K render paths  ✓ done (not a numbered phase)
+
+`hw_detect()`'s `is_128k` now selects between two ways of putting a whole
+screen up (`docs/DESIGN.md` § Two machines, two render paths). On a 128K a full
+repaint is composed into the display file the ULA is not showing and revealed
+with one write to `0x7FFD`; on a 48K it is drawn where it always was. The seam
+is two functions — `render_compose()` and `render_show()` — and nothing below
+them knows which machine it is running on.
+
+**The prerequisite was memory, and it was close.** Banking page 7 in at
+`0xC000` hides anything of ours up there, and the binary was overrunning
+`0xC000` by 497 bytes. Reclaiming the never-called XOR-sprite path
+(`xor_sprite_16`, `xor_sprite_8`, `plot`, `write_blit_px` — 614 bytes of code
+and bss that nothing had ever called) brought the top symbol from `0xBE6E`
+under the line with 402 bytes to spare. `make map` now runs
+`tools/checkmem.py` and fails if that is ever lost again.
+
+If it does get tight, the place to move data is `0x6000-0x7FFF`: contended, but
+contention only applies while the ULA is drawing and this program draws in the
+vblank window.
+
+- **Built and verified, then disarmed.** Page 7 banks in, a screen composes
+  off-display and the flip shows it — all confirmed on `--machine 128k`. But
+  it collides with the vertical blank and is held off by `shadow_ok` in
+  `src/render.c` until P7 deals with that.
+- **The collision**: `vsync_wait()` writes the floating bus sync marker to
+  `0x5AC0` — attribute row 22 of the *page 5* screen — and spins until it sees
+  that byte on the bus. The bus carries what the ULA is fetching, so once page
+  7 is on display the marker is never fetched and the wait never ends. The
+  game hangs on the title with input dead, which is a remarkably quiet way for
+  it to fail. Switching the path on means `src/vsync.c` has to know which
+  screen is live and write the marker to `0xDAC0` when it is page 7 — a change
+  to assembly that the sync has been tuned against, so it belongs with P7.
+- **A second trap, already fixed**: `main()` locked paging (`out (0x7FFD),
+  0x30`, bit 5) before the render path ever ran, so the page-in and the flip
+  were both silently ignored while `is_128k` stayed 1 — every full screen went
+  into a bank the ULA was not showing. `main()` now skips the lock on a 128K
+  and `render.c` owns that port.
+- **Cost**: the binary went *down* 614 bytes overall — the dead code removed
+  was larger than the paths added.
+- **Note for testing**: on a 128K, a ZRCP read of `0x4000` is the *back*
+  buffer, not what is on screen. Read `0xC000` when bit 3 of `page_reg` is set.
+  `.claude/skills/zesarux-test` has the details.
+
+### P7 — The scrolling view
+
+*Numbered after P6 because it was asked for last, but it belongs here in the
+order: it should land before P5, for the reason under Knock-on.*
+
+`docs/DESIGN.md` § Cursor and movement replaces the paging view: the cursor
+stops moving and the world moves under it. This is the largest rendering change
+the project has had, and it is worth being clear that it buys feel rather than
+capability — the board is equally playable today. Sized and staged accordingly.
+
+**Settled by the design**: the cursor is pinned to a fixed screen cell; a
+direction pushes the world one tile the other way; input is locked for the
+length of the scroll; off the board is **sea**, not black; `ST_MAP` is
+untouched and remains the fast way across the board.
+
+#### What it costs
+
+The view is 32x16 characters — full width, rows 1-16:
+
+| | bytes |
+|---|---|
+| one character of scroll | 4 096 pixel + 512 attribute = **4 608** |
+| one cursor step (a 4-character tile) | 4 sub-steps = **18 432** |
+| the vblank window, for comparison | ~28 000 T, about **1 750** bytes |
+
+So a single sub-step is 2.6x what fits in the window, and a cursor step is ten
+times it. Two consequences follow and neither is avoidable by being clever
+about the copy:
+
+- **Presenting cannot be tear-free on a 48K** without chasing the raster down
+  the screen. Accepted for now, to be revisited.
+- **Smooth scrolling costs 4x jumping.** A full view redraw is also 4 608
+  bytes, so moving the window a whole tile and repainting it is a quarter of
+  the work. The scroll is bought purely for the look of it. Worth remembering
+  if it turns out slow: the fallback is already written.
+
+At roughly a frame per sub-step, a cursor step is ~80 ms and crossing the board
+is about a second. That is the number to judge once it is on screen.
+
+#### What the double buffer actually does
+
+It is worth being precise, because it is easy to expect too much of it.
+
+- **It does** take composition off the raster's clock. Building the view —
+  terrain, unit sprites, the movement highlight, attributes, clipping at the
+  sea — happens in RAM with no deadline, and only the finished bytes go to the
+  screen. That is § Logic and rendering applied one level down: separate the
+  slow, careful part from the part with a deadline.
+- **It does not**, by itself, stop tearing on a 48K. Presenting is still a
+  4 608-byte blit racing the beam.
+- **On a 128K it can stop tearing completely.** Page 7 at 0xC000 is a second
+  display file, selected by bit 3 of port 0x7FFD: compose into the shadow
+  screen and flip the bit, and nothing is copied at all. `hw_detect()` already
+  sets `is_128k`, so the machine is known. This is the single biggest win
+  available here and it should shape the interface even if the 48K path lands
+  first — `present()` is a page flip on one machine and a blit on the other.
+
+**Buffer layout is a real decision, not a detail.** The screen is interleaved,
+so presenting a *linear* 32x16 buffer is 128 separate 32-byte runs. Holding the
+buffer in screen order instead makes it a handful of long runs. Decide before
+writing the assembly, because it changes what the assembly looks like.
+
+#### Steps, each one playable
+
+1. **The model, still jumping.** Signed view origin, cursor pinned, sea beyond
+   the board, window follows the cursor by jumping. Uses the existing per-cell
+   draw path — no buffer, no assembly. This is where the addressing gets proved
+   and the sea gets drawn, and it is testable with the harness we have.
+2. **Compose and present.** Build the view into a RAM buffer and blit it.
+   Replaces per-cell drawing for the play view; still jumps.
+3. **Scroll.** Shift the buffer by a character, render the incoming edge slice
+   into it, present, four times per cursor step, with input locked.
+4. **128K shadow screen.** Mostly already there: `render_compose()` /
+   `render_show()` exist and work, so a scroll step composes the window into
+   the back buffer and flips. On a 128K that makes the scroll tear-free for
+   free; the 48K blit stays as the fallback.
+5. **Assembly.** The present and the buffer shift, once their shape has stopped
+   changing.
+
+#### Settle before step 1
+
+- **Which screen cell the cursor sits on.** An 8x4 window has no centre cell;
+  (3,1) and (4,2) are both "middle". It also decides how much of the board the
+  player sees ahead of the cursor versus behind it.
+- **Scroll granularity.** Four sub-steps a tile is the smooth option; two
+  characters at a time is twice as fast and may look no worse in motion.
+- **What the incoming edge needs.** A horizontal scroll brings in one character
+  column, which may be the middle slice of a 4-character unit sprite — so the
+  composer needs to render a *slice* of a cell, which nothing does today.
+
+#### Knock-on
+
+- **Do this before P5.** A scrolling view means the enemy turn has to bring
+  each acting unit into view, or the player watches an empty stretch of sea
+  while the turn happens somewhere else. Cheap to build into P5; expensive to
+  retrofit.
+- `draw_view_cell()` / `attr_view_cell()` take signed world coordinates once
+  the window can leave the board.
+- `set_page()`, `start_page_flip()` and `cells_left` retire with the paging
+  view. The dirty-cell and recolour passes stay: they are what keeps a *static*
+  view up to date, which is still most of the time.
+- The movement-range highlight has to be composed into the buffer rather than
+  written to the screen.
+
+#### Risks
+
+| Risk | Mitigation |
+|------|------------|
+| The present is too slow and the scroll crawls | Step 1 leaves a working jump-scroll to fall back to; measure at step 2 before committing to the assembly |
+| Tearing on 48K | Accepted by decision; the 128K shadow screen path is the real answer and step 4 puts the seam in the right place |
+| RAM for the buffer | 4 608 bytes against ~15 KB free above the binary and 8 KB at 0x6000. Comfortable, but confirm after step 2 |
+| The board reads as tiny once surrounded by sea | An 8x4 window on a 14x7 island shows a lot of water. If it looks wrong, the answer is bigger maps, which is a `.tmx` change and not a code one |
+
 ### P5 — Enemy turn
 
 Threat map, per-unit AI, unit-by-unit pacing, end-of-turn handback. The whole
@@ -359,6 +516,9 @@ legend back when control returns to the player.
   cells with `threat == 0`; each enemy move is visible as it happens rather
   than the board changing all at once; keys pressed during the enemy turn do
   nothing once it ends.
+- **Depends on P7.** "Visible as it happens" means the view has to travel to
+  each acting unit, which is P7's scroll. Taken in this order it is a call per
+  unit; taken the other way round it is a rewrite of the enemy turn.
 
 ### P6 — Balance and polish
 
@@ -374,5 +534,5 @@ whatever the ten maps show up as unplayable.
 | SDCC multiplies in inner loops | Cell indices + `row_base[]`; no `y * GRID_COLS` at runtime |
 | Binary growth on 48K | 15 750 bytes at `-zorg=32768` plus 2 324 bytes of RAM; measure per phase, and every asset is already ZX0'd |
 | A long operation looks like a crash | Banner before the work, input flushed after (`docs/DESIGN.md` § Long operations) |
-| Sprites are opaque, so units overwrite terrain | **Still true, still accepted.** A unit hides its tile rather than standing on it. Masked sprites need `gfx.c`'s XOR path and a second mask strip per sheet — decide before the art gets detailed |
+| Sprites are opaque, so units overwrite terrain | **Still true, still accepted.** A unit hides its tile rather than standing on it. Masked sprites need an XOR blit and a second mask strip per sheet; the old `xor_sprite_*` routines were deleted to buy space under 0xC000, so restore them from git history rather than rewriting |
 | A new colour collides with the sync marker | The converter rejects `0x02`/`0x03` per cell; `make assets` prints every colour each sheet uses. Keep the inventory in `.claude/skills/floating-bus-vsync` current |

@@ -32,10 +32,10 @@
 
 /* Units share one sprite per type; the side is carried by the cell
    attribute, so these are the only thing telling the armies apart
-   (docs/DESIGN.md: "Enemy units are red, player units are cyan").
+   (docs/DESIGN.md: "Enemy units are red, player units are green").
    The sheets supply a BRIGHT flag per character cell — the sprite's
    shading — which is ORed over the side's ink. */
-#define ATTR_UNIT_P 0x05    /* cyan ink, black paper; sheet adds BRIGHT */
+#define ATTR_UNIT_P 0x04    /* green ink, black paper; sheet adds BRIGHT */
 #define ATTR_UNIT_E 0x42    /* bright red ink, black paper             */
 #define ATTR_BRIGHT 0x40    /* the BRIGHT bit the unit sheets carry     */
 
@@ -49,7 +49,7 @@
 /* A player unit that has spent its action goes uniformly dim — the
    sheet's shading is dropped, which is what makes "used" legible at a
    glance against an otherwise shaded sprite. */
-#define ATTR_UNIT_P_DONE 0x05   /* cyan ink, black paper, not bright */
+#define ATTR_UNIT_P_DONE 0x04   /* green ink, black paper, not bright */
 
 /* Ground the selected unit can reach: the terrain art stays, its paper
    turns blue.  Distinct from the cursor (white paper) and from every
@@ -136,6 +136,16 @@ extern uint8_t dirty_n;         /* cells whose picture is stale         */
 
 /* --- Setup ----------------------------------------------------------- */
 void load_tiles(void);          /* unpack the four sheets, once         */
+
+/* --- 48K / 128K --------------------------------------------------------
+ * The only place the machines differ.  A whole-screen repaint brackets
+ * itself in these: on a 128K it is composed into the display file the
+ * ULA is not showing and then shown with a port write, so it appears
+ * complete rather than being watched as it is drawn.  On a 48K both are
+ * no-ops and drawing goes where it always did.  Everything else in this
+ * header is written once and runs on both. */
+void render_compose(void);      /* aim at the back buffer, if there is one */
+void render_show(void);         /* flip it into view                       */
 
 /* --- Text and chrome -------------------------------------------------- */
 void print_num(uint8_t col, uint8_t row, uint16_t v, uint8_t digits);

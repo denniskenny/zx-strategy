@@ -32,6 +32,15 @@
 
 uint8_t vsync_mode = 0;
 
+/* Where the sync marker lives: attribute row 22 of the screen the ULA is
+   DISPLAYING.  A variable rather than VSYNC_MARKER_ADDR because a 128K
+   has two display files and the floating bus carries whatever the ULA is
+   fetching — put the marker in page 5 while page 7 is on show and it is
+   never fetched, so vsync_wait() below spins for ever.  src/render.c
+   moves this whenever it flips.  The 32 cells must not cross a 256-byte
+   boundary: the loops walk it with `inc l`. */
+uint8_t *vsync_marker_addr = (uint8_t *)VSYNC_MARKER_ADDR;
+
 void vsync_detect(void) __naked
 {
     __asm
@@ -109,7 +118,7 @@ void vsync_wait(void) __naked
     ;; Guarantees the marker survives any full-screen clear: at worst
     ;; one frame falls through to the next marker match.
     ld  d, VSYNC_MARKER     ; D = marker for the timed loops below
-    ld  hl, VSYNC_MARKER_ADDR
+    ld  hl, (_vsync_marker_addr)
     ld  b, VSYNC_MARKER_CELLS
 _vs_mark:
     ld  (hl), d

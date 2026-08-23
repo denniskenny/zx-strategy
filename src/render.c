@@ -49,6 +49,122 @@
 #error "units_view.zxp tiles are not the size of a play-view cell"
 #endif
 
+/* ------------------------------------------------- 48K / 128K paths --
+   The only place the two machines are told apart.  `hw_detect()` sets
+   is_128k; everything else in this file is written once and works on
+   both (docs/DESIGN.md § Two machines, two render paths).
+
+   A 128K has a SECOND display file — RAM page 7 — and bit 3 of port
+   0x7FFD chooses which of the two the ULA shows.  That buys a whole
+   screen composed where nobody can see it, then shown in the time it
+   takes to write one byte to a port.  A 48K has no such thing and
+   never will: there, composing off-display would mean copying 6 912
+   bytes back over the display afterwards, which is the very tearing it
+   was meant to avoid.
+
+   So the paths are:
+
+     48K    draw straight to the displayed screen.  A full repaint is
+            visible as it happens, and is spread over frames to keep
+            each frame inside the vblank budget.
+     128K   compose the full repaint into whichever screen is NOT being
+            shown, then flip.  No budget applies — nobody is looking at
+            it — and the change appears complete, between frames.
+
+   Page 7 is banked in at 0xC000 once at startup and left there.  That
+   is only safe because nothing of ours lives above 0xC000: the link map
+   tops out well below it and the stack sits around 0x7FA0.  If the
+   binary ever grows past 0xC000 this breaks, loudly and strangely, so
+   the build checks it — see tools/checkmem.py. */
+
+#define SCREEN_0    ((uint8_t *)0x4000)     /* page 5, always mapped   */
+#define SCREEN_1    ((uint8_t *)0xC000)     /* page 7, banked in below */
+
+#define PAGE_7FFD   0x17    /* page 7 at 0xC000, 48K ROM, screen 0     */
+#define PAGE_SCREEN 0x08    /* bit 3: show the shadow screen           */
+#define MARKER_ROW  22      /* the floating bus sync marker's row      */
+
+static uint8_t page_reg;    /* 0x7FFD is write-only; remember it       */
+static uint8_t back;        /* 1 = the back buffer is SCREEN_1         */
+static uint8_t shadow_ok;   /* 0 = the 128K path is not usable yet     */
+
+/* --- Why the 128K path is currently disarmed --------------------------
+   It works, and it is verified: page 7 banks in, a whole screen composes
+   off-display and the flip shows it.  It cannot be switched on yet
+   because it collides with how this program finds the vertical blank.
+
+   vsync_wait() writes the floating bus sync marker to VSYNC_MARKER_ADDR
+   — 0x5AC0, attribute row 22 of the screen in page 5 — and then spins
+   until it sees that byte come back off the bus.  The bus carries what
+   the ULA is FETCHING, so the moment the shadow screen is the one being
+   displayed, the ULA is reading page 7 and the marker in page 5 is
+   never fetched.  vsync_wait() waits for ever: the game hangs on the
+   title with the input dead, which is exactly what it looked like.
+
+   Fixing it means teaching vsync.c which screen is live and writing the
+   marker to 0xDAC0 instead of 0x5AC0 when it is page 7 — a change to
+   the assembly in src/vsync.c and to the sync it has been tuned
+   against.  That belongs with P7, where the shadow screen finally earns
+   its keep (docs/PLAN.md).  Until then both machines take the 48K path
+   and this costs nothing but the branch. */
+
+/* Bank page 7 in for good, so the shadow screen is addressable without
+   paging around every repaint.  48K does nothing here and keeps
+   drawing where it always did. */
+static void screens_init(void)
+{
+    back = 0;
+    /* Still 0: the vsync collision below is fixed, but ST_PLAY does
+       INCREMENTAL drawing after the flip (render_tick's page flips and
+       dirty cells) and that diverges the two buffers — the board comes
+       back unpainted on the next entry.  Alternating buffers only works
+       once the whole view is composed per repaint, which is P7's scroll
+       model.  tests/render_paths.py fails on 128K ST_PLAY when this is
+       set to is_128k, which is how it was caught. */
+    shadow_ok = 0;
+    if (!shadow_ok) return;
+
+    page_reg = PAGE_7FFD;
+    __asm
+        ld  bc, #0x7FFD
+        ld  a, (_page_reg)
+        out (c), a
+    __endasm;
+}
+
+/* Start a full-screen repaint.  On a 128K that means aiming at the
+   screen the ULA is not showing; on a 48K it means what it always
+   meant, and render_show() has nothing to do afterwards. */
+void render_compose(void)
+{
+    if (!shadow_ok) return;
+    gfx_target(back ? SCREEN_0 : SCREEN_1);
+}
+
+/* Show what render_compose() built.  One port write on a 128K. */
+void render_show(void)
+{
+    if (!shadow_ok) return;
+
+    back = (uint8_t)!back;
+    page_reg = (uint8_t)(back ? (PAGE_7FFD | PAGE_SCREEN) : PAGE_7FFD);
+    __asm
+        ld  bc, #0x7FFD
+        ld  a, (_page_reg)
+        out (c), a
+    __endasm;
+
+    /* Incremental drawing after this goes to whatever is now on show —
+       a cursor step or a dirty cell is two cells, not a screen, and
+       tears no worse than it does on a 48K. */
+    gfx_target(back ? SCREEN_1 : SCREEN_0);
+
+    /* And the floating bus sync has to follow the display, or it waits
+       for a marker the ULA is no longer fetching and never returns. */
+    vsync_marker_addr = gfx_attr + MARKER_ROW * 32;
+}
+
+
 /* ------------------------------------------------------------- state */
 
 uint8_t page_x, page_y;
@@ -127,6 +243,8 @@ void draw_header(const char *title)
    ~500 bytes of ZX0 in the binary and one decompression at startup. */
 void load_tiles(void)
 {
+    screens_init();
+
     dzx0_decompress(tiles_map_zx0, map_tiles);
     dzx0_decompress(tiles_view_zx0, view_tiles);
     dzx0_decompress(units_map_zx0, unit_map_tiles);
@@ -479,6 +597,7 @@ void render_hint(const char *hint)
 
 void render_title(void)
 {
+    render_compose();
     draw_header("ZX STRATEGY");
 
     print_at(1, 3, "MACHINE :");
@@ -513,32 +632,38 @@ void render_title(void)
 
     /* Row 22 is left blank on purpose — it holds the floating bus sync
        marker written by vsync_wait(). */
+    render_show();
 }
 
 void render_play(void)
 {
+    render_compose();
     draw_header("THE FIELD");
     set_page();
     draw_view();
     render_discard();       /* draw_view() already used the real colours */
     draw_status("CURSOR :", cursor_x, cursor_y);
     render_hint(PLAY_HINT);
+    render_show();
 }
 
 void render_map(void)
 {
+    render_compose();
     draw_header("CAMPAIGN MAP");
     draw_map();
     solid_map_cell(cursor_x, cursor_y, ATTR_HINT);  /* the play cursor */
     solid_map_cell(cur_x, cur_y, ATTR_CURSOR);
     draw_status("CURSOR :", cur_x, cur_y);
     render_hint("QAOP LOOK AROUND  SPACE CLOSE  ");
+    render_show();
 }
 
 /* A level ended.  player_won says which message to show; the exit is
    handled in handle_input(), which is where the level advances. */
 void render_over(void)
 {
+    render_compose();
     draw_header(player_won ? "VICTORY" : "DEFEAT");
 
     print_at(1, 10, player_won ? "LEVEL TAKEN    :" : "LEVEL LOST     :");
@@ -547,10 +672,12 @@ void render_over(void)
 
     render_hint(player_won ? "SPACE FOR THE NEXT LEVEL       "
                            : "SPACE TO RETURN TO THE TITLE   ");
+    render_show();
 }
 
 void render_won(void)
 {
+    render_compose();
     draw_header("CAMPAIGN COMPLETE");
 
     print_at(4, 9,  "EVERY LEVEL TAKEN");
@@ -559,4 +686,5 @@ void render_won(void)
     set_attr_rect(0, 9, 32, 3, ATTR_TEXT);
 
     render_hint("PRESS A KEY                    ");
+    render_show();
 }

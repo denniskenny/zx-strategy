@@ -24,11 +24,12 @@ When selected, the unit's stats, movement range, and attack range are displayed.
 
 When all the player's units have been moved or used their action, the player can press the enter key to end their turn.
 
-The enemy units will then take their turn. Enemy units are red, player units are cyan.
+The enemy units will then take their turn. Enemy units are red, player units are green.
 
 ### Game Init
 
 The game starts with level_1.tmx. 
+
 The global starting values for each unit type are defined in `config/game_config.h`.
 
 A populate_map() function creates a friendly base and an enemy base at opposite corners of the map. It takes the level as a parameter, reads that level's roster from `config/game_config.h`, and places the created units within N tiles of the base (N = `UNITS_PLACE_RADIUS`, currently 4) but not on impassable tiles.
@@ -37,7 +38,49 @@ That block does not always hold enough land: level 8's enemy corner is most of a
 
 Because the bases sit in opposite corners, every map has to keep those corners passable and joined by a land path — otherwise a base is unreachable and the level cannot be won. The map converter checks both.
 
+The initial local view will be centered on the player's base.
+
 Each subsequent odd-numbered level will have an additional unit of each type.
+
+### Cursor and movement
+
+The cursor is not a unit and terrain does not stop it. It crosses water and
+every other `impassable` tile freely, and it costs nothing to move — it is
+where the player is looking, not something standing on the board. Passability
+and movement cost constrain *units*, and they are checked when an order is
+issued, not when the cursor is moved. The one thing the cursor cannot do is
+leave the map.
+
+The cursor inverts the highlighted tile and uses white on black attributes.
+
+#### Local view
+
+The cursor does not move on the local view; the keys or joystick directions cause the local view to move in the opposite direction, keeping the cursor in the same position relative to the screen.
+
+Each movement causes a push scroll, implemented in `render.c` using either the vertical or horizontal assembly scroll routine. User input is locked during scrolling and a buffer is passed to the scroll routine with the current tiles and the next row or column.
+
+The buffer contains the tiles from the map, but where units are positioned on the map, it will include them instead of the tile.
+
+The routine either scrolls vertically or horizontally, one character at time (to avoid attribute issues). When the scrolling is finished, the user input is unlocked and the local view is updated.
+
+**Beyond the edge of the map is sea.** A pinned cursor has to be able to reach
+the corners — both bases are in one — so the view must be allowed to run off
+the board, and what it shows there is the water tile rather than black. The
+board is an island. This is what makes the pinned cursor workable at all: an
+8x4 view on a 14x7 map with the cursor fixed near the middle is partly off the
+board for most of the positions it can take.
+
+The sea is scenery, not terrain. It is drawn, but it has no cell index, it is
+not in `terrain[]`, and no unit can be ordered onto it — the movement fill
+never sees it.
+
+##### Map view
+
+This renders the entire map and units in one view. The keys or joystick directions move the cursor around the map, restricted only by the map edges.
+
+`ST_MAP` is therefore the quick way across the board: the local view costs a
+scroll per cell, the overview costs nothing and shows everything at once. That
+is a better reason for it to exist than it had before.
 
 ### Movement Range
 
@@ -51,12 +94,7 @@ steps, so a tile's movement cost is the whole cost of entering it and no step
 needs a different price from any other. This applies to the cursor as well as
 to units.
 
-**The cursor is not a unit and terrain does not stop it.** It crosses water and
-every other `impassable` tile freely, and it costs nothing to move — it is
-where the player is looking, not something standing on the board. Passability
-and movement cost constrain *units*, and they are checked when an order is
-issued, not when the cursor is moved. The one thing the cursor cannot do is
-leave the map.
+The cursor is constrained by none of this — see § Cursor and movement.
 
 ### Tiles
 
@@ -133,7 +171,7 @@ Art: `assets/units_view.zxp` (32x32 sprites, `ST_PLAY`) and
 order below. Both sides share a sprite; the runtime picks the ink per side.
 
 **What the sheet contributes to a unit's colour is its BRIGHT flags, and
-nothing else.** Ink and paper are not the artist's to choose — a unit is cyan
+nothing else.** Ink and paper are not the artist's to choose — a unit is green
 or red according to whose it is — but *which character cells are lit* is, and
 that is the sprite's shading. The build strips ink and paper at conversion
 (`--attr-mode bright`) and the runtime ORs the side's colour over what is left.
@@ -332,6 +370,59 @@ something, it goes in `logic.c` and may take as long as it likes. If it puts
 bytes on the screen, it goes in `render.c` and has to say what it costs. If it
 decides *when*, it stays in `game.c`.
 
+## Two machines, two render paths
+
+`hw_detect()` sets `is_128k` before anything is drawn, and `src/render.c` is
+the only file that reads it. The difference is worth having because a 128K has
+something a 48K cannot be given: **a second display file**.
+
+| | 48K | 128K |
+|---|---|---|
+| Full-screen repaint | drawn straight onto the displayed screen, spread over frames to stay inside the vblank budget | composed into the display file the ULA is *not* showing, then shown |
+| Cost to show it | — | one write to port `0x7FFD` |
+| What the player sees | the screen being painted | the finished screen, appearing between frames |
+| Incremental repaint (a cursor step, a dirty cell) | straight to the screen | the same — two cells is not worth a flip |
+
+The 128K's screens are RAM page 5 at `0x4000` and RAM page 7, and bit 3 of port
+`0x7FFD` picks which the ULA shows. `render_compose()` aims drawing at whichever
+is not on show; `render_show()` flips. On a 48K both are no-ops and the code
+below them never learns which machine it is on — the whole difference is two
+functions and a flag.
+
+> **Currently disarmed.** The path is built and verified, but `shadow_ok` in
+> `src/render.c` holds it off, so both machines take the 48K path today. It
+> collides with the vertical blank: `vsync_wait()` writes its floating bus sync
+> marker to `0x5AC0`, attribute row 22 of the page-5 screen, and waits to see
+> that byte come back off the bus. The bus carries what the ULA is *fetching*,
+> so with page 7 on display the marker is never fetched and `vsync_wait()`
+> spins for ever — the game hangs on the title with the input dead. Switching
+> it on means teaching `src/vsync.c` which screen is live and writing the
+> marker to `0xDAC0` when it is page 7. That is P7 work; see `docs/PLAN.md`.
+
+Composing off-display is not merely tidier, it is **free of the frame budget**:
+nobody is looking at the back buffer, so a full repaint there has no deadline
+at all. That is the same argument as § Logic and rendering, one level further
+down — and it is why the 128K path is the one that matters for P7's scrolling
+view, where a whole window has to be rebuilt per scroll step.
+
+### The constraint this puts on the binary
+
+Page 7 is banked in at `0xC000` **once at startup and left there**, so the
+shadow screen is addressable without paging around every repaint. That is only
+safe while nothing of ours lives at `0xC000` or above — anything up there would
+be swapped out of sight the moment page 7 arrives, and the symptom would be
+random corruption rather than an honest crash.
+
+So the whole program has to fit between `0x8000` and `0xC000`: **16 KB**, for
+code, rodata, data and bss together. `make map` runs `tools/checkmem.py`, which
+fails the build if the top symbol reaches `0xC000`. The stack is not part of
+that check; z88dk leaves it near `0x7FA0`, in the page-5 RAM that is always
+mapped.
+
+When space runs short, the region to move into is `0x6000-0x7FFF`. It is
+contended RAM, but contention only bites while the ULA is drawing, and drawing
+happens in the vblank window — so for anything this program touches it is free.
+
 ## Long operations
 
 This is a turn-based game. Between orders nothing animates, nothing moves on a
@@ -366,7 +457,7 @@ changes when somebody takes a turn.
 | State | Screen | Purpose |
 |-------|--------|---------|
 | `ST_TITLE` | "ZX STRATEGY" + hardware report | Front end; entry to a game |
-| `ST_PLAY` | "THE FIELD" — 8x4 page of terrain | The game proper |
+| `ST_PLAY` | "THE FIELD" — 8x4 window on the board | The game proper |
 | `ST_MAP` | "CAMPAIGN MAP" — whole world | Read-only overview, opened from play |
 | `ST_OVER` | win / lose message | Ends a level; advances or abandons the campaign |
 | `ST_WON` | "CAMPAIGN COMPLETE" | The last level was won; the campaign is over |
@@ -422,12 +513,11 @@ already spoken for on that screen.
 
 ### ST_PLAY
 
-- **Shows**: an **8x4 page** of the world in 4x4-character tiles (rows 1-16,
+- **Shows**: an **8x4 window** on the world in 4x4-character tiles (rows 1-16,
   full screen width), the units standing on it, the cursor, and a four-line
   status panel on rows 17-20: the unit under the cursor, the turn number, the
-  cursor's cell, and its terrain with that terrain's cover. A page that runs
-  off the edge of the world — the right and bottom pages of a 14x7 map — blanks
-  the cells beyond it with `ATTR_VOID`.
+  cursor's cell, and its terrain with that terrain's cover. Where the window
+  runs off the board it shows sea.
 - **Per frame**: move the cursor (held directions repeat), repaint the two
   cells a step changed, advance a page flip if one is in progress, refresh the
   status panel when dirty.
@@ -444,27 +534,22 @@ already spoken for on that screen.
   half-issue it. Orders are ignored while a page flip is running, for the same
   reason cursor movement is.
 - **Spent units go dim**: a unit that has used its action is drawn in
-  non-bright cyan, in the board and in the status panel alike, so what is left
+  non-bright green, in the board and in the status panel alike, so what is left
   to move is readable at a glance. The enemy has no dim form — non-bright red
   is `0x02`, which the floating bus sync marker reserves — and does not need
   one.
 - **Ending the turn**: `ENTER` (or fire 1) returns every unit's action and
   advances the turn counter. This is the one screen where the "go on" key is
   not `SPACE`, because `SPACE` is busy giving orders here.
-- **Paging, not scrolling**: a full page repaint is ~4 KB of screen writes —
-  several frames' work — so the view holds a fixed page and flips only when it
-  has to. A flip repaints `PAGE_CELLS` tiles per frame and freezes movement
-  until it completes (~0.3 s), which reads as a screen transition.
-- **The cursor flips the page**, not the unit: the page changes when the cursor
-  steps off its edge. The player has to be able to look at the whole board —
-  the enemy base is in the opposite corner and therefore always on another page
-  — and the cursor is the only thing that moves freely. A unit ordered to move
-  never leaves the page it was selected on, because its movement range is at
-  most 3 tiles.
-- **Cursor movement**: one cell per step in the four cardinal directions,
-  stopped only by the edge of the map. Terrain and units do not block it (see
-  § Movement Range) — those constrain the unit being *ordered*, and are checked
-  when the order is given.
+- **The view scrolls, the cursor does not** — see § Cursor and movement for the
+  rule and `docs/PLAN.md` § P7 for how it is built. The cursor sits at a fixed
+  screen cell and directions push the world past it, one tile per step, with
+  input locked for the length of the scroll. Off the edge of the board is sea.
+
+  *Until P7 lands this is still a paging view*: the cursor moves inside a fixed
+  8x4 page and the page flips when it steps off the edge, repainting
+  `PAGE_CELLS` tiles a frame. The design below describes the destination; the
+  plan describes the road.
 - **Exits**: `ENTER` ends the turn, `M` → `ST_MAP`, `X` → title.
 
 ### ST_MAP

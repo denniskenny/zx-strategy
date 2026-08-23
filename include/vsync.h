@@ -14,6 +14,11 @@
 
 extern uint8_t vsync_mode;
 
+/* Attribute row 22 of the screen currently being DISPLAYED — the marker
+   the floating bus sync watches for.  src/render.c repoints this when a
+   128K flips display files; nothing else should touch it. */
+extern uint8_t *vsync_marker_addr;
+
 /* Detect which floating bus technique works on this machine.
  * Call once at startup, after hw_detect() and BEFORE locking
  * paging (port 0x7FFD bit 5) if +2A/+3 support is desired. */

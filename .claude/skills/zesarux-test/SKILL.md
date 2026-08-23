@@ -99,6 +99,53 @@ Useful checks:
 - **Pixels**: 0x4000–0x57FF → `read-memory 16384 6144`
 - **Attributes**: 0x5800–0x5AFF → `read-memory 22528 768`
 
+### On a 128K, 0x4000 is not what you are looking at
+
+The 128K render path composes full screens into the shadow display file (RAM
+page 7, banked in at `0xC000`) and shows it by setting bit 3 of port `0x7FFD`.
+So after any state entry, **`0x4000` holds the back buffer** and reading it
+gives you the previous screen — which looks exactly like a rendering bug.
+
+Check `_page_reg` (render.c keeps a copy, since `0x7FFD` is write-only):
+
+| `page_reg` | Displayed | Read screen from |
+|---|---|---|
+| bit 3 clear (e.g. `0x17`) | page 5 | `0x4000` / attrs `0x5800` |
+| bit 3 set (e.g. `0x1F`) | page 7 | `0xC000` / attrs `0xD800` |
+
+```python
+pr = sym(s, 'page_reg', 1)[0]
+base = 0xC000 if pr & 0x08 else 0x4000
+pix, attr = rd(s, base, 6144), rd(s, base + 6144, 768)
+```
+
+**Do not use `--accelerate-loading` on a 128K.** It is a genuine speed win
+on a 48K — the p0 walk uses it and the tape stops being most of the wall
+clock — but on a 128K the load silently never completes: the machine sits in
+the ROM with a blank screen, `is_128k` reads 0 because the program never ran,
+and it looks exactly like the program crashing or failing to render. It cost
+most of an afternoon and several wrong diagnoses. `tests/render_paths.py`
+deliberately omits it; `tests/p0_state_walk.py` is 48K-only and keeps it.
+
+**Do not retry `smartload` in a loop either.** Each one *resets* the machine,
+so a retry loop guarantees the load is interrupted before it can finish. The
+emulator autoloads whatever tap is named on its command line, so the normal
+case needs no `smartload` at all — just wait for the screen.
+
+To run 128K at all you must give ZEsarUX the right ROM — `--machine 128k`
+alone fails with *"Unable to open rom file 128.rom"* and leaves a black screen
+with the tap unloaded, which reads as the program crashing:
+
+```bash
+zesarux --vo null --ao null --enable-remoteprotocol --machine 128k \
+  --noconfigfile --quickexit \
+  --romfile ~/projects/zesarux/src/128.rom  $PWD/zxstrategy.tap
+```
+
+Sanity check after loading: `is_128k` should be 1. If it is 0 on a 128K, the
+tap did not load — check the screen is not blank before believing anything
+else.
+
 Address for column `col` (0-31) and pixel row `y` (0-191):
 ```
 addr = 0x4000 | ((y >> 6) << 11) | ((y & 7) << 8) | (((y >> 3) & 7) << 5) | col

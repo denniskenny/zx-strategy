@@ -147,7 +147,7 @@ the Makefile pattern rules do the rest:
   be several colours at once
 - `assets/units_*.zxp` → `include/units_*.h` — unit sprite strip, same
   converter but built with `--attr-mode bright`: ink and paper are discarded
-  (a unit is cyan or red by side) and only the BRIGHT flags survive, which is
+  (a unit is green or red by side) and only the BRIGHT flags survive, which is
   the sprite's shading
 
 At runtime: `dzx0_decompress(NAME_zx0, SCREEN);`. The compressor is

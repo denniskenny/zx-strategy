@@ -49,8 +49,8 @@
  * The tune plays itself whenever the title screen is entered, and any
  * key stops it; there is no key that starts it.
  *
- * The border turns RED while the frame's work runs and BLACK while
- * waiting for the beam, so the red band is the CPU budget used.
+ * The border turns GREEN while the frame's work runs and BLACK while
+ * waiting for the beam, so the green band is the CPU budget used.
  */
 
 #include "../config/app_config.h"
@@ -502,7 +502,7 @@ void game_run(void)
            48K) are free for tear-free updates. */
         vsync_wait();
 
-        border(2);              /* RED: start of the frame's work */
+        border(4);              /* GREEN: start of the frame's work */
         update_state();
         border(0);              /* BLACK: work done, idle from here */
 
