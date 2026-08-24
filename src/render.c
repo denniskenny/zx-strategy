@@ -40,7 +40,6 @@
 #include "../include/level_1.h"
 #include "../include/memmap.h"
 #include "../include/render.h"
-#include "../include/pageprobe.h"
 #include "../include/tiles_map.h"
 #include "../include/tiles_view.h"
 #include "../include/units_map.h"
@@ -166,11 +165,10 @@ static void screens_init(void)
 {
     back = 0;
     shadow_ok = 0;
-#if !BUILD_SHADOW
-    /* The 48k build never pages, which is what lets its code run past
-       0xC000.  It still runs on a 128K; it just draws in place. */
-    return;
-#else
+
+    /* A 48K falls through here with shadow_ok 0 and draws in place —
+       the same path a 128K with locked paging takes.  There is no
+       separate 48k build any more; see the Makefile. */
     if (!is_128k) return;
 
     /* A +2A/+3 gets this too.  It did not, briefly, because the
@@ -210,7 +208,6 @@ static void screens_init(void)
         return;
     }
     vsync_marker_addr = gfx_attr + MARKER_ROW * 32;
-#endif
 }
 
 /* Start a full-screen repaint.  On a 128K that means aiming at the
@@ -1201,27 +1198,7 @@ void render_title(void)
     print_at(1, 6, "SCREEN  :");
     print_at(11, 6, shadow_ok ? "DOUBLE" : "SINGLE");
 
-#if BUILD_SHADOW
     set_attr_rect(0, 3, 32, 4, ATTR_TEXT);
-#else
-    /* P8 step 1, and it is driven from here rather than from main()
-       for two reasons.  main() contains an __asm block, and zcc does not
-       evaluate preprocessor directives inside such a function — a #if
-       there is passed through unevaluated, which is how a call to
-       48k-only code survived into the 128k build as `undefined symbol:
-       _page_probe_run`.  And this branch is compiled out of the 128k
-       build wholesale, so the probe costs that build nothing at all,
-       which matters when it has five bytes spare.  render_title() has no
-       asm of its own, so the #if here behaves normally.
-
-       Cheap and idempotent, so running it on every title redraw is fine.
-       The strings below are the reason it cannot be unconditional: they
-       alone are more than those five bytes. */
-    page_probe_run();
-    print_at(1, 7, "PAGEWIN :");
-    print_at(11, 7, is_128k ? (page_probe ? "SURVIVES" : "LOST") : "N/A");
-    set_attr_rect(0, 3, 32, 5, ATTR_TEXT);
-#endif
 
     print_at(1, 10, "SPACE / FIRE   START");
     set_attr_rect(0, 10, 32, 1, ATTR_HINT);

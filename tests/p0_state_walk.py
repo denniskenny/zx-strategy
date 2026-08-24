@@ -4,7 +4,11 @@ Drives the built .tap through title -> play -> ST_OVER -> next level ->
 ... -> ST_WON -> title using the DEBUG_STATE_WALK keys (W wins a level,
 L loses it), and checks terrain[] against the .tmx at levels 1, 5 and 10.
 
-    make map                      # symbols are read from zxstrategy.map
+    make DEBUG_KEYS=1 map         # the W/L keys, and the symbol map
+
+That tap is 94 bytes over the 0xC000 ceiling and so is 48K-only; a 128K
+would bank page 7 over its tail.  This is a 48K test, so that is fine —
+but do not hand that tap to a 128K.  See the Makefile.
     zesarux --vo null --ao null --enable-remoteprotocol --machine 48k \
         --noconfigfile --quickexit --accelerate-loading \
         --romfile ~/projects/zesarux/src/48.rom \
@@ -27,6 +31,24 @@ of the work:
     held for a guessed interval and hoped about.  The app acts on the
     rising edge of a bit seen in two consecutive frames, so holding
     longer than that is free and holding too briefly loses the press.
+These were measured, so do not re-tune them on a hunch:
+
+  | change | total |
+  |---|---|
+  | as shipped (POLL 0.01, PRESS_WAIT 0.6) | 19.7-21.1s |
+  | POLL 0.003 | 21.0s |
+  | PRESS_WAIT 0.25 | 20.0s |
+
+  All within run-to-run noise. **The harness is not the bottleneck** —
+  the ~20s is the emulated application: ten levels loading and
+  rendering at roughly 50 fps.  Neither knob is timing out, which also
+  means presses are landing on the first try.
+
+  ZEsarUX offers no way out either: `get-cpu-turbo-speed` is read-only
+  over ZRCP, there is no `set-`, and `TopSpeed` exists only as an F-key
+  action.  A real speed-up has to come from the walk visiting fewer
+  levels, not from tuning waits.
+
   * State is read in as few round trips as possible.  `level`, `turn`
     and `player_won` are adjacent in RAM, so one read fetches all three.
 

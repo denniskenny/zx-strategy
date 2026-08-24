@@ -5,34 +5,42 @@ ZCCCFG ?= $(Z88DK)/lib/config
 PYTHON ?= python3
 UNAME_S := $(shell uname -s)
 
-# --- Build targets ----------------------------------------------------
-# Two of them, from one source, because the shadow screen costs address
-# space rather than RAM.
+# --- Build target -----------------------------------------------------
+# ONE tap for every machine.
 #
-#   128k  code must end below 0xC000, because page 7 is banked in there
-#         for the shadow screen.  That is a hard 16 KB ceiling for code
-#         and rodata together, and it is why this split exists.
-#   48k   no shadow screen, so nothing pages and code may run all the
-#         way to 0xFFFF: 32 KB, twice the room, at the cost of tearing.
+#   make            build it
+#   make run        run it in Fuse
+#   make map        build with a symbol map, then check the 0xC000 ceiling
+#   make memmap     the full memory picture, linker-placed and hand-placed
 #
-#   make            the 48k tap (the default: it runs everywhere)
-#   make both       both taps
-#   make TARGET=128k   just the 128k one
-#   make run        the 48k tap in Fuse
+# All code lives below 0xC000 so a 128K or +3 can keep page 7 banked in
+# there as a shadow screen.  A 48K takes the shadow_ok=0 path — written
+# for 128Ks whose paging is locked — and draws in place.
 #
-# The 48k build still runs on a 128K or +3 — it simply does not use the
-# second screen.  The 128k build is the one to hand those machines.
-TARGET ?= 48k
+# There was a second target once, giving the 48K code up to 0xFFFF.  It
+# bought 32 KB the program did not use (167 bytes over the ceiling, 16 KB
+# clear) and cost the thing that matters: the test suite drove one build
+# while a 128K owner was handed the other.  Do not reintroduce it.
+#
+# So the 16 KB ceiling at 0x8000-0xBFFF is universal and checkmem
+# enforces it.  Above 0xC000 goes data, or a bank — never code.
+APP        = zxstrategy
+DEBUG_KEYS ?= 0
+TARGET_DEF = -DDEBUG_STATE_WALK=$(DEBUG_KEYS)
 
-ifeq ($(TARGET),128k)
-APP        = zxstrategy128
-TARGET_DEF = -DBUILD_SHADOW=1 -DDEBUG_STATE_WALK=0
-PROBE_SRC  =
+# The state-walk debug keys cost 99 bytes and the shipping tap has 5
+# spare, so they are off by default and tests/p0_state_walk.py asks for
+# them explicitly:
+#     make DEBUG_KEYS=1 map
+#
+# That tap is 94 bytes over the ceiling and is therefore **48K only** —
+# on a 128K page 7 would be banked in over its tail.  The ceiling is
+# relaxed here rather than silently broken, and p0_state_walk.py is a
+# 48K test.  Anything that has to run on a 128K must be built without
+# DEBUG_KEYS; render_paths.py drives both machines and needs no keys.
+ifeq ($(DEBUG_KEYS),0)
 MEM_LIMIT  = 0xC000
 else
-APP        = zxstrategy
-TARGET_DEF = -DBUILD_SHADOW=0
-PROBE_SRC  = src/pageprobe.c
 MEM_LIMIT  = 0x10000
 endif
 
@@ -173,10 +181,10 @@ assets/music/%_linkable.asm: assets/music/%.asm tools/gen_tritone_module.py
 
 # --- Source files ---
 SRCS = src/main.c src/game.c src/logic.c src/render.c src/gfx.c src/input.c src/hw_detect.c \
-       src/vsync.c src/prng.c src/dzx0.c src/no_font64.asm $(PROBE_SRC)
+       src/vsync.c src/prng.c src/dzx0.c src/no_font64.asm
 
 HEADERS = config/app_config.h config/game_config.h include/gfx.h include/input.h include/hw.h \
-          include/vsync.h include/prng.h include/game.h include/board.h include/pageprobe.h \
+          include/vsync.h include/prng.h include/game.h include/board.h \
           include/render.h include/dzx0.h \
           include/music.h $(GENERATED_HEADERS)
 
@@ -188,24 +196,14 @@ all: $(APP).tap
 run: $(APP).tap
 	$(FUSE_RUN)
 
-# Build with a symbol map (needed by the ZEsarUX profiler / ZRCP debugging),
-# then check the binary still clears 0xC000 — the 128K render path banks page 7
-# in there and anything of ours above it would vanish.  See tools/checkmem.py.
+# Build with a symbol map (needed by the ZEsarUX profiler and by the
+# tests, which read addresses from it), then check the binary still
+# clears 0xC000 — a 128K banks page 7 in there and anything of ours
+# above it would vanish.  See tools/checkmem.py.
 map:
 	$(MAKE) clean
-	$(MAKE) USER_CFLAGS="-m"
+	$(MAKE) USER_CFLAGS="-m" DEBUG_KEYS=$(DEBUG_KEYS)
 	$(PYTHON) tools/checkmem.py $(APP).map --limit $(MEM_LIMIT)
-
-# Both taps in one go, recursively: the two targets differ only by -D
-# flags and output name, and zcc compiles each in a single pass, so
-# there are no shared objects to contaminate.  Do NOT add a clean
-# between them -- `clean` is APP-scoped, so it deletes the tap the
-# previous line just built.
-.PHONY: both
-both:
-	$(MAKE) TARGET=48k
-	$(MAKE) TARGET=128k
-	@ls -l zxstrategy.tap zxstrategy128.tap
 
 .PHONY: checkmem memmap
 checkmem: map
@@ -235,8 +233,7 @@ tests/dzx0check.tap: tests/dzx0check.c src/dzx0.c include/units_view.h
 # --- Clean ---
 clean:
 	rm -f zxstrategy zxstrategy.tap zxstrategy_CODE.bin zxstrategy_data_user.bin zxstrategy_code.tap
-	rm -f zxstrategy128 zxstrategy128.tap zxstrategy128_CODE.bin zxstrategy128_data_user.bin zxstrategy128_code.tap
-	rm -f zxstrategy.map zxstrategy128.map
+	rm -f zxstrategy.map
 	rm -f tests/fbprobe tests/fbprobe.tap tests/fbprobe_CODE.bin tests/fbprobe_data_user.bin tests/fbprobe_code.tap
 	rm -f tests/dzx0check tests/dzx0check.tap tests/dzx0check_CODE.bin tests/dzx0check_data_user.bin tests/dzx0check_code.tap
 	rm -f *.o src/*.o tests/*.o *.map
