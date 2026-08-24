@@ -23,10 +23,6 @@
    claims it, so exactly one copy reaches the binary.  These must come
    before ANY include — board.h reaches level_1.h, and a claim made
    after that arrives too late to have any effect. */
-#define TILES_MAP_DEFINE_DATA
-#define TILES_VIEW_DEFINE_DATA
-#define UNITS_MAP_DEFINE_DATA
-#define UNITS_VIEW_DEFINE_DATA
 #define LEVEL_1_DEFINE_DATA
 
 #include <string.h>
