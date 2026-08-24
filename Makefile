@@ -27,10 +27,12 @@ TARGET ?= 48k
 ifeq ($(TARGET),128k)
 APP        = zxstrategy128
 TARGET_DEF = -DBUILD_SHADOW=1 -DDEBUG_STATE_WALK=0
+PROBE_SRC  =
 MEM_LIMIT  = 0xC000
 else
 APP        = zxstrategy
 TARGET_DEF = -DBUILD_SHADOW=0
+PROBE_SRC  =
 MEM_LIMIT  = 0x10000
 endif
 
@@ -171,7 +173,7 @@ assets/music/%_linkable.asm: assets/music/%.asm tools/gen_tritone_module.py
 
 # --- Source files ---
 SRCS = src/main.c src/game.c src/logic.c src/render.c src/gfx.c src/input.c src/hw_detect.c \
-       src/vsync.c src/prng.c src/dzx0.c src/no_font64.asm
+       src/vsync.c src/prng.c src/dzx0.c src/no_font64.asm $(PROBE_SRC)
 
 HEADERS = config/app_config.h config/game_config.h include/gfx.h include/input.h include/hw.h \
           include/vsync.h include/prng.h include/game.h include/board.h \
@@ -232,7 +234,9 @@ tests/dzx0check.tap: tests/dzx0check.c src/dzx0.c include/units_view.h
 
 # --- Clean ---
 clean:
-	rm -f $(APP) $(APP).tap $(APP)_CODE.bin $(APP)_data_user.bin $(APP)_code.tap
+	rm -f zxstrategy zxstrategy.tap zxstrategy_CODE.bin zxstrategy_data_user.bin zxstrategy_code.tap
+	rm -f zxstrategy128 zxstrategy128.tap zxstrategy128_CODE.bin zxstrategy128_data_user.bin zxstrategy128_code.tap
+	rm -f zxstrategy.map zxstrategy128.map
 	rm -f tests/fbprobe tests/fbprobe.tap tests/fbprobe_CODE.bin tests/fbprobe_data_user.bin tests/fbprobe_code.tap
 	rm -f tests/dzx0check tests/dzx0check.tap tests/dzx0check_CODE.bin tests/dzx0check_data_user.bin tests/dzx0check_code.tap
 	rm -f *.o src/*.o tests/*.o *.map
