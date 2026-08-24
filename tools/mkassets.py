@@ -34,19 +34,19 @@ import sys
 ORG = 0x6000
 LIMIT = 0x7FA0          # the stack lives just below 0x8000
 
-
-# The four sheet headers contain ONE array and nothing else, so the whole
-# header's data can move.  The level_N headers also own terrain_blocked
-# and terrain_names, which C still needs, and their ownership #define
-# covers the whole file -- moving their gids blobs needs a generator
-# change to split the guard.  331 bytes, left for later.
-SHEETS = ('tiles_view', 'units_view', 'tiles_map', 'units_map')
+# 0x6000-0x7FA0 is free ONLY because include/memmap.h keeps the hand-placed
+# buffers at 0xDB00.  Move MEM_VBUF back down and this block is loaded
+# underneath the renderer's scratch, which shows up as corrupt level data
+# several levels in, not as a load failure.  The guard below is the check.
 
 
 def blobs():
     """Every ZX0 array a generated header can define, with its bytes."""
     out = []
-    for path in ['include/%s.h' % s for s in SHEETS]:
+    # EVERY generated header, so a new asset needs no change here: the
+    # generators emit its bytes behind a *_ZX0_INLINE guard nothing
+    # defines, and this picks them up automatically.
+    for path in sorted(glob.glob('include/*.h')):
         src = open(path).read()
         for m in re.finditer(
                 r'const uint8_t (\w+_zx0)\[(\d+)\] = \{(.*?)\};', src, re.S):
@@ -59,12 +59,26 @@ def blobs():
     return out
 
 
+def check_no_overlap(lo, hi):
+    """Refuse to build a block that memmap.h has buffers sitting on."""
+    src = open('include/memmap.h').read()
+    m = re.search(r'#define MEM_VBUF\s+(0x[0-9A-Fa-f]+)', src)
+    if not m:
+        sys.exit('mkassets: cannot find MEM_VBUF in include/memmap.h')
+    vbuf = int(m.group(1), 16)
+    if vbuf < hi:
+        sys.exit('mkassets: assets 0x%04X-0x%04X collide with MEM_VBUF at '
+                 '0x%04X -- the renderer would overwrite them, and it shows '
+                 'up as corrupt level data, not a load failure' % (lo, hi, vbuf))
+
+
 def main():
     found = blobs()
     if not found:
         sys.exit('mkassets: no *_zx0 arrays found -- did the generators run?')
 
     total = sum(len(d) for _, d, _ in found)
+    check_no_overlap(ORG, ORG + total)
     if ORG + total > LIMIT:
         sys.exit('mkassets: %d bytes at 0x%04X would reach 0x%04X, past the '
                  'stack at 0x%04X' % (total, ORG, ORG + total, LIMIT))

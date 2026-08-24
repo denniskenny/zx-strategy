@@ -37,6 +37,9 @@ import xml.etree.ElementTree as ET
 LABEL_W = 8     # status-panel label width in src/game.c
 
 
+ZX0_NOTE = '/* The BYTES do not belong in the program.  They are read once, at\n   boot, to decompress into the tile buffers, so they live in the\n   standalone asset block at 0x6000 instead of spending the 16 KB\n   code budget below 0xC000.\n\n   tools/mkassets.py parses the array below out of this header and\n   emits two things: the binary that mktap.py ships as its own CODE\n   block, and a `defc` that resolves the extern to its address at\n   zero cost.  Nothing defines %s, so no translation\n   unit ever carries a copy -- the array is here to be read by the\n   tool, not by the compiler. */\n'
+
+
 def terrain_sig(first_gid, terrains):
     """A cheap 16-bit hash of the tileset: order, names and passability.
 
@@ -256,9 +259,9 @@ def main():
                     " straight\n   into terrain[] and converts the GIDs"
                     " in place. */\n")
             f.write(f"#define {upper}_RAW_SIZE ({cols} * {rows})\n")
-            f.write(f"#ifndef {upper}_DEFINE_DATA\n"
-                    f"extern const uint8_t {name}_gids_zx0[{len(zdata)}];\n"
-                    f"#else\n"
+            f.write(ZX0_NOTE % f"{upper}_ZX0_INLINE")
+            f.write(f"extern const uint8_t {name}_gids_zx0[{len(zdata)}];\n"
+                    f"#ifdef {upper}_ZX0_INLINE\n"
                     f"const uint8_t {name}_gids_zx0[{len(zdata)}] = {{\n")
             for i in range(0, len(zdata), 16):
                 chunk = zdata[i:i + 16]

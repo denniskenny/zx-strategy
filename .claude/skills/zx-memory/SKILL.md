@@ -419,6 +419,37 @@ call the ROM's LD-BYTES with the headerless flag.
 **Parse the tap, do not trust the size.** `16471 -> 17499` said the bytes
 shipped; only dumping the block headers showed nothing would load them.
 
+## 0x6000-0x7FFF is not free: MEM_VBUF lives there (or did)
+
+The 8 KB below the program looks like the obvious home for compressed
+assets. It is only free if nothing else is in it, and on this project the
+hand-placed buffers were: `MEM_VBUF` and friends ran 0x6000-0x7CAA.
+
+Loading an asset block at 0x6000 on top of them produced a bug worth
+knowing the shape of:
+
+- **The sheet blobs worked.** They are decompressed once at boot, before
+  the renderer first writes VBUF, so they are consumed before being
+  clobbered. Working *by luck*.
+- **The per-level blobs did not.** Decompressed on every level load, long
+  after VBUF is in use, so they were read back out of render scratch.
+
+**`render_paths.py` passed the whole time.** It exercises one level, at
+boot. Only `p0_state_walk`, which walks ten, caught it — and it presented
+as "a new game restarts at level 0", nothing resembling a memory clash.
+
+The fix is to put the buffers at **0xDB00**: page 7 above the shadow screen
+on a 128K, plain RAM on a 48K, same addresses on both, and everything in
+them is written at runtime so nothing has to be loaded there.
+`tools/mkassets.py` now reads MEM_VBUF out of memmap.h and refuses to build
+an overlapping block.
+
+**Two general lessons.** Free space below the program is only free if you
+check what is hand-placed there — the linker map will not tell you, because
+it does not know about `memmap.h`. And an asset used *once at boot* can
+hide a placement bug that an asset used *per level* exposes; if graphics
+survive the title screen, that is not evidence they are safely placed.
+
 ## Adding a graphic
 
 The converters do the work; see `.claude/skills/zx-tiles`. What this skill

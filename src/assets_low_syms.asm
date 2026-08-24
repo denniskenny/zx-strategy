@@ -5,11 +5,31 @@
 
     MODULE  assets_low_syms
 
-    PUBLIC  _tiles_view_zx0
-    defc    _tiles_view_zx0 = 0x6000
-    PUBLIC  _units_view_zx0
-    defc    _units_view_zx0 = 0x617C
+    PUBLIC  _level_1_gids_zx0
+    defc    _level_1_gids_zx0 = 0x6000
+    PUBLIC  _level_10_gids_zx0
+    defc    _level_10_gids_zx0 = 0x6024
+    PUBLIC  _level_2_gids_zx0
+    defc    _level_2_gids_zx0 = 0x6043
+    PUBLIC  _level_3_gids_zx0
+    defc    _level_3_gids_zx0 = 0x6063
+    PUBLIC  _level_4_gids_zx0
+    defc    _level_4_gids_zx0 = 0x6085
+    PUBLIC  _level_5_gids_zx0
+    defc    _level_5_gids_zx0 = 0x60A7
+    PUBLIC  _level_6_gids_zx0
+    defc    _level_6_gids_zx0 = 0x60CA
+    PUBLIC  _level_7_gids_zx0
+    defc    _level_7_gids_zx0 = 0x60EB
+    PUBLIC  _level_8_gids_zx0
+    defc    _level_8_gids_zx0 = 0x6107
+    PUBLIC  _level_9_gids_zx0
+    defc    _level_9_gids_zx0 = 0x6129
     PUBLIC  _tiles_map_zx0
-    defc    _tiles_map_zx0 = 0x62AC
+    defc    _tiles_map_zx0 = 0x614B
+    PUBLIC  _tiles_view_zx0
+    defc    _tiles_view_zx0 = 0x61AD
     PUBLIC  _units_map_zx0
-    defc    _units_map_zx0 = 0x630E
+    defc    _units_map_zx0 = 0x6329
+    PUBLIC  _units_view_zx0
+    defc    _units_view_zx0 = 0x6395

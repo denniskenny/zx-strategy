@@ -24,24 +24,12 @@ UNAME_S := $(shell uname -s)
 #
 # So the 16 KB ceiling at 0x8000-0xBFFF is universal and checkmem
 # enforces it.  Above 0xC000 goes data, or a bank — never code.
-# LOWMEM=1 moves the buffers to 0xDB00 and drops code to 0x6000: 8 KB
-# more code space, but half the program lands in contended RAM and the
-# state walk slows from ~20s to ~30s.  Build both and compare:
-#     make            -> zxstrategy.tap      (fast, 16 KB code)
-#     make LOWMEM=1   -> zxstrategy_low.tap  (slow, 24 KB code)
 # The BASIC loader must CLEAR below the lowest thing it loads, or BASIC's
-# own workspace sits on top of our first block.
+# own workspace sits on top of the asset block at 0x6000.
 CLEAR_ADDR = 24575
-LOWMEM     ?= 0
-ifeq ($(LOWMEM),1)
-APP        = zxstrategy_low
-ORG_DEF    = -zorg=24576 -DMEM_VBUF=0xDB00
-USR_ADDR   = 24576
-else
 APP        = zxstrategy
 ORG_DEF    = -zorg=32768
 USR_ADDR   = 32768
-endif
 
 DEBUG_KEYS ?= 0
 TARGET_DEF = -DDEBUG_STATE_WALK=$(DEBUG_KEYS)
@@ -76,19 +64,13 @@ endif
 CONFIG_MK ?= config/basic_config.mk
 include $(CONFIG_MK)
 
-# -zorg=24576 puts code at 0x6000, which buys 8 KB of code space against
-# the 0xC000 ceiling (5 bytes clear became 8197).
-#
-# It was 0x8000 to keep all code in NON-CONTENDED RAM, on the grounds that
-# the floating bus timed loops needed it.  Measured: they do not — vsync
-# still settles on 0x40FF and the marker still lands on the displayed
-# screen, on both machines.
-#
-# What it DOES cost is speed.  0x6000-0x7FFF is contended, so the ULA
-# steals cycles from every fetch there, and half the program now lives in
-# it: p0_state_walk went from 19.7-21.1s to 30.4s, about 50%% slower.
-# That is the trade, and it is not obviously the right one — see docs/PLAN
-# on placing only cold code (logic.c) low instead.
+# -zorg=32768 keeps code out of contended RAM.  0x6000 was tried: it buys
+# 8 KB of code space and costs about 50% speed (p0_state_walk 20s -> 30s),
+# because half the program then sits in 0x6000-0x7FFF where the ULA steals
+# a cycle from every fetch.  The floating bus timed loops survive it fine
+# -- that part of the old comment here was wrong -- but the speed does not.
+# See docs/PLAN.md P9.  Compressed assets go down there instead: read once
+# at boot, so contention costs them nothing.
 CFLAGS=+zx -vn -SO3 $(ORG_DEF) -startup=31 --opt-code-speed -compiler=sdcc -mz80 -pragma-define:CRT_ENABLE_STDIO=0 $(TARGET_DEF) \
        --reserve-regs-iy --allow-unsafe-read -Cc--max-allocs-per-node=50000
 USER_CFLAGS ?=
@@ -220,7 +202,7 @@ HEADERS = config/app_config.h config/game_config.h include/gfx.h include/input.h
 # --- Top-level targets ---
 all: $(APP).tap
 
-.PHONY: all assets run map probe dzx0check lowmem clean
+.PHONY: all assets run map probe dzx0check clean
 
 run: $(APP).tap
 	$(FUSE_RUN)
@@ -274,18 +256,6 @@ $(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE) $(ASSETS_LOW_BIN) src/assets_lo
 	    --code 0x6000 $(ASSETS_LOW_BIN) \
 	    --code $(USR_ADDR) $(APP)
 
-# --- Low-memory probe: is CLEAR 24575 / -zorg 0x6000 survivable? ---
-# Deliberately built at 0x6000 with the stack below it, which is the
-# layout that would buy 8 KB of code space.  A +3 has crashed on that
-# region before, so this is the gate: run it there FIRST.
-.PHONY: lowmem
-lowmem: tests/lowmem.tap
-
-tests/lowmem.tap: tests/lowmem.c
-	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) +zx -vn -SO3 -zorg=24576 -startup=31 \
-	    -compiler=sdcc -mz80 -pragma-define:CRT_ENABLE_STDIO=0 -m \
-	    -o tests/lowmem tests/lowmem.c -create-app
-
 # --- Floating bus probe (diagnostic harness, see tests/fbprobe.c) ---
 probe: tests/fbprobe.tap
 
@@ -301,9 +271,7 @@ tests/dzx0check.tap: tests/dzx0check.c src/dzx0.c include/units_view.h
 # --- Clean ---
 clean:
 	rm -f zxstrategy zxstrategy.tap zxstrategy_CODE.bin zxstrategy_data_user.bin zxstrategy_code.tap
-	rm -f zxstrategy_low zxstrategy_low.tap zxstrategy_low_CODE.bin zxstrategy_low_data_user.bin zxstrategy_low_code.tap
-	rm -f zxstrategy.map zxstrategy_low.map *_assets_low.bin src/assets_low.asm src/assets_low_syms.asm *_ORGPROBE.bin zxstrategy48 zxstrategy128
-	rm -f tests/lowmem tests/lowmem.tap tests/lowmem_CODE.bin tests/lowmem_data_user.bin tests/lowmem_code.tap
+	rm -f zxstrategy.map *_assets_low.bin src/assets_low.asm src/assets_low_syms.asm 
 	rm -f tests/fbprobe tests/fbprobe.tap tests/fbprobe_CODE.bin tests/fbprobe_data_user.bin tests/fbprobe_code.tap
 	rm -f tests/dzx0check tests/dzx0check.tap tests/dzx0check_CODE.bin tests/dzx0check_data_user.bin tests/dzx0check_code.tap
 	rm -f *.o src/*.o tests/*.o *.map

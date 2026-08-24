@@ -46,11 +46,21 @@
  */
 
 /* --- src/render.c: the play-view buffer --- */
-/* 0x6000 with code at 0x8000 (the fast layout), or 0xDB00 with code at
-   0x6000 (the low layout, 8 KB more code space and contended).  The
-   Makefile sets it; see LOWMEM there. */
+/* 0xDB00, ABOVE the program, and it must stay there.
+
+   These buffers used to sit at 0x6000, which looked like free RAM below
+   the code.  It is not free: 0x6000-0x7FFF is where the compressed asset
+   block is loaded (see tools/mkassets.py), and the two overlapped.  The
+   sheet blobs survived by luck -- they are decompressed at boot, before
+   the renderer first writes VBUF -- while the per-level gids, decompressed
+   on every level load, were read back out of render garbage.
+   render_paths.py passed throughout; only p0_state_walk caught it.
+
+   On a 128K 0xDB00 is page 7, above the shadow screen at 0xC000-0xDAFF;
+   on a 48K it is plain RAM.  Same addresses either way, and everything
+   here is written at runtime, so nothing needs loading into it. */
 #ifndef MEM_VBUF
-#define MEM_VBUF        0x6000
+#define MEM_VBUF        0xDB00
 #endif
                                         /* 128 rows x 32 bytes  = 4096 */
 #define MEM_VATTR       (MEM_VBUF  + 4096)      /* 16 x 32      =  512 */

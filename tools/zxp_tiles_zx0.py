@@ -49,6 +49,9 @@ import sys
 VSYNC_MARKER = 0x03
 
 
+ZX0_NOTE = '/* The BYTES do not belong in the program.  They are read once, at\n   boot, to decompress into the tile buffers, so they live in the\n   standalone asset block at 0x6000 instead of spending the 16 KB\n   code budget below 0xC000.\n\n   tools/mkassets.py parses the array below out of this header and\n   emits two things: the binary that mktap.py ships as its own CODE\n   block, and a `defc` that resolves the extern to its address at\n   zero cost.  Nothing defines %s, so no translation\n   unit ever carries a copy -- the array is here to be read by the\n   tool, not by the compiler. */\n'
+
+
 def die(msg):
     print(f"error: {msg}", file=sys.stderr)
     sys.exit(1)
@@ -211,9 +214,9 @@ def main():
                 f"\n"
                 f"   Undefined symbol at link time means nobody claimed it;\n"
                 f"   duplicate means two files did. */\n")
-        f.write(f"#ifndef {U}_DEFINE_DATA\n"
-                f"extern const uint8_t {args.name}_zx0[{len(zdata)}];\n"
-                f"#else\n"
+        f.write(ZX0_NOTE % f"{U}_ZX0_INLINE")
+        f.write(f"extern const uint8_t {args.name}_zx0[{len(zdata)}];\n"
+                f"#ifdef {U}_ZX0_INLINE\n"
                 f"const uint8_t {args.name}_zx0[{len(zdata)}] = {{\n")
         for i in range(0, len(zdata), 16):
             chunk = zdata[i:i + 16]
