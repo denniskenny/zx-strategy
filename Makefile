@@ -244,17 +244,17 @@ ASSETS_LOW_BIN = $(APP)_assets_low.bin
 # tools/mkassets.py writes BOTH halves from the generated headers: the
 # bytes (assembled standalone, never linked) and the `defc` symbols that
 # resolve them (linked, zero bytes).  Regenerate whenever an asset does.
-src/assets_low.asm src/assets_low_syms.asm: $(GENERATED_HEADERS) tools/mkassets.py
+src/assets_low.asm src/assets_low_syms.asm src/logic_org.asm logic_org.addr: $(GENERATED_HEADERS) tools/mkassets.py
 	$(PYTHON) tools/mkassets.py
 
 $(ASSETS_LOW_BIN): src/assets_low.asm
 	PATH=$(Z88DK)/bin:$$PATH $(Z88DK)/bin/z88dk-z80asm -b -O. -o$@ src/assets_low.asm
 
-$(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE) $(ASSETS_LOW_BIN) src/assets_low_syms.asm tools/mktap.py
+$(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE) $(ASSETS_LOW_BIN) src/assets_low_syms.asm src/logic_org.asm logic_org.addr tools/mktap.py
 	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o $(APP) $(SRCS) $(MUSIC_LINKABLE) $(LDFLAGS)
 	$(PYTHON) tools/mktap.py $(APP).tap --name $(APP) --clear $(CLEAR_ADDR) --usr $(USR_ADDR) \
 	    --code 0x6000 $(ASSETS_LOW_BIN) \
-	    --code 0x6500 $(APP)_LOGIC.bin \
+	    --code $$(cat logic_org.addr) $(APP)_LOGIC.bin \
 	    --code $(USR_ADDR) $(APP)
 
 # --- Floating bus probe (diagnostic harness, see tests/fbprobe.c) ---
@@ -272,7 +272,7 @@ tests/dzx0check.tap: tests/dzx0check.c src/dzx0.c include/units_view.h
 # --- Clean ---
 clean:
 	rm -f zxstrategy zxstrategy.tap zxstrategy_CODE.bin zxstrategy_data_user.bin zxstrategy_code.tap
-	rm -f zxstrategy.map *_assets_low.bin *_LOGIC.bin src/assets_low.asm src/assets_low_syms.asm 
+	rm -f zxstrategy.map *_assets_low.bin *_LOGIC.bin src/assets_low.asm src/assets_low_syms.asm src/logic_org.asm logic_org.addr
 	rm -f tests/fbprobe tests/fbprobe.tap tests/fbprobe_CODE.bin tests/fbprobe_data_user.bin tests/fbprobe_code.tap
 	rm -f tests/dzx0check tests/dzx0check.tap tests/dzx0check_CODE.bin tests/dzx0check_data_user.bin tests/dzx0check_code.tap
 	rm -f *.o src/*.o tests/*.o *.map

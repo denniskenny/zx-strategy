@@ -21,6 +21,10 @@ import argparse
 import struct
 import sys
 
+# `CLEAR 24575` leaves the stack just under 0x8000, growing down.  Blocks
+# loaded below the program grow up towards it.
+STACK_FLOOR = 0x7FA0
+
 # BASIC tokens
 CLEAR, LOAD, CODE, RANDOMIZE, USR = 0xFD, 0xEF, 0xAF, 0xF9, 0xC0
 
@@ -83,6 +87,17 @@ def main():
         if addr <= a.clear:
             sys.exit('mktap: block at 0x%04X is at or below CLEAR %d -- BASIC '
                      'would overwrite it' % (addr, a.clear))
+        # A block below the program grows UP towards the stack, which grows
+        # DOWN from STACK_FLOOR.  Nothing else notices them meeting:
+        # checkmem watches 0xC000 and knows nothing about these blocks, and
+        # the tape happily loads over the stack's future home.  The symptom
+        # is a return address eaten mid-call, arbitrarily far from the
+        # module that grew.
+        if addr < 0x8000 and end > STACK_FLOOR:
+            sys.exit('mktap: block at 0x%04X..0x%04X runs into the stack at '
+                     '0x%04X -- %d bytes too big.  Shrink it, or move it '
+                     'above 0x8000 and pay the 0xC000 ceiling instead'
+                     % (addr, end, STACK_FLOOR, end - STACK_FLOOR))
         # Blocks are placed by hand in the Makefile while their SIZES come
         # from the build, so one growing into the next is a question of
         # when, not whether.  The tape loads them in order and the second
@@ -113,8 +128,8 @@ def main():
     low = [(addr, data) for addr, data in codes if addr < 0x8000]
     if low:
         top = max(addr + len(data) for addr, data in low)
-        print('       0x%04X .. 0x7FA0  %6d bytes FREE below the stack'
-              % (top, 0x7FA0 - top))
+        print('       0x%04X .. 0x%04X  %6d bytes FREE below the stack'
+              % (top, STACK_FLOOR, STACK_FLOOR - top))
 
 
 main()
