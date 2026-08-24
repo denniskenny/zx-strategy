@@ -399,6 +399,26 @@ not a pragma — budget for it accordingly.
 Check the tap size and read the address back on a real load. This one
 would have failed silently and looked like a decompressor bug.
 
+### The bank route gets further, but still needs a loader
+
+`SECTION CODE_1` in a user module *does* reach the tap, unlike `org`:
+
+```
+_bank_probe_blob = $1C000       bank 1, offset 0xC000
+tap 16471 -> 17499 bytes
+```
+
+But it arrives as a **headerless data block**, and the generated 30-byte
+BASIC loader does a single `LOAD ""CODE`. Nothing loads it. appmake emits
+banked blocks for a program that loads its own banks at runtime.
+
+`LOAD ""CODE` cannot read a headerless block — it wants a header. A custom
+loader has to either make appmake emit headers for the extra blocks, or
+call the ROM's LD-BYTES with the headerless flag.
+
+**Parse the tap, do not trust the size.** `16471 -> 17499` said the bytes
+shipped; only dumping the block headers showed nothing would load them.
+
 ## Adding a graphic
 
 The converters do the work; see `.claude/skills/zx-tiles`. What this skill

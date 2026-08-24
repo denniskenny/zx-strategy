@@ -836,10 +836,43 @@ since banked data is where this is heading anyway.
 needs the custom two-LOAD loader. Two different problems sharing one
 mechanism; do not conflate them.
 
-Unverified: whether `SECTION CODE_1` in a user module actually reaches the
-tap. Given `org` looked correct in the map and shipped nothing, **check the
-tap size and read the address back on a real load** before building
-anything on top.
+**Tested.** `SECTION CODE_1` in a user module works as far as the tap:
+
+```
+_bank_probe_blob = $1C000      bank 1, offset 0xC000
+tap 16471 -> 17499 bytes       the 1 KB block really ships
+```
+
+Unlike the `org` attempt, the bytes are there. But the tap looks like this:
+
+```
+HEADER BASIC  Loader       30 bytes   addr 0x000A
+HEADER CODE   zxstrategy   16391      addr 0x8000
+  data block                1024      <-- NO HEADER
+```
+
+**The bank block is headerless and the 30-byte loader only does one LOAD,
+so nothing loads it.** appmake emits banked blocks for a program that
+loads its own banks at runtime, which is the usual 128K pattern.
+
+So a custom loader IS needed, and now we know the shape of the problem:
+a headerless block cannot be read by `LOAD ""CODE`, which expects a
+header. The loader must either get appmake to emit headers for the extra
+blocks, or call the ROM's LD-BYTES with the flag byte set for headerless
+data.
+
+#### The layout this has to serve
+
+- **One contended-RAM block at 0x6000-0x7FFF, loaded by EVERY machine.**
+  Compressed graphics, read once at boot. This is the one that frees the
+  16 KB code budget and it is not optional on a 48K.
+- **Zero or more bank blocks, loaded only on a 128K/+3.** Extended
+  graphics a 48K simply never sees; the game picks at runtime off
+  `is_128k`.
+
+The first is the important one and the harder one, because it must work
+on a machine with no paging at all. Do not let the banked extras drive
+the design.
 
 #### What it costs
 
