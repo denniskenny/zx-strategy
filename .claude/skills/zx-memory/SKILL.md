@@ -331,6 +331,34 @@ Measure before assuming the 48K build needs its extra 16 KB. On this project
 it exceeded the 16 KB ceiling by **167 bytes** while leaving 16 217 clear — the
 address space it paid the shadow screen for was almost entirely unused.
 
+## Lowering -zorg: 8 KB of code space, at 50%% of the speed
+
+Code at 0x8000 leaves 16 KB below the 0xC000 ceiling.  Moving the
+hand-placed buffers up to 0xDB00 and setting `-zorg=24576` puts code at
+0x6000 instead: **5 bytes clear became 8197**.
+
+Two beliefs were tested and both turned out wrong in opposite directions.
+
+**The floating bus does NOT need non-contended code.** The Makefile
+asserted for a long time that -zorg=0x8000 was required for stable sync.
+Measured: vsync still settles on 0x40FF and the marker still lands on the
+displayed screen, on 48K and 128K alike.
+
+**But contention is expensive.** 0x6000-0x7FFF is contended, the ULA
+steals cycles from every fetch there, and half the program now lives in
+it: the state walk went from 19.7-21.1s to **30.4s**.  Functionally
+perfect, materially slower.
+
+So the trade is 8 KB against roughly half the speed, and the interesting
+version is selective: put only COLD code low — AI, pathfinding, anything
+run once a turn rather than once a frame — and keep the render path at
+0x8000.  Per-module placement, not a global -zorg.
+
+The layout itself is safe on all three machines (`tests/lowmem.tap`,
+border green): stack lands at 0x5FA4, below the new code base, and
+0xDB00-0xFFFF round-trips every byte.  Worth confirming rather than
+assuming, because a +3 had crashed on that region before.
+
 ## Adding a graphic
 
 The converters do the work; see `.claude/skills/zx-tiles`. What this skill

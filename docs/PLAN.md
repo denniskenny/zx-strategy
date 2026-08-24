@@ -781,6 +781,28 @@ accessors. It is already where the buffers live.
 4. **Verify on all three machines**, 48K included: it is now running code paths
    it never has.
 
+#### P9 — lowering -zorg (landed, but under review)
+
+Buffers moved to 0xDB00 and `-zorg=24576`: **5 bytes clear became 8197**.
+Both suites pass on 48K and 128K. `tests/lowmem.tap` is GREEN on 48K,
+128K **and +3**, so the layout is safe on every machine — the +3 was the
+one in doubt and is now cleared.
+
+Two beliefs were tested, both wrong in opposite directions:
+
+- **The floating bus does not need non-contended code.** The Makefile had
+  asserted it did.  vsync still settles on 0x40FF and the marker still
+  lands on the displayed screen.
+- **Contention is expensive.** p0_state_walk went 19.7-21.1s to **30.4s**,
+  ~50%% slower, because half the program now sits in contended
+  0x6000-0x7FFF.
+
+**Open decision:** 8 KB against half the speed. The better version is
+selective — only cold code (logic.c: AI and pathfinding, once a turn, not
+once a frame) at 0x6000, render path staying at 0x8000. z88dk has the
+section machinery (CODE_0..n appear in the map, used for 128K banking)
+but wiring a C module to a chosen address is unvalidated.
+
 #### What it costs
 
 The **16 KB ceiling becomes universal**, so the banked-data work below stops
