@@ -260,6 +260,42 @@ run to 0xFFFF *and* the machine keeps its shadow screen. Requirements: the copy
 routine and its source below 0xC000, the stack below 0xC000, `di`/`ei` around
 the window, and nothing above 0xC000 touched inside it. See `docs/PLAN.md` P8.
 
+### This is measured, not assumed
+
+`src/pageprobe.c` writes a sentinel at 0xFF00, banks page 7 in at 0xC000,
+writes to 0xC000 and 0xDAFF, banks bank 0 back, and rereads the sentinel. It
+reports on the title screen as `PAGEWIN`, because a +3 can only be asked that
+way.
+
+| | |
+|---|---|
+| **48K** | `N/A` — nothing pages |
+| **128K** (ZEsarUX) | **SURVIVES** |
+| **+3** (Fuse, real load) | **SURVIVES** |
+
+The +3 result is the one that counts: it has a second paging port at 0x1FFD, a
+different memory controller, and every fault this project has had in that
+window came from it. Two of those survived a green test suite.
+
+The probe is also **its own witness** — `page_probe` links at 0xC0A7, inside
+the window being paged away, and still holds the right value afterwards. That
+is stronger than the sentinel alone, and it was luck rather than design; if you
+write a probe like this, put a variable up there deliberately.
+
+Two details that are not optional:
+
+- **Store the result after banking back**, not during the window. Writing to a
+  variable that lives above 0xC000 while page 7 is mapped puts it in the
+  screen, not in your bss.
+- **BANKM (0x5B5C) on every write, both directions.** Verified as 0x10 after
+  the probe. Leave it stale and the ROM's interrupt handler writes its copy
+  back over you — that cost most of a session once already.
+
+The probe lives in the **48k build only**, which is the point rather than a
+limitation: that build is the one with code and bss above 0xC000, so it is the
+only one whose survival means anything. The 128k build has nothing up there to
+lose.
+
 ## Adding a graphic
 
 The converters do the work; see `.claude/skills/zx-tiles`. What this skill

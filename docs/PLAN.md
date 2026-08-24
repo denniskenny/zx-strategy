@@ -736,9 +736,10 @@ its shadow screen — one binary, 32 KB, tear-free where the hardware allows.
      and it is itself linked at 0xC0A7, inside the window it is testing, so the
      variable is its own witness. BANKM back to 0x10 afterwards.
    - **48K: N/A**, as it should be — nothing pages, `is_128k` is 0.
-   - **+3: still unanswered.** This ZEsarUX install has no +3 ROM; Fuse does.
-     It is the only one of the three whose answer is in any doubt, so step 2
-     should not start until it has been read on one.
+   - **+3: SURVIVES**, read in Fuse. This was the one in real doubt — second
+     paging port at 0x1FFD, different memory controller, and the source of
+     every fault this project has had in that window. **Step 1 is done and the
+     premise of P8 holds on all three machines.**
 2. **Move the page-in from `screens_init()` into the present**, still with
    `BUILD_SHADOW` gating it, so the two-target build keeps working while this
    is proved.
