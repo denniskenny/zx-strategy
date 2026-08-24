@@ -803,6 +803,44 @@ once a frame) at 0x6000, render path staying at 0x8000. z88dk has the
 section machinery (CODE_0..n appear in the map, used for 128K banking)
 but wiring a C module to a chosen address is unvalidated.
 
+#### P10 — splitting the tap (research done, not built)
+
+Needed to put asset blobs anywhere outside the one contiguous block
+`-create-app` emits.  `org` in a user module is not enough — z80asm places
+the section and appmake silently drops the bytes (see the zx-memory skill).
+
+**appmake +zx already has the pieces**, so a tap builder need not be
+hand-rolled from scratch:
+
+```
+--noloader     don't create the loader block
+--noheader     don't create the header
+--merge FILE   merge a custom loader from an external TAP
+--blockname N  name of the code block
+--clearaddr N  address to CLEAR at
+--usraddr N    USR address to run from
+```
+
+Plus `-split-bin` on the assembler side (one binary per section) and
+`--exclude-sections` / `--bankspace` / `--main-fence` on appmake's.
+
+**And z88dk's banking is already wired for this.** The map shows
+`__CODE_0_head = $C000`, `__CODE_1_head = $1C000` — addresses encoded as
+`(bank << 16) | addr`, i.e. CODE_1 is bank 1 at 0xC000. Putting a blob in
+`SECTION CODE_1` should place it in a bank and have appmake emit it as its
+own block, with no custom loader at all. **That is the route to try first**,
+since banked data is where this is heading anyway.
+
+**But it does not help a 48K.** Bank blocks are 128K/+3 only. Freeing the
+16 KB budget on a 48K still needs blobs in *contended low RAM*, which still
+needs the custom two-LOAD loader. Two different problems sharing one
+mechanism; do not conflate them.
+
+Unverified: whether `SECTION CODE_1` in a user module actually reaches the
+tap. Given `org` looked correct in the map and shipped nothing, **check the
+tap size and read the address back on a real load** before building
+anything on top.
+
 #### What it costs
 
 The **16 KB ceiling becomes universal**, so the banked-data work below stops
