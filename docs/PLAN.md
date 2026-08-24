@@ -678,6 +678,89 @@ Beyond that, the 128k build's route to more room is **paging tile and
 animation data into the spare RAM banks** (1, 3, 4 and 6 are unused). Data
 pages cleanly; code does not.
 
+### P8 — One binary, both machines  (sub-plan)
+
+Today there are two taps because **code placement is fixed at link time and
+the shadow screen wants an address range**. A 48k build puts code up to
+0xFFFF and cannot have page 7 there; a 128k build keeps code under 0xC000 so
+page 7 can be banked in, and pays for it with a 16 KB ceiling it currently
+clears by **five bytes**.
+
+The obvious "detect the machine and choose at runtime" does not work. By the
+time `hw_detect()` runs, the code is already wherever the linker put it.
+
+#### The way through
+
+**Page 7 does not have to be banked in permanently — only while we copy into
+it.** `render_show()` currently maps it once at startup and leaves it, which
+is what sterilises 0xC000-0xFFFF for the whole program. Instead:
+
+```
+    di
+    page 7 in at 0xC000
+    copy the composed view from 0x6000 into the screen
+    page bank 0 back
+    ei
+```
+
+Everything above 0xC000 is invisible for the duration of that copy and intact
+either side of it. Code can therefore live up to 0xFFFF *and* a 128K can have
+its shadow screen — one binary, 32 KB, tear-free where the hardware allows.
+
+#### What has to be true
+
+- **The copy routine itself must live below 0xC000**, along with everything it
+  touches: the source buffer (already at 0x6000), `VIEW_OFF[]`, and any local
+  it spills. `present_pixels()` is already in this shape — its addresses are
+  baked in and guarded by an `#error`.
+- **The stack must be below 0xC000.** It is, at ~0x7FA0.
+- **Interrupts off across the window.** The ROM's handler is in ROM and safe,
+  but anything of ours above 0xC000 would not be there to return to. That is
+  ~4.6 KB of copying, so interrupts are off for roughly two frames per present.
+  Nothing in this program depends on them — vsync uses the floating bus, not
+  the frame interrupt — but the tune is worth checking, since it is the one
+  thing with a clock.
+- **BANKM (0x5B5C) updated on every write**, both directions. The ROM writes
+  its copy back from the interrupt handler; leaving it stale undid the flip
+  once already and cost most of a session to find.
+
+#### Steps
+
+1. **Prove the window is safe before relying on it.** Put a known byte pattern
+   at 0xC000-0xFFFF, run a paged copy, and check it survives. On all three
+   machines: a +3 pages that window for its own reasons and has broken every
+   assumption made about it so far.
+2. **Move the page-in from `screens_init()` into the present**, still with
+   `BUILD_SHADOW` gating it, so the two-target build keeps working while this
+   is proved.
+3. **Merge the targets**: one binary, `-zorg` unchanged, `checkmem` limit
+   0x10000 for everyone, and `shadow_ok` decided purely by `hw_detect()` and
+   the sentinel test.
+4. **Delete the `TARGET` split** and the `DEBUG_STATE_WALK` difference with it,
+   so the tests exercise the binary that ships — which they currently do not.
+
+#### What it is worth
+
+- **32 KB of code on every machine**, against 16 KB on the target that
+  currently gets the shadow screen. That is the difference between "five bytes
+  spare" and room for the animation and tile work.
+- **One tap to test and hand out.** The present split has the test suite
+  exercising the 48k build while the 128k one is what a 128K owner should be
+  given — an asymmetry that has already hidden faults on this project.
+
+#### What it costs, and the honest risk
+
+Interrupts off for ~2 frames per present is the real price, and it is paid on
+every machine including the 48K, which gains nothing from the paging. The
+mitigation is to skip the di/page/ei entirely when `shadow_ok` is 0, which
+costs one branch.
+
+The risk is that **a +3 does something with 0xC000-0xFFFF that this breaks**.
+Three separate faults on this project came from assumptions about that window,
+every one of them invisible on a 48K and a 128K, and two of them survived a
+fully green test suite. Step 1 exists for that reason and should not be
+skipped. If it fails, the two-target build is the fallback and nothing is lost.
+
 ### P6 — Balance and polish
 
 Weights, a level indicator in the status panel, and
