@@ -32,7 +32,7 @@ MEM_LIMIT  = 0xC000
 else
 APP        = zxstrategy
 TARGET_DEF = -DBUILD_SHADOW=0
-PROBE_SRC  =
+PROBE_SRC  = src/pageprobe.c
 MEM_LIMIT  = 0x10000
 endif
 
@@ -176,7 +176,7 @@ SRCS = src/main.c src/game.c src/logic.c src/render.c src/gfx.c src/input.c src/
        src/vsync.c src/prng.c src/dzx0.c src/no_font64.asm $(PROBE_SRC)
 
 HEADERS = config/app_config.h config/game_config.h include/gfx.h include/input.h include/hw.h \
-          include/vsync.h include/prng.h include/game.h include/board.h \
+          include/vsync.h include/prng.h include/game.h include/board.h include/pageprobe.h \
           include/render.h include/dzx0.h \
           include/music.h $(GENERATED_HEADERS)
 

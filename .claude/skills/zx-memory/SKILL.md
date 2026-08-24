@@ -205,6 +205,46 @@ checked. **Per-module and per-section totals are trustworthy; individual symbol
 sizes are an upper bound.** `__*_size` symbols in the map hold real section
 sizes as their *value* — use those.
 
+## zcc will not evaluate `#if` inside a function containing `__asm`
+
+Preprocessor directives in the body of a function that has an inline asm
+block are **passed through to the back end verbatim, unevaluated**. This is
+not a warning; it is silent.
+
+```c
+int main(void) {
+    __asm
+    ld bc, #0x7FFD
+    ...
+    __endasm;
+
+#if !BUILD_SHADOW          /* NOT evaluated.  Reaches the back end as text. */
+    probe();               /* stays live in every build */
+#endif
+}
+```
+
+That cost a session. A function was excluded from `SRCS` for one target and
+its only call site gated with `#if` in `main()` — which has an asm block — so
+the call survived and the link failed with `undefined symbol` from source that
+plainly excluded it. Every re-read of the source confirmed it was correct.
+`zcc -E` output is what settles it: the `#if` is still there in the `.i` file.
+
+The same mechanism explains **`syntax error: token -> '/'`** on an ordinary
+comment following `__endasm;`, and a spurious `syntax error: token ->
+'__endasm'` when a second asm block appears later in the same function.
+
+**The breakage is per-function, not per-file.** `#if` works normally in an
+asm-free function in a file whose other functions use asm — which is the
+escape route: put the conditional in an asm-free function, or select the
+implementation in the **Makefile** via a source-list variable and leave the
+call site unconditional.
+
+**Also: an empty function is not free.** Where headroom is measured in bytes,
+an empty gated stub still costs its `call` and `ret`. Putting the gated call
+inside a branch that is *already* compiled out for that target costs zero,
+which is the only version that fits a build with five bytes spare.
+
 ## The address-space ceiling, and how to get it back
 
 On a 128K-class machine the shadow screen lives in page 7, which can only be
