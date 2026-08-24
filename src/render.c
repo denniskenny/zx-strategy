@@ -668,8 +668,13 @@ static void stamp_cursor(void)
    Addresses are baked in because inline assembly cannot see C
    expressions.  The #error fails the build if memmap.h moves them,
    rather than letting this write somewhere else in silence. */
-#if MEM_VBUF != 0xDB00 || MEM_VIEW_OFF != 0xED00
-#error "present_pixels() has MEM_VBUF/MEM_VIEW_OFF baked into its assembly"
+/* present_pixels() bakes these addresses into its assembly, and a #if
+   INSIDE a function containing __asm is not evaluated by zcc -- see
+   .claude/skills/zx-memory.  So the whole function is duplicated at file
+   scope instead, where #if behaves, and the guard below catches any
+   third layout before it can link with wrong constants. */
+#if MEM_VBUF != 0x6000 && MEM_VBUF != 0xDB00
+#error "present_pixels() has no baked constants for this MEM_VBUF"
 #endif
 
 static uint8_t ppx_rows;
@@ -680,8 +685,13 @@ static void present_pixels(void) __naked
     __asm
         ld  a, #128
         ld  (_ppx_rows), a
+#if MEM_VBUF == 0x6000
+        ld  hl, #0x6000
+        ld  de, #0x7200
+#else
         ld  hl, #0xDB00
         ld  de, #0xED00
+#endif
     ppx_row:
         push de
         ex  de, hl

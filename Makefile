@@ -24,7 +24,20 @@ UNAME_S := $(shell uname -s)
 #
 # So the 16 KB ceiling at 0x8000-0xBFFF is universal and checkmem
 # enforces it.  Above 0xC000 goes data, or a bank — never code.
+# LOWMEM=1 moves the buffers to 0xDB00 and drops code to 0x6000: 8 KB
+# more code space, but half the program lands in contended RAM and the
+# state walk slows from ~20s to ~30s.  Build both and compare:
+#     make            -> zxstrategy.tap      (fast, 16 KB code)
+#     make LOWMEM=1   -> zxstrategy_low.tap  (slow, 24 KB code)
+LOWMEM     ?= 0
+ifeq ($(LOWMEM),1)
+APP        = zxstrategy_low
+ORG_DEF    = -zorg=24576 -DMEM_VBUF=0xDB00
+else
 APP        = zxstrategy
+ORG_DEF    = -zorg=32768
+endif
+
 DEBUG_KEYS ?= 0
 TARGET_DEF = -DDEBUG_STATE_WALK=$(DEBUG_KEYS)
 
@@ -71,7 +84,7 @@ include $(CONFIG_MK)
 # it: p0_state_walk went from 19.7-21.1s to 30.4s, about 50%% slower.
 # That is the trade, and it is not obviously the right one — see docs/PLAN
 # on placing only cold code (logic.c) low instead.
-CFLAGS=+zx -vn -SO3 -zorg=24576 -startup=31 --opt-code-speed -compiler=sdcc -mz80 -pragma-define:CRT_ENABLE_STDIO=0 $(TARGET_DEF) \
+CFLAGS=+zx -vn -SO3 $(ORG_DEF) -startup=31 --opt-code-speed -compiler=sdcc -mz80 -pragma-define:CRT_ENABLE_STDIO=0 $(TARGET_DEF) \
        --reserve-regs-iy --allow-unsafe-read -Cc--max-allocs-per-node=50000
 USER_CFLAGS ?=
 LDFLAGS=-lm -create-app
@@ -256,7 +269,8 @@ tests/dzx0check.tap: tests/dzx0check.c src/dzx0.c include/units_view.h
 # --- Clean ---
 clean:
 	rm -f zxstrategy zxstrategy.tap zxstrategy_CODE.bin zxstrategy_data_user.bin zxstrategy_code.tap
-	rm -f zxstrategy.map
+	rm -f zxstrategy_low zxstrategy_low.tap zxstrategy_low_CODE.bin zxstrategy_low_data_user.bin zxstrategy_low_code.tap
+	rm -f zxstrategy.map zxstrategy_low.map
 	rm -f tests/lowmem tests/lowmem.tap tests/lowmem_CODE.bin tests/lowmem_data_user.bin tests/lowmem_code.tap
 	rm -f tests/fbprobe tests/fbprobe.tap tests/fbprobe_CODE.bin tests/fbprobe_data_user.bin tests/fbprobe_code.tap
 	rm -f tests/dzx0check tests/dzx0check.tap tests/dzx0check_CODE.bin tests/dzx0check_data_user.bin tests/dzx0check_code.tap
