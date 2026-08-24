@@ -58,8 +58,19 @@ endif
 CONFIG_MK ?= config/basic_config.mk
 include $(CONFIG_MK)
 
-# -zorg=24576 keeps all code in NON-CONTENDED RAM, which the floating bus
-# timed loops require for stable sync.
+# -zorg=24576 puts code at 0x6000, which buys 8 KB of code space against
+# the 0xC000 ceiling (5 bytes clear became 8197).
+#
+# It was 0x8000 to keep all code in NON-CONTENDED RAM, on the grounds that
+# the floating bus timed loops needed it.  Measured: they do not — vsync
+# still settles on 0x40FF and the marker still lands on the displayed
+# screen, on both machines.
+#
+# What it DOES cost is speed.  0x6000-0x7FFF is contended, so the ULA
+# steals cycles from every fetch there, and half the program now lives in
+# it: p0_state_walk went from 19.7-21.1s to 30.4s, about 50%% slower.
+# That is the trade, and it is not obviously the right one — see docs/PLAN
+# on placing only cold code (logic.c) low instead.
 CFLAGS=+zx -vn -SO3 -zorg=24576 -startup=31 --opt-code-speed -compiler=sdcc -mz80 -pragma-define:CRT_ENABLE_STDIO=0 $(TARGET_DEF) \
        --reserve-regs-iy --allow-unsafe-read -Cc--max-allocs-per-node=50000
 USER_CFLAGS ?=
