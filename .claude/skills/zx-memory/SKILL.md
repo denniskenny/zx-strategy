@@ -296,6 +296,41 @@ limitation: that build is the one with code and bss above 0xC000, so it is the
 only one whose survival means anything. The 128k build has nothing up there to
 lose.
 
+## One binary for 48K and 128K
+
+The obvious plan is to detect the machine and choose a layout. **You cannot:
+code placement is fixed at link time**, long before any detection runs. A
+binary with code above 0xC000 can never bank page 7 there.
+
+The tempting escape is to map page 7 only while copying into it, so code can
+live to 0xFFFF *and* a 128K keep its shadow screen. **The hardware permits
+this** — measured, see above — **but a renderer that draws directly into the
+shadow screen does not.** If `gfx_target()` aims at 0xC000 and then chrome,
+text, cursor and dirty cells all write there, page 7 must stay mapped across
+arbitrary game code, which is precisely what forbids code above 0xC000.
+Confining it to a copy means composing a whole 6912-byte screen low first, and
+that space does not exist.
+
+**Check who writes to 0xC000 before designing around the window.** A session
+went into a plan that did not survive contact with one `#define`.
+
+### What works instead
+
+**If all code is below 0xC000 anyway, page 7 can simply stay mapped, and no
+window is needed.** The single binary is then the 128K build, running on
+everything:
+
+- The `shadow_ok = 0` fallback — written for 128Ks whose paging is locked —
+  **is** the 48K path. Verified: the 128k tap runs correctly under ZEsarUX
+  `--machine 48k`.
+- Reserve `0xDB00-0xFFFF` as the data region on *both* machines: real RAM on a
+  48K, page-7 RAM on a 128K, same addresses, no conditional accessors.
+- `0xC000-0xDAFF` is the shadow screen on a 128K and spare on a 48K.
+
+Measure before assuming the 48K build needs its extra 16 KB. On this project
+it exceeded the 16 KB ceiling by **167 bytes** while leaving 16 217 clear — the
+address space it paid the shadow screen for was almost entirely unused.
+
 ## Adding a graphic
 
 The converters do the work; see `.claude/skills/zx-tiles`. What this skill

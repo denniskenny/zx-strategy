@@ -680,96 +680,113 @@ pages cleanly; code does not.
 
 ### P8 — One binary, both machines  (sub-plan)
 
-Today there are two taps because **code placement is fixed at link time and
-the shadow screen wants an address range**. A 48k build puts code up to
-0xFFFF and cannot have page 7 there; a 128k build keeps code under 0xC000 so
-page 7 can be banked in, and pays for it with a 16 KB ceiling it currently
-clears by **five bytes**.
+There are two taps because the shadow screen wants page 7 mapped at 0xC000,
+which caps code at 16 KB, and the 48k target gives that up to reach 0xFFFF.
 
-The obvious "detect the machine and choose at runtime" does not work. By the
-time `hw_detect()` runs, the code is already wherever the linker put it.
+#### The paging window: a dead end, and why
 
-#### The way through
+The first version of this plan proposed mapping page 7 only for the duration
+of a copy — `di`, page in, copy from a low buffer, page bank 0 back, `ei` —
+so code could live above 0xC000 *and* a 128K keep its shadow screen.
 
-**Page 7 does not have to be banked in permanently — only while we copy into
-it.** `render_show()` currently maps it once at startup and leaves it, which
-is what sterilises 0xC000-0xFFFF for the whole program. Instead:
+**The hardware allows it. This renderer does not.** `SCREEN_1` *is* 0xC000:
 
-```
-    di
-    page 7 in at 0xC000
-    copy the composed view from 0x6000 into the screen
-    page bank 0 back
-    ei
+```c
+#define SCREEN_1    ((uint8_t *)0xC000)     /* page 7, banked in below */
+gfx_target(back ? SCREEN_1 : SCREEN_0);
 ```
 
-Everything above 0xC000 is invisible for the duration of that copy and intact
-either side of it. Code can therefore live up to 0xFFFF *and* a 128K can have
-its shadow screen — one binary, 32 KB, tear-free where the hardware allows.
+`gfx_target()` aims `gfx_pix`/`gfx_attr` straight at page 7 and then everything
+draws there — chrome, `print_at`, `set_attr_rect`, incremental
+`draw_view_cell()`, the cursor stamp. Page 7 must stay mapped across arbitrary
+game code, which is exactly what forbids code above 0xC000. Moving the page-in
+changes nothing.
 
-#### What has to be true
+Confining paging to a copy would mean composing the whole screen low first.
+That is 6912 bytes; below 0xC000 there are **758** free between MEM_END
+(~0x7CAA) and the stack. Not close.
 
-- **The copy routine itself must live below 0xC000**, along with everything it
-  touches: the source buffer (already at 0x6000), `VIEW_OFF[]`, and any local
-  it spills. `present_pixels()` is already in this shape — its addresses are
-  baked in and guarded by an `#error`.
-- **The stack must be below 0xC000.** It is, at ~0x7FA0.
-- **Interrupts off across the window.** The ROM's handler is in ROM and safe,
-  but anything of ours above 0xC000 would not be there to return to. That is
-  ~4.6 KB of copying, so interrupts are off for roughly two frames per present.
-  Nothing in this program depends on them — vsync uses the floating bus, not
-  the frame interrupt — but the tune is worth checking, since it is the one
-  thing with a clock.
-- **BANKM (0x5B5C) updated on every write**, both directions. The ROM writes
-  its copy back from the interrupt handler; leaving it stale undid the flip
-  once already and cost most of a session to find.
+Step 1 was still worth doing and its result stands — **the window survives
+paging on 48K, 128K and +3** (`src/pageprobe.c`, reported as PAGEWIN). What it
+proved was a fact about the hardware. What it did not prove, and what the plan
+conflated with it, was that this program's renderer could live with paging
+confined to a copy.
+
+#### The way that works: ship the 128k build for everyone
+
+If all code is below 0xC000 anyway, **page 7 can stay mapped permanently, just
+as it does today, and no paging window is needed at all.**
+
+The cost is near zero, because the 48k build barely uses what it pays for:
+
+| build | code top | vs 0xC000 |
+|---|---|---|
+| 48k | 0xC0A7 | **167 bytes over** — 16 217 clear of 0x10000 |
+| 128k | 0xBFFB | 5 bytes under |
+
+And `shadow_ok = 0` — the fallback written for 128Ks with locked paging — *is*
+the 48K path. **Verified: `zxstrategy128.tap` runs correctly on ZEsarUX
+`--machine 48k`.** PC in our code at 0xB4D5, banner row 0x45, hardware report
+rows 3-5 at 0x47.
+
+#### Constraints
+
+1. **All code, rodata and bss below 0xC000.** Universal 16 KB ceiling at
+   0x8000-0xBFFF, enforced by `checkmem --limit 0xC000` for every target.
+2. **Stack below 0xC000** — already ~0x7FA0.
+3. **Every 0x7FFD write keeps bit 4** and **updates BANKM (0x5B5C)**, both
+   directions, no exceptions.
+4. **No IM2 vector table above 0xC000** if the ROM handler is ever left.
+5. 0xC000+ is data and screens only, never code, on any machine.
+
+#### Memory map
+
+```
+0x4000-0x5AFF  screen 0 (page 5)                     ULA
+0x5B00-0x5BFF  system vars (BANKM at 0x5B5C)
+0x5C00-0x5FFF  ROM workspace
+0x6000-0x7CAA  hand-placed: VBUF, VATTR, VIEW_OFF, tiles, logic arrays
+0x7CAA-0x7FA0  spare (758 bytes)
+0x7FA0         stack, grows down
+0x8000-0xBFFF  ALL CODE + rodata + bss   <-- 16 KB, universal ceiling
+0xC000-0xDAFF  48K: spare / scratch;  128K: page 7 = shadow screen
+0xDB00-0xFFFF  uniform data region (9.4 KB) on BOTH machines
+```
+
+0xDB00-0xFFFF is the point: the common denominator, real RAM on a 48K and
+page-7 RAM on a 128K, so the same addresses work on both with no conditional
+accessors. It is already where the buffers live.
+
+#### Bootstrap
+
+1. BASIC: `CLEAR 32767 : LOAD ""CODE : RANDOMIZE USR 32768`
+2. `hw_detect()` first — `di`/`ei`, bit 4 preserved, BANKM updated.
+3. `vsync_detect()` — needs paging live, so it follows.
+4. Restore a known map: bank 0 at 0xC000, ROM bit set, BANKM in step.
+5. `screens_init()` — if `is_128k`, sentinel-test paging; on success map page 7
+   and leave it, `shadow_ok = 1`. Otherwise `shadow_ok = 0` and draw in place.
+   **This code already exists and is the path verified on a 48K.**
+6. Decompress assets into 0xDB00+ — identical on both machines.
+7. `game_run()`
 
 #### Steps
 
-1. **Prove the window is safe before relying on it.** Put a known byte pattern
-   at 0xC000-0xFFFF, run a paged copy, and check it survives. On all three
-   machines: a +3 pages that window for its own reasons and has broken every
-   assumption made about it so far.
-   *Built — `src/pageprobe.c`, 48k build only, reported as PAGEWIN on the
-   title screen.*
-   - **128K: SURVIVES.** `page_probe` reads 1 under ZEsarUX `--machine 128k`,
-     and it is itself linked at 0xC0A7, inside the window it is testing, so the
-     variable is its own witness. BANKM back to 0x10 afterwards.
-   - **48K: N/A**, as it should be — nothing pages, `is_128k` is 0.
-   - **+3: SURVIVES**, read in Fuse. This was the one in real doubt — second
-     paging port at 0x1FFD, different memory controller, and the source of
-     every fault this project has had in that window. **Step 1 is done and the
-     premise of P8 holds on all three machines.**
-2. **Move the page-in from `screens_init()` into the present**, still with
-   `BUILD_SHADOW` gating it, so the two-target build keeps working while this
-   is proved.
-3. **Merge the targets**: one binary, `-zorg` unchanged, `checkmem` limit
-   0x10000 for everyone, and `shadow_ok` decided purely by `hw_detect()` and
-   the sentinel test.
-4. **Delete the `TARGET` split** and the `DEBUG_STATE_WALK` difference with it,
-   so the tests exercise the binary that ships — which they currently do not.
+1. **Trim 167 bytes from the 48k path.** `src/pageprobe.c` has served its
+   purpose and is most of it; the debug keys are the rest.
+2. **Delete the TARGET split**: one APP, `MEM_LIMIT = 0xC000` always,
+   `BUILD_SHADOW` gone, `PROBE_SRC` gone.
+3. **Point the test suite at the single tap**, which closes the asymmetry that
+   has hidden faults here before — the suite currently drives the 48k build
+   while a 128K owner should be handed the other one.
+4. **Verify on all three machines**, 48K included: it is now running code paths
+   it never has.
 
-#### What it is worth
+#### What it costs
 
-- **32 KB of code on every machine**, against 16 KB on the target that
-  currently gets the shadow screen. That is the difference between "five bytes
-  spare" and room for the animation and tile work.
-- **One tap to test and hand out.** The present split has the test suite
-  exercising the 48k build while the 128k one is what a 128K owner should be
-  given — an asymmetry that has already hidden faults on this project.
-
-#### What it costs, and the honest risk
-
-Interrupts off for ~2 frames per present is the real price, and it is paid on
-every machine including the 48K, which gains nothing from the paging. The
-mitigation is to skip the di/page/ei entirely when `shadow_ok` is 0, which
-costs one branch.
-
-The risk is that **a +3 does something with 0xC000-0xFFFF that this breaks**.
-Three separate faults on this project came from assumptions about that window,
-every one of them invisible on a 48K and a 128K, and two of them survived a
-fully green test suite. Step 1 exists for that reason and should not be
-skipped. If it fails, the two-target build is the fallback and nothing is lost.
+The **16 KB ceiling becomes universal**, so the banked-data work below stops
+being optional for animations and more tiles. A 48K gets 0xC000-0xDAFF as
+spare rather than code, which could later hold a second buffer for 48K tear
+reduction.
 
 ### P6 — Balance and polish
 
