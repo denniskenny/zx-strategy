@@ -359,6 +359,46 @@ border green): stack lands at 0x5FA4, below the new code base, and
 0xDB00-0xFFFF round-trips every byte.  Worth confirming rather than
 assuming, because a +3 had crashed on that region before.
 
+## `org` in a user module places the section but DROPS the data
+
+Tempting idea: put the ZX0 asset blobs in a hand-written `.asm` at a fixed
+address in contended RAM, freeing RODATA from the 16 KB code budget at no
+speed cost — the blobs are read once, at boot.
+
+```asm
+    SECTION ORGPROBE
+    org     0x7D00
+    PUBLIC  _org_probe_blob
+_org_probe_blob:
+    defb    0xA5, 0x5A, 0xC3, 0x3C
+```
+
+z80asm honours it perfectly:
+
+```
+__ORGPROBE_head = $7D00
+__ORGPROBE_size = $0004
+_org_probe_blob = $7D00
+```
+
+**And `-create-app` then throws the data away.** The tap came out
+16 471 bytes — byte-for-byte the size it was without the section — and
+0x7D00 read `00 00 00 00` on a real load. No warning, no error. C code
+reading that array would get zeros, so every graphic would decompress
+from nothing.
+
+`-create-app` emits ONE contiguous block from CRT_ORG_CODE. A section
+placed outside that range is addressed but never packaged.
+
+To actually do this you need a **multi-block tap**: `-split-bin` to get the
+section as its own binary, `appmake +zx` to wrap it as a second CODE
+block, and a BASIC loader with two LOADs. That is a real piece of work,
+not a pragma — budget for it accordingly.
+
+**The general lesson: a correct link map does not mean the bytes ship.**
+Check the tap size and read the address back on a real load. This one
+would have failed silently and looked like a decompressor bug.
+
 ## Adding a graphic
 
 The converters do the work; see `.claude/skills/zx-tiles`. What this skill
