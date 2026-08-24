@@ -76,13 +76,26 @@ def main():
 
     codes = [(int(addr, 0), open(f, 'rb').read()) for addr, f in a.code]
 
-    for addr, data in codes:
+    for i, (addr, data) in enumerate(codes):
         end = addr + len(data)
         if end > 0x10000:
             sys.exit('mktap: %d bytes at 0x%04X runs off the top of RAM' % (len(data), addr))
         if addr <= a.clear:
             sys.exit('mktap: block at 0x%04X is at or below CLEAR %d -- BASIC '
                      'would overwrite it' % (addr, a.clear))
+        # Blocks are placed by hand in the Makefile while their SIZES come
+        # from the build, so one growing into the next is a question of
+        # when, not whether.  The tape loads them in order and the second
+        # simply lands on the first: no error, just a program built out of
+        # two half-overwritten pieces.
+        for j, (other, odata) in enumerate(codes):
+            if j <= i:
+                continue
+            if addr < other + len(odata) and other < end:
+                sys.exit('mktap: block at 0x%04X..0x%04X overlaps the one at '
+                         '0x%04X..0x%04X -- the later load would land on top '
+                         'of the earlier one'
+                         % (addr, end, other, other + len(odata)))
 
     prog = loader(a.clear, a.usr, len(codes))
     tap = header(0, a.name[:10], len(prog), 10, len(prog))   # p1=autostart line
@@ -93,8 +106,15 @@ def main():
 
     open(a.output, 'wb').write(tap)
     print('mktap: %s  loader + %d CODE blocks' % (a.output, len(codes)))
-    for addr, data in codes:
+    for addr, data in sorted(codes):
         print('       0x%04X .. 0x%04X  %6d bytes' % (addr, addr + len(data), len(data)))
+    # What is left in the contended window, which is the budget that
+    # decides whether the next asset or module fits down there.
+    low = [(addr, data) for addr, data in codes if addr < 0x8000]
+    if low:
+        top = max(addr + len(data) for addr, data in low)
+        print('       0x%04X .. 0x7FA0  %6d bytes FREE below the stack'
+              % (top, 0x7FA0 - top))
 
 
 main()

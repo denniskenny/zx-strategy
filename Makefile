@@ -192,7 +192,7 @@ assets/music/%_linkable.asm: assets/music/%.asm tools/gen_tritone_module.py
 
 # --- Source files ---
 SRCS = src/main.c src/game.c src/logic.c src/render.c src/gfx.c src/input.c src/hw_detect.c \
-       src/vsync.c src/prng.c src/dzx0.c src/no_font64.asm src/assets_low_syms.asm
+       src/vsync.c src/prng.c src/dzx0.c src/no_font64.asm src/assets_low_syms.asm src/logic_org.asm
 
 HEADERS = config/app_config.h config/game_config.h include/gfx.h include/input.h include/hw.h \
           include/vsync.h include/prng.h include/game.h include/board.h \
@@ -254,6 +254,7 @@ $(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE) $(ASSETS_LOW_BIN) src/assets_lo
 	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o $(APP) $(SRCS) $(MUSIC_LINKABLE) $(LDFLAGS)
 	$(PYTHON) tools/mktap.py $(APP).tap --name $(APP) --clear $(CLEAR_ADDR) --usr $(USR_ADDR) \
 	    --code 0x6000 $(ASSETS_LOW_BIN) \
+	    --code 0x6500 $(APP)_LOGIC.bin \
 	    --code $(USR_ADDR) $(APP)
 
 # --- Floating bus probe (diagnostic harness, see tests/fbprobe.c) ---
@@ -271,7 +272,7 @@ tests/dzx0check.tap: tests/dzx0check.c src/dzx0.c include/units_view.h
 # --- Clean ---
 clean:
 	rm -f zxstrategy zxstrategy.tap zxstrategy_CODE.bin zxstrategy_data_user.bin zxstrategy_code.tap
-	rm -f zxstrategy.map *_assets_low.bin src/assets_low.asm src/assets_low_syms.asm 
+	rm -f zxstrategy.map *_assets_low.bin *_LOGIC.bin src/assets_low.asm src/assets_low_syms.asm 
 	rm -f tests/fbprobe tests/fbprobe.tap tests/fbprobe_CODE.bin tests/fbprobe_data_user.bin tests/fbprobe_code.tap
 	rm -f tests/dzx0check tests/dzx0check.tap tests/dzx0check_CODE.bin tests/dzx0check_data_user.bin tests/dzx0check_code.tap
 	rm -f *.o src/*.o tests/*.o *.map

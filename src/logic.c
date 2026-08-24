@@ -28,6 +28,8 @@
 #define LEVEL_9_DEFINE_DATA
 #define LEVEL_10_DEFINE_DATA
 
+#pragma codeseg LOGIC
+
 #include <string.h>
 
 #include "../config/app_config.h"
