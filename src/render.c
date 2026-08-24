@@ -121,6 +121,23 @@ static void hint_row(const char *s, uint8_t attr);
 
 static uint8_t page_reg;    /* 0x7FFD is write-only; remember it       */
 static uint8_t back;        /* 1 = the back buffer is SCREEN_1         */
+/* HAZARD, currently benign, do not make it worse.
+
+   This is written only from the inline asm in screens_init(), which SDCC
+   cannot see, so it reasons from the `shadow_ok = 0` there and folds
+   `if (!shadow_ok)` to always-true: that is SDCC's "warning 126:
+   unreachable code", and the line it discards is the one arming the
+   vsync marker.  It is harmless ONLY because render_show() sets
+   vsync_marker_addr again before anything waits on it, which the 128K
+   render_paths run confirms.  Add a second thing that depends on
+   shadow_ok inside screens_init() and it will silently not happen.
+
+   `volatile` is the correct fix and costs 18 bytes; the tap has 5.  The
+   free fix is to move the sentinel test into its own __naked helper that
+   RETURNS the result, so `shadow_ok = paging_works();` is an assignment
+   SDCC can see.  Do that when there is room, or as part of the banked
+   data work.  is_128k needs neither: it is read from other translation
+   units, so SDCC cannot fold it. */
 static uint8_t shadow_ok;   /* 0 = the 128K path is not usable yet     */
 
 /* --- Why the 128K path is currently disarmed --------------------------

@@ -61,6 +61,11 @@ def hand_placed():
     return vals, order
 
 
+# The stack sits here, growing down: `CLEAR 32767` in the BASIC loader
+# leaves SP just under 0x8000.  Free space below it must stop short.
+STACK_TOP = 0x7FA0
+
+
 def report(top_addr, top_name, limit):
     vals, order = hand_placed()
     print("  linker-placed (code, rodata, data, bss)")
@@ -82,8 +87,22 @@ def report(top_addr, top_name, limit):
         if nxt == a:
             continue                    # an alias for the next block
         print("    %04X .. %04X   %5d bytes   %s" % (a, nxt, nxt - a, n))
-    print("    %04X .. FFFF   %5d bytes   FREE to the top of RAM"
-          % (end, 0x10000 - end))
+    # NOT "free to the top of RAM": 0x8000 upwards is the program, and
+    # reporting it as free is how this tool once claimed 33 622 spare
+    # bytes while the binary had five.  Two separate runs, one below the
+    # stack and one above the linker's top symbol.
+    if end < STACK_TOP:
+        print("    %04X .. %04X   %5d bytes   FREE below the stack"
+              % (end, STACK_TOP, STACK_TOP - end))
+    print("    %04X .. 8000   %5d bytes   stack, grows down" % (STACK_TOP, 0x8000 - STACK_TOP))
+    print()
+    print("  above the linker's reach (data only — never code)")
+    print("    C000 .. DB00    6912 bytes   128K: shadow screen (page 7)")
+    print("                                 48K:  spare")
+    print("    DB00 .. FFFF    %5d bytes   addressable on BOTH machines"
+          % (0x10000 - 0xDB00))
+    print("    banks 1,3,4,6   %5d bytes   128K/+3 ONLY, paged at 0xC000"
+          % (4 * 16384))
 
 
 def main():

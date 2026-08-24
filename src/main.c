@@ -57,7 +57,7 @@ int main(void)
     ld bc, #0x7FFD
     ld a, #0x10
     out (c), a
-    ld (0x5B5C), a      ; BANKM: the ROM's copy of this port, kept in step
+    ld (0x5B5C), a      ; BANKM: the ROM keeps a copy of this port
     __endasm;
 
     game_run();

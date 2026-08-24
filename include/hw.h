@@ -13,6 +13,9 @@
 void hw_detect(void);
 
 /* 1 if 128K detected, 0 otherwise */
+/* Written from asm in hw_detect(), but read only from OTHER translation
+   units, so SDCC cannot fold it and volatile is not needed -- unlike
+   render.c's shadow_ok, which is static beside its asm and does need it. */
 extern uint8_t is_128k;
 
 /* 1 if Kempston joystick interface detected, 0 otherwise */
