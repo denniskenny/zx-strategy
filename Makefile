@@ -29,13 +29,18 @@ UNAME_S := $(shell uname -s)
 # state walk slows from ~20s to ~30s.  Build both and compare:
 #     make            -> zxstrategy.tap      (fast, 16 KB code)
 #     make LOWMEM=1   -> zxstrategy_low.tap  (slow, 24 KB code)
+# The BASIC loader must CLEAR below the lowest thing it loads, or BASIC's
+# own workspace sits on top of our first block.
+CLEAR_ADDR = 24575
 LOWMEM     ?= 0
 ifeq ($(LOWMEM),1)
 APP        = zxstrategy_low
 ORG_DEF    = -zorg=24576 -DMEM_VBUF=0xDB00
+USR_ADDR   = 24576
 else
 APP        = zxstrategy
 ORG_DEF    = -zorg=32768
+USR_ADDR   = 32768
 endif
 
 DEBUG_KEYS ?= 0
@@ -239,8 +244,29 @@ memmap: map
 	@$(PYTHON) tools/checkmem.py $(APP).map --layout --limit $(MEM_LIMIT)
 
 # --- Compile, link & package ---
-$(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE)
+#
+# TWO CODE blocks, built by tools/mktap.py rather than -create-app.
+#
+# -create-app emits one contiguous block from CRT_ORG_CODE and a loader
+# that does a single LOAD ""CODE.  Assets placed outside that range are
+# dropped silently (a section with `org`) or shipped headerless and never
+# loaded (a bank section) -- both read as zeros at runtime and look like a
+# decompressor bug.  So the tap is assembled explicitly.
+#
+# src/assets_low.asm is assembled STANDALONE and never linked into the C
+# program, so its bytes do not count against the 16 KB ceiling.  It gets a
+# real CODE header, which is what lets a 48K -- no paging at all -- load it
+# exactly like a 128K does.
+ASSETS_LOW_BIN = $(APP)_assets_low.bin
+
+$(ASSETS_LOW_BIN): src/assets_low.asm
+	PATH=$(Z88DK)/bin:$$PATH $(Z88DK)/bin/z88dk-z80asm -b -O. -o$@ src/assets_low.asm
+
+$(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE) $(ASSETS_LOW_BIN) tools/mktap.py
 	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o $(APP) $(SRCS) $(MUSIC_LINKABLE) $(LDFLAGS)
+	$(PYTHON) tools/mktap.py $(APP).tap --name $(APP) --clear $(CLEAR_ADDR) --usr $(USR_ADDR) \
+	    --code 0x6000 $(ASSETS_LOW_BIN) \
+	    --code $(USR_ADDR) $(APP)
 
 # --- Low-memory probe: is CLEAR 24575 / -zorg 0x6000 survivable? ---
 # Deliberately built at 0x6000 with the stack below it, which is the
@@ -270,7 +296,7 @@ tests/dzx0check.tap: tests/dzx0check.c src/dzx0.c include/units_view.h
 clean:
 	rm -f zxstrategy zxstrategy.tap zxstrategy_CODE.bin zxstrategy_data_user.bin zxstrategy_code.tap
 	rm -f zxstrategy_low zxstrategy_low.tap zxstrategy_low_CODE.bin zxstrategy_low_data_user.bin zxstrategy_low_code.tap
-	rm -f zxstrategy.map zxstrategy_low.map
+	rm -f zxstrategy.map zxstrategy_low.map *_assets_low.bin *_ORGPROBE.bin zxstrategy48 zxstrategy128
 	rm -f tests/lowmem tests/lowmem.tap tests/lowmem_CODE.bin tests/lowmem_data_user.bin tests/lowmem_code.tap
 	rm -f tests/fbprobe tests/fbprobe.tap tests/fbprobe_CODE.bin tests/fbprobe_data_user.bin tests/fbprobe_code.tap
 	rm -f tests/dzx0check tests/dzx0check.tap tests/dzx0check_CODE.bin tests/dzx0check_data_user.bin tests/dzx0check_code.tap
