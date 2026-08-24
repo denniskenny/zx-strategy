@@ -730,6 +730,15 @@ its shadow screen — one binary, 32 KB, tear-free where the hardware allows.
    at 0xC000-0xFFFF, run a paged copy, and check it survives. On all three
    machines: a +3 pages that window for its own reasons and has broken every
    assumption made about it so far.
+   *Built — `src/pageprobe.c`, 48k build only, reported as PAGEWIN on the
+   title screen.*
+   - **128K: SURVIVES.** `page_probe` reads 1 under ZEsarUX `--machine 128k`,
+     and it is itself linked at 0xC0A7, inside the window it is testing, so the
+     variable is its own witness. BANKM back to 0x10 afterwards.
+   - **48K: N/A**, as it should be — nothing pages, `is_128k` is 0.
+   - **+3: still unanswered.** This ZEsarUX install has no +3 ROM; Fuse does.
+     It is the only one of the three whose answer is in any doubt, so step 2
+     should not start until it has been read on one.
 2. **Move the page-in from `screens_init()` into the present**, still with
    `BUILD_SHADOW` gating it, so the two-target build keeps working while this
    is proved.
