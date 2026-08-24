@@ -194,9 +194,11 @@ map:
 	$(MAKE) USER_CFLAGS="-m"
 	$(PYTHON) tools/checkmem.py $(APP).map --limit $(MEM_LIMIT)
 
-# Both taps in one go.  Recursive rather than parallel: the two share
-# every intermediate name, so building them at once would have them
-# overwrite each other's objects.
+# Both taps in one go, recursively: the two targets differ only by -D
+# flags and output name, and zcc compiles each in a single pass, so
+# there are no shared objects to contaminate.  Do NOT add a clean
+# between them -- `clean` is APP-scoped, so it deletes the tap the
+# previous line just built.
 .PHONY: both
 both:
 	$(MAKE) TARGET=48k

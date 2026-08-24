@@ -156,6 +156,70 @@ mid-flight and skip the boot path entirely — the ROM state the loader leaves,
 `hw_detect()`, the first paging write. All three faults above lived there.
 Testing a +3 means driving its boot menu and loading the tape for real.
 
+## Reclaiming space you did not know you were spending
+
+**Ask who *references* the thing, not which compiler switch removes it.**
+z88dk's zx console keeps a pointer to a 4x8 font, and `console_vars.asm` does
+
+```asm
+    EXTERN  CRT_FONT_64
+```
+
+purely to store that address in a two-byte variable. The EXTERN alone makes
+the linker load **768 bytes** of glyph data into a program that never prints
+through the console. No `-startup=` value and no `CRT_ENABLE_STDIO=0` removes
+it; hours went into looking for a switch that does not exist.
+
+The fix is to satisfy the reference yourself. `src/no_font64.asm`:
+
+```asm
+    MODULE  no_font64
+    PUBLIC  CRT_FONT_64
+    defc    CRT_FONT_64 = 0x3D00    ; the ROM's own character set
+```
+
+Nothing is unresolved, the module is never loaded, and the pointer still aims
+somewhere valid. **768 bytes, zero cost.** The same trick applies to anything
+the crt drags in by name.
+
+Other things measured on this project, so nobody re-derives them:
+
+| | bytes |
+|---|---|
+| ZX0 decompressor (one copy — there is no duplication) | **75** |
+| Every string literal in the program, padding included | **~716** |
+| `DEBUG_STATE_WALK` debug keys | **99** |
+| The unused 4x8 font | **768** |
+
+**Pad at the point of use, not in the literal.** Every hint message here was
+written out to 31 characters by hand so the next would erase the last. One
+`hint_row()` that pads to width recovered ~112 bytes across nine strings.
+
+### Measuring: the trap
+
+Sizes derived from a link map are *gap to the next symbol*, which **wildly
+overstates the last symbol before any unmapped library code**. On this project
+that made the ZX0 decompressor look like 1 414 bytes (it is 75) and the string
+pool look like 2 324 (it is 716). Both were reported as findings before being
+checked. **Per-module and per-section totals are trustworthy; individual symbol
+sizes are an upper bound.** `__*_size` symbols in the map hold real section
+sizes as their *value* — use those.
+
+## The address-space ceiling, and how to get it back
+
+On a 128K-class machine the shadow screen lives in page 7, which can only be
+addressed at `0xC000`. Bank it in at startup and leave it there — the obvious
+implementation — and **all code must fit below 0xC000: a hard 16 KB ceiling**,
+regardless of how much RAM the machine has. That is an *address space* limit,
+not a memory one, and it is the single biggest constraint on this program.
+
+**Page 7 only has to be mapped while you copy into it.** With interrupts off,
+page it in, copy from a buffer that lives below 0xC000, page bank 0 back. Code
+above 0xC000 is invisible for the duration and intact either side, so it can
+run to 0xFFFF *and* the machine keeps its shadow screen. Requirements: the copy
+routine and its source below 0xC000, the stack below 0xC000, `di`/`ei` around
+the window, and nothing above 0xC000 touched inside it. See `docs/PLAN.md` P8.
+
 ## Adding a graphic
 
 The converters do the work; see `.claude/skills/zx-tiles`. What this skill
