@@ -58,9 +58,9 @@ endif
 CONFIG_MK ?= config/basic_config.mk
 include $(CONFIG_MK)
 
-# -zorg=32768 keeps all code in NON-CONTENDED RAM, which the floating bus
+# -zorg=24576 keeps all code in NON-CONTENDED RAM, which the floating bus
 # timed loops require for stable sync.
-CFLAGS=+zx -vn -SO3 -zorg=32768 -startup=31 --opt-code-speed -compiler=sdcc -mz80 -pragma-define:CRT_ENABLE_STDIO=0 $(TARGET_DEF) \
+CFLAGS=+zx -vn -SO3 -zorg=24576 -startup=31 --opt-code-speed -compiler=sdcc -mz80 -pragma-define:CRT_ENABLE_STDIO=0 $(TARGET_DEF) \
        --reserve-regs-iy --allow-unsafe-read -Cc--max-allocs-per-node=50000
 USER_CFLAGS ?=
 LDFLAGS=-lm -create-app

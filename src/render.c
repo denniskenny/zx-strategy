@@ -668,7 +668,7 @@ static void stamp_cursor(void)
    Addresses are baked in because inline assembly cannot see C
    expressions.  The #error fails the build if memmap.h moves them,
    rather than letting this write somewhere else in silence. */
-#if MEM_VBUF != 0x6000 || MEM_VIEW_OFF != 0x7200
+#if MEM_VBUF != 0xDB00 || MEM_VIEW_OFF != 0xED00
 #error "present_pixels() has MEM_VBUF/MEM_VIEW_OFF baked into its assembly"
 #endif
 
@@ -680,8 +680,8 @@ static void present_pixels(void) __naked
     __asm
         ld  a, #128
         ld  (_ppx_rows), a
-        ld  hl, #0x6000
-        ld  de, #0x7200
+        ld  hl, #0xDB00
+        ld  de, #0xED00
     ppx_row:
         push de
         ex  de, hl

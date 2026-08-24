@@ -46,7 +46,7 @@
  */
 
 /* --- src/render.c: the play-view buffer --- */
-#define MEM_VBUF        0x6000          /* 128 rows x 32 bytes  = 4096 */
+#define MEM_VBUF        0xDB00          /* 128 rows x 32 bytes  = 4096 */
 #define MEM_VATTR       (MEM_VBUF  + 4096)      /* 16 x 32      =  512 */
 #define MEM_VIEW_OFF    (MEM_VATTR + 512)       /* 128 x uint16 =  256 */
 
@@ -83,16 +83,16 @@
 
 #define MEM_END         (MEM_THREAT + 98)
 
-/* The stack lives near 0x7FA0 and grows down.  Leave it room: this is
-   the check that stops a buffer quietly eating return addresses.  At
-   0x7D00 that is ~670 bytes of headroom, which is generous for this
-   program's call depth but is the number to re-check before adding
-   anything else down here. */
-#if MEM_END > 0x7D00
-#error "the hand-placed buffers are encroaching on the stack below 0x7FA0"
+/* The buffers now live ABOVE the program, at 0xDB00, so the old check
+   against the stack no longer applies: with -zorg 0x6000 the stack is at
+   ~0x5FA4, below all of this, and 0x6000-0xBFFF is code.  What must hold
+   instead is that the buffers clear the shadow screen (page 7 holds it at
+   0xC000-0xDAFF on a 128K) and stay inside the address space. */
+#if MEM_VBUF < 0xDB00
+#error "the buffers would overlap the 128K shadow screen at 0xC000-0xDAFF"
 #endif
-#if MEM_VBUF < 0x5B00
-#error "the buffers must clear BASIC's system variables and program"
+#if MEM_END > 0x10000
+#error "the hand-placed buffers run off the top of RAM"
 #endif
 
 #endif /* _MEMMAP_H_ */
