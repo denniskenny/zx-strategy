@@ -191,7 +191,7 @@ HEADERS = config/app_config.h config/game_config.h include/gfx.h include/input.h
 # --- Top-level targets ---
 all: $(APP).tap
 
-.PHONY: all assets run map probe dzx0check clean
+.PHONY: all assets run map probe dzx0check lowmem clean
 
 run: $(APP).tap
 	$(FUSE_RUN)
@@ -218,6 +218,18 @@ memmap: map
 $(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE)
 	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o $(APP) $(SRCS) $(MUSIC_LINKABLE) $(LDFLAGS)
 
+# --- Low-memory probe: is CLEAR 24575 / -zorg 0x6000 survivable? ---
+# Deliberately built at 0x6000 with the stack below it, which is the
+# layout that would buy 8 KB of code space.  A +3 has crashed on that
+# region before, so this is the gate: run it there FIRST.
+.PHONY: lowmem
+lowmem: tests/lowmem.tap
+
+tests/lowmem.tap: tests/lowmem.c
+	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) +zx -vn -SO3 -zorg=24576 -startup=31 \
+	    -compiler=sdcc -mz80 -pragma-define:CRT_ENABLE_STDIO=0 -m \
+	    -o tests/lowmem tests/lowmem.c -create-app
+
 # --- Floating bus probe (diagnostic harness, see tests/fbprobe.c) ---
 probe: tests/fbprobe.tap
 
@@ -234,6 +246,7 @@ tests/dzx0check.tap: tests/dzx0check.c src/dzx0.c include/units_view.h
 clean:
 	rm -f zxstrategy zxstrategy.tap zxstrategy_CODE.bin zxstrategy_data_user.bin zxstrategy_code.tap
 	rm -f zxstrategy.map
+	rm -f tests/lowmem tests/lowmem.tap tests/lowmem_CODE.bin tests/lowmem_data_user.bin tests/lowmem_code.tap
 	rm -f tests/fbprobe tests/fbprobe.tap tests/fbprobe_CODE.bin tests/fbprobe_data_user.bin tests/fbprobe_code.tap
 	rm -f tests/dzx0check tests/dzx0check.tap tests/dzx0check_CODE.bin tests/dzx0check_data_user.bin tests/dzx0check_code.tap
 	rm -f *.o src/*.o tests/*.o *.map
