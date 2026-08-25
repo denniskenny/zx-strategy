@@ -281,9 +281,27 @@ uint8_t dirty_n;
 /* World cells whose PICTURE is stale, redrawn on the next frame: a unit
    sprite that left one cell and arrived in another.  Orders are given
    outside the vblank window, so nothing there may draw its own result.
-   Two is all a move needs, and two draw_view_cell() calls is exactly
-   what a page flip already spends per frame. */
-#define DIRTY_MAX   2
+
+   FOUR, because that is the worst case one player action can now produce
+   and mark_dirty() drops silently past the limit:
+
+     1. the sprite leaves the cell it moved from
+     2. it arrives in the cell it moved to
+     3. the defender dies and its sprite goes
+     4. the counter kills the attacker and its sprite goes too
+
+   It was 2, sized for "a move needs two", and closing with an enemy
+   quietly lost the last two marks.  The symptom was a tile drawn with
+   the wrong bitmap while its ATTRIBUTES were correct -- recolour_page()
+   repaints every attribute, so only the pixels stayed stale -- and it
+   cleared as soon as the cell was scrolled off and back, because that
+   redraws rather than repairs.  Nothing in either test suite looks at
+   pixels this way; it was found by playing.
+
+   Four draw_view_cell() calls a frame is twice what a page flip spends,
+   which is affordable because it only happens on the frame after an
+   attack, not every frame. */
+#define DIRTY_MAX   4
 static uint8_t dirty_x[DIRTY_MAX], dirty_y[DIRTY_MAX];
 
 /* Tile pixels AND their attribute blocks, decompressed once from the
@@ -827,8 +845,8 @@ static const uint8_t *cell_attr(uint8_t vx, uint8_t vy,
         }
         return 0;
     }
-    if (selected != NO_UNIT && cost[cell] != NO_COST) {
-        *flat = ATTR_RANGE;
+    if (in_blue(cell)) {
+        *flat = inspecting ? ATTR_RANGE_E : ATTR_RANGE;
         return 0;
     }
     return view_attr_of(terrain[cell]);
@@ -1100,13 +1118,45 @@ void scroll_view(int8_t dx, int8_t dy)
 /* Queue a world cell for a full redraw next frame.  Orders are given
    from handle_input(), which runs outside the vblank window, so nothing
    there may draw its own result. */
+/* Complain when a mark is dropped, in the debug build only.
+
+   Dropping one is not a small thing: the cell keeps its old bitmap while
+   its attributes are repainted, so the board shows a unit that is not
+   there, or terrain where a unit is -- and it lasts until something
+   scrolls the cell off and back.  That cost a playtest to find once
+   already, because it is silent and neither test suite reads pixels.
+
+   The border goes RED and STAYS red: a one-frame flash is exactly what
+   gets missed, and nothing else in ST_PLAY writes the border, so it
+   latches until the next state change repaints it.  Zero bytes in the
+   shipping tap, where the whole function compiles away.
+
+   The asm lives in its own __naked function on purpose: zcc does not
+   evaluate preprocessor directives inside a function body that contains
+   an __asm block (.claude/skills/zx-memory), so the #if has to be out
+   here and mark_dirty() has to stay asm-free. */
+#if DEBUG_STATE_WALK
+static void dirty_dropped(void) __naked
+{
+    __asm
+    ld  a, #2                   ; red
+    out (#0xFE), a
+    ret
+    __endasm;
+}
+#else
+#define dirty_dropped() ((void)0)
+#endif
+
 void mark_dirty(uint8_t x, uint8_t y)
 {
     if (dirty_n < DIRTY_MAX) {
         dirty_x[dirty_n] = x;
         dirty_y[dirty_n] = y;
         dirty_n++;
+        return;
     }
+    dirty_dropped();
 }
 
 /* --------------------------------------------------------- repainting */

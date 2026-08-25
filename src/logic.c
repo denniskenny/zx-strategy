@@ -126,6 +126,115 @@ uint8_t unit_count;
 uint8_t cursor_x, cursor_y;
 uint8_t cur_x, cur_y;
 uint8_t selected = NO_UNIT;
+
+/* The held unit is an ENEMY, held only to be looked at.  Selecting one
+   shows what it can reach -- its movement area, or its range if it cannot
+   move -- which is how the player reads a threat before committing.
+
+   No order may be given to it, so everything that acts on `selected`
+   has to refuse while this is set.  is_target() returns 0, which takes
+   the red highlight and the attack path with it, and game.c will not
+   move it.  A read-only selection. */
+uint8_t inspecting;
+
+/* --- Enemy-selection mode (docs/DESIGN.md § Enemy-selection mode) ---
+ * A unit whose move ends beside an enemy does not attack automatically:
+ * it stops here, with one enemy highlighted, and the player confirms.
+ * The arrows are MODAL while this is up -- they walk the target list
+ * instead of the cursor -- so the mode has to be visible, and it is: the
+ * cursor sits on whichever target is current.
+ *
+ * At most four cells can be orthogonally adjacent, so the list is fixed
+ * and needs no allocation. */
+uint8_t targeting;              /* the mode is up             */
+/* Eight is generous: a unit that has moved reaches only its four
+   neighbours, and a Cannon's range of 4 has never had more than a
+   handful of enemies inside it.  Targets past the eighth are dropped
+   rather than overrunning the array. */
+#define TGT_MAX 8
+static uint8_t tgt_cell[TGT_MAX];
+static uint8_t tgt_n;           /* how many                   */
+static uint8_t tgt_i;           /* which one is highlighted   */
+
+/* The cell the player would attack if they pressed SPACE now. */
+uint8_t target_now(void)
+{
+    return targeting ? tgt_cell[tgt_i] : NO_CELL;
+}
+
+
+
+/* Open the mode on whatever `u` is standing next to.  Returns 0 if there
+   is nothing adjacent, in which case the caller finishes the turn for
+   that unit as before -- a move that happens to end in open ground is
+   still just a move. */
+uint8_t targeting_open(uint8_t u, uint8_t prefer)
+{
+    uint8_t at = u_cell[u];
+    uint8_t mine = (uint8_t)(u_flags[u] & U_SIDE);
+    uint8_t reach = attack_reach(u);
+    uint8_t i;
+
+    tgt_n = 0;
+    tgt_i = 0;
+
+    /* Everything this unit can hit FROM WHERE IT STANDS, which is the
+       same question for both kinds of unit and so is asked once.  A unit
+       that has moved has a reach of 1, so this is its four neighbours; a
+       Cannon has 4, so it is everything in range.
+
+       Scanning the roster rather than the neighbouring cells is what
+       makes the Cannon work: its targets are never adjacent, and the
+       first version of this walked the four neighbours and therefore
+       found nothing for it to shoot at. */
+    for (i = 0; i < unit_count && tgt_n < TGT_MAX; i++) {
+        uint8_t cell;
+
+        if (u_type[i] == NO_UNIT) continue;
+        if ((u_flags[i] & U_SIDE) == mine) continue;
+        cell = u_cell[i];
+        {
+            uint8_t dx = col_of[cell] > col_of[at]
+                       ? (uint8_t)(col_of[cell] - col_of[at])
+                       : (uint8_t)(col_of[at] - col_of[cell]);
+            uint8_t ra = (uint8_t)(at / GRID_COLS);
+            uint8_t rb = (uint8_t)(cell / GRID_COLS);
+            uint8_t dy = rb > ra ? (uint8_t)(rb - ra) : (uint8_t)(ra - rb);
+
+            if ((uint8_t)(dx + dy) > reach) continue;
+        }
+        tgt_cell[tgt_n++] = cell;
+    }
+    if (!tgt_n) return 0;
+
+    /* Start on the enemy the player actually clicked, when they clicked
+       one.  Without this, clicking a specific target and being handed a
+       different one would be worse than no default at all. */
+    if (prefer != NO_CELL)
+        for (i = 0; i < tgt_n; i++)
+            if (tgt_cell[i] == prefer) { tgt_i = i; break; }
+
+    targeting = 1;
+    return 1;
+}
+
+/* Next or previous target, wrapping both ways: the list is a loop, so a
+   player holding one arrow key comes back round rather than sticking. */
+void targeting_step(int8_t d)
+{
+    if (!targeting || tgt_n < 2) return;
+    if (d > 0) tgt_i = (uint8_t)((tgt_i + 1) % tgt_n);
+    else       tgt_i = (uint8_t)((tgt_i + tgt_n - 1) % tgt_n);
+}
+
+/* Leave the mode without attacking.  The move is NOT given back -- it has
+   already happened and § Actions spends it -- so this only forfeits the
+   strike (docs/DESIGN.md § Enemy-selection mode). */
+void targeting_cancel(void)
+{
+    targeting = 0;
+    deselect();
+}
 uint8_t sel_x, sel_y;
 
 uint8_t level;
@@ -437,6 +546,7 @@ static void populate_map(void)
        stale — including the player's selection from the level just won,
        and the repaints it had outstanding. */
     selected = NO_UNIT;
+    inspecting = 0;
     render_discard();
 
     /* Seeded from the level, so a level's layout is the same every time
@@ -454,22 +564,77 @@ static void populate_map(void)
    in the tileset — which is also its column in both .zxp sheets.  This
    is the only place that conversion happens, and out-of-range GIDs fall
    back to terrain 0. */
-/* How far the selected unit can reach RIGHT NOW.  A unit that has
-   already acted has moved, and a move only earns an adjacent strike. */
+/* How far this unit can reach RIGHT NOW.
+
+   A unit that MOVES must be adjacent to strike (docs/DESIGN.md
+   § Adjacency): its range is 1 whatever the table says.  Only the
+   immobile units — Cannon and Base — get their listed range, which is
+   what makes the Cannon the one unit that can hit without being hit
+   back, and the reason it cannot move.
+
+   A unit that has already acted has moved, so it is adjacent-only for
+   that reason too; the two rules agree and the check is the same. */
 uint8_t attack_reach(uint8_t u)
 {
-    if (u_flags[u] & U_ACTED) return 1;
+    if (unit_movement[u_type[u]]) return 1;
+    if (u_flags[u] & U_ACTED)     return 1;
     return unit_range[u_type[u]];
 }
 
 /* Can the held unit hit whatever stands here?  Manhattan distance, no
    line of sight, no pathfinding — terrain neither blocks nor bends an
    attack, so this is arithmetic rather than a search. */
+/* Should this cell be shown in blue?
+
+   For anything that moves, blue is where it can GO -- the movement range.
+   A Cannon has no movement, so that would be nothing at all, and clicking
+   one would highlight an empty board while it sits waiting for a target to
+   wander into range.  For an immobile unit blue is therefore where it can
+   SHOOT: the thing the player actually needs to see.
+
+   Both readings answer the same question -- "what does picking this unit
+   up let me do?" -- so they share one colour. */
+uint8_t in_blue(uint8_t cell)
+{
+    uint8_t from, dx, dy;
+
+    if (selected == NO_UNIT) return 0;
+
+    if (unit_movement[u_type[selected]])
+        return cost[cell] != NO_COST;
+
+    from = u_cell[selected];
+    dx = col_of[cell] > col_of[from] ? (uint8_t)(col_of[cell] - col_of[from])
+                                     : (uint8_t)(col_of[from] - col_of[cell]);
+    dy = cell > from ? (uint8_t)((cell - from) / GRID_COLS)
+                     : (uint8_t)((from - cell) / GRID_COLS);
+    return (uint8_t)(dx + dy) <= attack_reach(selected) && cell != from;
+}
+
+/* Is there a tile the selected unit can REACH that is next to `cell`?
+
+   This is what makes the red highlight mean "I can hit that, now" rather
+   than "that is nearby": a mobile unit has to close before it can strike
+   (docs/DESIGN.md § Adjacency), so an enemy is only a target if the unit
+   can actually get beside it.  cost[] is the movement range, recomputed
+   when the unit was picked up, so occupied tiles are already excluded. */
+static uint8_t can_close_on(uint8_t cell)
+{
+    uint8_t c = col_of[cell], r = (uint8_t)(cell / GRID_COLS);
+
+    if (c > 0             && cost[cell - 1] != NO_COST) return 1;
+    if (c < GRID_COLS - 1 && cost[cell + 1] != NO_COST) return 1;
+    if (r > 0             && cost[cell - GRID_COLS] != NO_COST) return 1;
+    if (r < GRID_ROWS - 1 && cost[cell + GRID_COLS] != NO_COST) return 1;
+    return 0;
+}
+
 uint8_t is_target(uint8_t cell)
 {
     uint8_t v, dx, dy, from;
 
     if (selected == NO_UNIT) return 0;
+    if (inspecting) return 0;       /* looking, not ordering */
     v = occupancy[cell];
     if (v == NO_UNIT) return 0;
     if (((u_flags[v] ^ u_flags[selected]) & U_SIDE) == 0) return 0;
@@ -479,7 +644,16 @@ uint8_t is_target(uint8_t cell)
                                      : (uint8_t)(col_of[from] - col_of[cell]);
     dy = cell > from ? (uint8_t)((cell - from) / GRID_COLS)
                      : (uint8_t)((from - cell) / GRID_COLS);
-    return (uint8_t)(dx + dy) <= attack_reach(selected);
+
+    /* Already in reach from where it stands -- true for a Cannon shooting
+       at range, and for anything standing next to an enemy. */
+    if ((uint8_t)(dx + dy) <= attack_reach(selected)) return 1;
+
+    /* Otherwise it can still be a target if it can close this turn.  A
+       unit that has already acted cannot: its move is spent. */
+    if (u_flags[selected] & U_ACTED) return 0;
+    if (!unit_movement[u_type[selected]]) return 0;
+    return can_close_on(cell);
 }
 
 /* Has the side that just lost a unit lost the game?  A base counts as a
@@ -515,38 +689,124 @@ static void check_win(uint8_t loser_side)
    sort of thing that makes an AI look broken. */
 uint8_t damage_at(uint8_t attacker, uint8_t cell)
 {
-    uint16_t raw = unit_damage[u_type[attacker]];
+    uint8_t type = u_type[attacker];
+    uint16_t raw = unit_damage[type];
     uint8_t cover = terrain_cover[terrain[cell]];
-    uint8_t dmg = (uint8_t)((raw * (100u - cover) + 99u) / 100u);
+    uint8_t max = unit_health[type];
+    uint8_t dmg;
 
+    if (!raw) return 0;         /* the Base has no attack and never gains one */
+
+    /* Wounded units hit softer (docs/DESIGN.md § Adjacency, rule 3): a unit
+       at half health deals half damage.  Max health comes from the type
+       table, so nothing extra is stored per unit.  Rounds UP, like cover,
+       so a landed attack is never free. */
+    raw = (uint16_t)((raw * u_hp[attacker] + max - 1u) / max);
+
+    dmg = (uint8_t)((raw * (100u - cover) + 99u) / 100u);
     return dmg ? dmg : 1;
 }
 
-void attack(uint8_t cell)
+/* Orthogonally next to each other?  Movement is 4-way (docs/DESIGN.md
+   § Movement Range), so adjacency is Manhattan distance 1 -- and going
+   through col_of[] rather than differencing the indices keeps a cell at
+   the end of one row from counting as next to the start of the following
+   one. */
+uint8_t is_adjacent(uint8_t a, uint8_t b)
+{
+    uint8_t ca = col_of[a], cb = col_of[b];
+    uint8_t ra = (uint8_t)(a / GRID_COLS), rb = (uint8_t)(b / GRID_COLS);
+    uint8_t dx = ca > cb ? (uint8_t)(ca - cb) : (uint8_t)(cb - ca);
+    uint8_t dy = ra > rb ? (uint8_t)(ra - rb) : (uint8_t)(rb - ra);
+
+    return (uint8_t)(dx + dy) == 1;
+}
+
+/* What `defender` hits back for when struck from an adjacent square.
+   Half of an ordinary attack the other way, so the attacker's own cover
+   applies — and the one place in the game that rounds DOWN, with a floor
+   of 1: a badly wounded defender still bites, but only just.
+
+   Zero when the defender has no attack at all, which keeps the floor from
+   handing the Base a weapon (docs/DESIGN.md § Adjacency, rule 2). */
+static uint8_t counter_damage(uint8_t defender, uint8_t attacker_cell)
+{
+    uint8_t back = damage_at(defender, attacker_cell);
+
+    if (!back) return 0;
+    back = (uint8_t)(back / 2);
+    return back ? back : 1;
+}
+
+/* Take `dmg` off whoever stands on `cell`.  Returns the side that lost a
+   unit, or 0xFF if it survived, so the caller can run the win check --
+   which it must do for BOTH deaths an exchange can cause. */
+static uint8_t strike(uint8_t cell, uint8_t dmg)
 {
     uint8_t v = occupancy[cell];
-    uint8_t dmg = damage_at(selected, cell);
-    uint8_t side;
 
-    u_flags[selected] |= U_ACTED;
-
+    if (v == NO_UNIT) return 0xFF;
     if (u_hp[v] > dmg) {
         u_hp[v] = (uint8_t)(u_hp[v] - dmg);
-        side = 0xFF;
-    } else {
-        /* Dead.  The slot is marked free in place and occupancy cleared;
-           it is never compacted out, because occupancy[] holds indices
-           into these arrays (docs/PLAN.md § Data structures). */
-        side = (uint8_t)(u_flags[v] & U_SIDE);
-        u_type[v] = NO_UNIT;
-        u_hp[v] = 0;
-        occupancy[cell] = NO_UNIT;
-        mark_dirty(col_of[cell], (uint8_t)(cell / GRID_COLS));
+        return 0xFF;
     }
+    /* Dead.  The slot is marked free in place and occupancy cleared; it is
+       never compacted out, because occupancy[] holds indices into these
+       arrays (docs/PLAN.md § Data structures). */
+    u_type[v] = NO_UNIT;
+    u_hp[v] = 0;
+    occupancy[cell] = NO_UNIT;
+    mark_dirty(col_of[cell], (uint8_t)(cell / GRID_COLS));
+    return (uint8_t)(u_flags[v] & U_SIDE);
+}
+
+/* One exchange, in the order docs/DESIGN.md § Adjacency lays down -- and
+   the order IS the rule:
+
+     1. the attacker's damage lands;
+     2. if the defender died there is NO counter, so a killing blow is
+        free.  That is the strongest incentive in the system: finish what
+        you start;
+     3. otherwise, if the attack came from an adjacent square, the
+        defender hits back for half;
+     4. a counter can kill the attacker, and runs the same win check as
+        any other death -- otherwise a Base destroyed by a counter would
+        go unnoticed and the level would carry on unwinnable.
+
+   So one action can destroy two units and end the level, which is why the
+   win check runs on each death separately rather than once at the end. */
+void attack(uint8_t cell)
+{
+    uint8_t me = selected;
+    uint8_t my_cell = u_cell[me];
+    uint8_t target = occupancy[cell];
+    uint8_t back = 0;
+    uint8_t side;
+
+    u_flags[me] |= U_ACTED;
+
+    /* Worked out BEFORE the strike: after it the defender may be gone,
+       and its health scales its counter (rule 3). */
+    if (target != NO_UNIT && is_adjacent(my_cell, cell))
+        back = counter_damage(target, my_cell);
+
+    side = strike(cell, damage_at(me, cell));
 
     deselect();
+
+    if (side != 0xFF) {
+        recolour_page();
+        check_win(side);
+        return;                 /* the defender died: no counter (step 2) */
+    }
+
+    if (back) {
+        side = strike(my_cell, back);
+        recolour_page();
+        if (side != 0xFF) check_win(side);
+        return;
+    }
     recolour_page();
-    if (side != 0xFF) check_win(side);
 }
 
 void load_map(void)
@@ -576,10 +836,31 @@ void load_map(void)
 
     cursor_x = level_start[level - 1][0];
     cursor_y = level_start[level - 1][1];
-    cur_x = cursor_x;
-    cur_y = cursor_y;
 
     populate_map();
+
+    /* Start on the player's base.  It is the one landmark every level
+       has, it is what the player has to defend, and the armies are placed
+       around it -- so it is the most useful thing to be looking at on
+       turn one.  This has to run AFTER populate_map(), which is what puts
+       the base on the board.
+
+       level_start[] stays as the fallback for a level with no player base
+       at all, which nothing generates today but the loop should not
+       depend on that. */
+    {
+        uint8_t i;
+        for (i = 0; i < unit_count; i++) {
+            if (u_type[i] != UNIT_BASE) continue;
+            if (u_flags[i] & U_SIDE) continue;      /* theirs, not ours */
+            cursor_x = col_of[u_cell[i]];
+            cursor_y = (uint8_t)(u_cell[i] / GRID_COLS);
+            break;
+        }
+    }
+
+    cur_x = cursor_x;
+    cur_y = cursor_y;
 }
 
 /* Pick a unit up: work out the ground it can reach and start showing
@@ -590,6 +871,7 @@ void load_map(void)
 void select_unit(uint8_t u)
 {
     selected = u;
+    inspecting = (uint8_t)((u_flags[u] & U_SIDE) ? 1 : 0);
     sel_x = cursor_x;
     sel_y = cursor_y;
     movement_range(u_cell[u], unit_movement[u_type[u]]);
@@ -604,6 +886,7 @@ void deselect(void)
 {
     if (selected == NO_UNIT) return;
     selected = NO_UNIT;
+    inspecting = 0;
     recolour_page();
 }
 
@@ -615,21 +898,67 @@ void deselect(void)
    in the same breath.  The design's "a move ending next to an enemy may
    also attack" is the one exception, and it needs an attack to exist
    first: it arrives with combat in P4. */
-void move_selected(void)
+/* Move the held unit to `to`.  Returns 1 if it ended up beside an enemy
+   and enemy-selection mode is now open, in which case the unit is STILL
+   held -- the strike is part of the same action and the player has not
+   finished giving it. */
+uint8_t move_selected_to(uint8_t to)
 {
     uint8_t u = selected;
     uint8_t from = u_cell[u];
-    uint8_t to = cell_of(cursor_x, cursor_y);
 
     occupancy[from] = NO_UNIT;
     occupancy[to] = u;
     u_cell[u] = to;
     u_flags[u] |= U_ACTED;
 
-    selected = NO_UNIT;
     mark_dirty(sel_x, sel_y);           /* the sprite leaves here */
-    mark_dirty(cursor_x, cursor_y);     /* and arrives here       */
+    mark_dirty(col_of[to], (uint8_t)(to / GRID_COLS));  /* and arrives here */
+
+    if (targeting_open(u, NO_CELL)) {
+        recolour_page();
+        return 1;
+    }
+    selected = NO_UNIT;
+    inspecting = 0;
     recolour_page();
+    return 0;
+}
+
+void move_selected(void)
+{
+    move_selected_to(cell_of(cursor_x, cursor_y));
+}
+
+/* The reachable tile beside `enemy` with the BEST COVER, ties broken by
+   fewest movement points (docs/DESIGN.md § Which square does it move to).
+   The player is not choosing this square and will be counter-attacked on
+   it, so the game owes them the good one. */
+uint8_t best_adjacent(uint8_t enemy)
+{
+    uint8_t c = col_of[enemy], r = (uint8_t)(enemy / GRID_COLS);
+    uint8_t cand[4], n = 0, i;
+    uint8_t best = NO_CELL, best_cover = 0, best_cost = 0xFF;
+
+    if (r > 0)             cand[n++] = (uint8_t)(enemy - GRID_COLS);
+    if (c > 0)             cand[n++] = (uint8_t)(enemy - 1);
+    if (c < GRID_COLS - 1) cand[n++] = (uint8_t)(enemy + 1);
+    if (r < GRID_ROWS - 1) cand[n++] = (uint8_t)(enemy + GRID_COLS);
+
+    for (i = 0; i < n; i++) {
+        uint8_t cell = cand[i];
+        uint8_t cov;
+
+        if (cost[cell] == NO_COST) continue;        /* cannot get there */
+        cov = terrain_cover[terrain[cell]];
+        if (best == NO_CELL || cov > best_cover
+            || (cov == best_cover && cost[cell] < best_cost)) {
+            best = cell;
+            best_cover = cov;
+            best_cost = cost[cell];
+        }
+    }
+    return best;
 }
 
 /* --- The enemy turn --------------------------------------------------
@@ -669,26 +998,61 @@ void enemy_begin(void)
 
 /* The best thing this unit can hit from where it stands, or NO_CELL.
    Prefer a kill, then the Base, then the lowest survivor. */
+/* Best target from where `u` stands, scoring the whole EXCHANGE rather
+   than the blow (docs/DESIGN.md § What the AI has to weigh):
+
+       gain  = what it deals
+       cost  = what it takes back -- zero if the target dies, if the
+               target has no attack, or if the shot is not adjacent
+       score = gain - cost * AI_W_COUNTER
+
+   Three behaviours fall out of that arithmetic rather than being coded
+   as rules, and should not be "fixed" back out:
+
+     - a kill beats a bigger non-kill, because it cancels the counter;
+     - a wounded attacker withdraws on its own, since rule 3 scales its
+       gain but not the defender's counter;
+     - a Cannon shooting at range always has cost 0, so it stays back and
+       shoots.
+
+   Returns NO_CELL when every exchange available is worse than
+   AI_MIN_TRADE, which sends the unit to ai_move() instead.  Refusing a
+   bad trade is a decision, not a failure to find one. */
 static uint8_t pick_target(uint8_t u)
 {
-    uint8_t i, best = NO_CELL, best_score = 0;
+    uint8_t i, best = NO_CELL;
+    int16_t best_score = 0;
+    uint8_t at = u_cell[u];
+    /* attack_reach(), NOT unit_range[]: a unit that moves has to be
+       adjacent to strike, and reading the table let the enemy shoot from
+       range with a Tank -- its own rules applied to the player only. */
+    uint8_t reach = attack_reach(u);
 
     for (i = 0; i < unit_count; i++) {
-        uint8_t cell, score;
+        uint8_t cell, gain, back = 0;
+        int16_t score;
 
         if (u_type[i] == NO_UNIT) continue;
         if (u_flags[i] & U_SIDE) continue;          /* player units only */
         cell = u_cell[i];
-        if (cell_dist(u_cell[u], cell) > unit_range[u_type[u]]) continue;
+        if (cell_dist(at, cell) > reach) continue;
 
-        score = damage_at(u, cell);
-        if (score >= u_hp[i]) score = 200;          /* a kill outranks all */
-        if (u_type[i] == UNIT_BASE) score = (uint8_t)(score / 2 + 150);
+        gain = damage_at(u, cell);
+        if (gain >= u_hp[i]) {
+            score = AI_KILL;                        /* dies: no counter */
+        } else {
+            if (is_adjacent(at, cell))
+                back = counter_damage(i, at);
+            score = (int16_t)gain - (int16_t)back * AI_W_COUNTER;
+        }
+        if (u_type[i] == UNIT_BASE) score += AI_BASE_BONUS;
+
         if (best == NO_CELL || score > best_score) {
             best = cell;
             best_score = score;
         }
     }
+    if (best != NO_CELL && best_score <= AI_MIN_TRADE) return NO_CELL;
     return best;
 }
 
@@ -751,8 +1115,16 @@ uint8_t enemy_step(void)
         if (u_type[u] == UNIT_BASE) continue;       /* bases do not move */
 
         /* attack() and is_target() both read `selected`, so the unit is
-           held for the duration exactly as a player-driven order is. */
+           held for the duration exactly as a player-driven order is.
+
+           `inspecting` goes with it so that whatever reach is drawn while
+           the enemy acts comes up MAGENTA, not blue: during their turn the
+           board is showing what they can do, and using the player's colour
+           for it would read as a move the player could make.  It also
+           keeps is_target() quiet, which is right -- the red highlight is
+           the player's targeting aid, not a running commentary. */
         selected = u;
+        inspecting = 1;
         target = pick_target(u);
         if (target != NO_CELL) {
             attack(target);                         /* also clears selected */
@@ -761,6 +1133,7 @@ uint8_t enemy_step(void)
             ai_move(u);
             u_flags[u] |= U_ACTED;
             selected = NO_UNIT;
+    inspecting = 0;
             recolour_page();
         }
         return u_cell[u];

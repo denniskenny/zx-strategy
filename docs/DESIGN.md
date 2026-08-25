@@ -11,6 +11,8 @@ Most of it describes a game that runs today. These parts do not yet:
 | § Win Conditions | **Not built.** `ST_OVER` is reachable, but only through the `DEBUG_STATE_WALK` keys — nothing can actually win or lose a level yet (P4). |
 | § Enemy turn | **Not built.** The enemy army is placed and drawn, but never acts (P5). |
 | § Actions — the attack half | **Partly built.** A unit spends its action by moving; attacking, and the "move into contact and strike" exception, are P4. |
+| § Adjacency, counter-attack and wounded damage | **Not built.** Fully specified, including resolution order and the AI's scoring. Nothing implemented. |
+| § Selection and highlighting | **Not built.** Replaces the `O`/`P` cycling under § Attack Range. Specified apart from the clicked-enemy flow. |
 | § Stalemate | **Not built** as such — `X` already quits to the title, which is the whole mechanism, but nothing detects the stalemate. |
 
 Everything else — the board, terrain, unit placement, selection, movement,
@@ -151,7 +153,117 @@ while cover is under 100%, so no unit is ever unkillable by position alone.
 
 ### Attack Range
 
-Attack range is calculated using a simple algorithm that calculates the distance from the unit to every enemy unit, and takes those within range. Terrain does not block it, so no path is needed. The player can cycle through the enemy units in attack range using the O and P keys and select the target with the space bar.
+Attack range is calculated using a simple algorithm that calculates the distance from the unit to every enemy unit, and takes those within range. Terrain does not block it, so no path is needed. The player *did* cycle through enemy units in attack range with `O` and `P`, selecting with `SPACE`. **§ Selection and highlighting replaces that**: targets are highlighted on the board and clicked directly.
+
+### Adjacency, counter-attack and wounded damage
+
+Three rules that only make sense together. **Not built yet**; the
+resolution order and the AI's scoring at the end of this section are part
+of the specification, not notes.
+
+**1. Mobile units must be adjacent to attack.** Anything with a movement
+allowance — Infantry, Tank — can only strike a unit orthogonally next to
+it. Their attack range is 1 by definition, which overrides the Range
+figure listed under each unit.
+
+Cannon and Base do not move, so this does not apply to them: the Cannon
+keeps its range of 4. That makes the Cannon the only unit that can strike
+without being struck back, which is its whole purpose and the reason it
+cannot move.
+
+**2. A defender struck from an adjacent square hits back for half.** The
+counter is an ordinary attack with the roles reversed — the attacker's
+cover applies to it — then halved.
+
+The counter is **free**: it does not consume the defender's action, and it
+happens on the attacker's turn.
+
+Consequences worth being deliberate about:
+
+- **A Cannon firing at range 2-4 is never countered.** Adjacency is the
+  trigger, so reaching out costs the Cannon nothing.
+- **A Cannon attacked from an adjacent square does counter**, at half of
+  30. Closing with a Cannon is meant to hurt.
+- **The Base never counters**, because its damage is 0. A unit with no
+  attack does not acquire one by being hit.
+
+**3. Damage scales with the attacker's health.** A unit at half health
+deals half damage. Maximum health comes from the unit type table, so
+nothing extra is stored per unit.
+
+```
+scaled  = (damage * hp + max_hp - 1) / max_hp       health, rounds UP
+landed  = (scaled * (100 - cover) + 99) / 100       cover,  rounds UP
+counter = landed / 2, but never less than 1         halved, rounds DOWN
+```
+
+Health is applied before cover, and both round up, for the same reason
+cover already does: an attack that lands always takes at least one point,
+so no unit becomes unkillable by being nearly dead.
+
+The counter is the one place that rounds **down**, with a floor of 1. So a
+badly wounded defender still bites, but only just — and the floor keeps it
+consistent with every other damage path, where a landed attack is never
+free. A unit whose damage is 0 does not counter at all, so the floor never
+gives the Base an attack.
+
+**This makes fights snowball, on purpose.** A wounded unit hits softer, so
+it loses the next exchange harder. Combined with rule 2 it means attacking
+a healthy unit with a damaged one is a bad trade — the counter may take
+more than the attack deals. Committing fresh units, and withdrawing hurt
+ones, becomes the substance of the tactics.
+
+It also makes the Cannon stronger than its stat line suggests: it never
+takes a counter at range, so it never enters the spiral at all. Watch that
+in play — if the Cannon dominates, its damage is the number to cut.
+
+#### Resolution order
+
+An attack resolves in this order, and the order is the rule:
+
+1. The attacker's damage lands on the defender.
+2. **If the defender dies, there is no counter.** A killing blow is
+   therefore free, which is the strongest incentive in the system: finish
+   what you start.
+3. Otherwise, if the attack came from an adjacent square and the defender
+   has an attack at all, the counter lands on the attacker.
+4. **A counter can kill the attacker**, and runs the same win check as any
+   other death. It has to: otherwise a Base destroyed by a counter would
+   go unnoticed and the game would carry on unwinnable.
+
+So a single player action can destroy two units and end the level, and the
+win check must be able to fire from either death.
+
+#### What the AI has to weigh
+
+`pick_target()` currently scores by `damage_at()` alone, which under these
+rules would have the enemy walk into trades it should refuse — and rule 3
+would then grind its wounded units down for the rest of the level. **The
+enemy must score the whole exchange before committing**, not just what it
+deals:
+
+```
+gain  = damage it would deal
+cost  = counter it would take back     (0 if the target dies, or the
+                                        target has no attack, or the
+                                        attack is from range)
+score = gain - cost
+```
+
+Three things fall out of that, and are worth stating so the AI is not
+later "fixed" back into ignoring them:
+
+- **A kill is worth more than its damage number**, because it cancels the
+  counter. `gain - 0` beats a larger `gain` that costs a counter.
+- **A wounded attacker holds back on its own.** Its `gain` is scaled down
+  by rule 3 while the defender's counter is not, so the arithmetic argues
+  for withdrawal without needing a separate rule.
+- **A Cannon shooting from range 2-4 always has `cost` 0**, so the AI will
+  keep it back and shoot. That is the intended behaviour, not something to
+  tune out.
+
+This is the largest of the three pieces of work, and the one that decides
+whether the rules read as tactics or as an enemy behaving stupidly.
 
 ### Units
 Units have an attack range and damage value. They have a health value and can be killed. They also have a movement range
@@ -209,6 +321,172 @@ Range : 0
 Damage : 0
 Health : 255
 Movement : 0
+
+### Selection and highlighting
+
+The interaction model. **Not built** — this replaces the `O`/`P` cycling
+described under § Attack Range.
+
+"Clicking" here means putting the cursor on a cell and pressing `SPACE`;
+there is no mouse.
+
+**Selecting one of your units highlights two things at once:**
+
+- its **movement area in blue** — the tiles it can reach, as § Movement
+  Range computes them;
+- every enemy it could **attack this turn in red**.
+
+Red is not simply "within attack range". For a mobile unit, adjacency is
+required to strike (§ Adjacency), so an enemy is red when there is a
+reachable tile in the blue area orthogonally next to it. For a Cannon,
+which cannot move, red means within its range of 4. **If no adjacent tile
+is reachable the enemy is not highlighted**, so red always means "I can
+hit that, now".
+
+**Clicking a red enemy moves into contact and opens enemy-selection mode**
+with that enemy highlighted — the § Actions exception, chosen rather than
+assembled by hand. `SPACE` confirms; see below. If the unit is already
+adjacent, nothing moves and the mode opens where it stands.
+
+**Clicking a blue tile** moves there, as now, ending the action unless the
+move lands adjacent to an enemy.
+
+**Clicking the selected unit again, or any cell outside the highlights,
+cancels**: the selection drops and both highlights come off. Nothing is
+spent — cancelling is always free, so a player can look at a unit's reach
+and change their mind.
+
+#### Enemy-selection mode
+
+**When a unit's move ends adjacent to one or more enemies it enters
+enemy-selection mode**, rather than attacking anything automatically. The
+first enemy is highlighted; the rest are one keypress away.
+
+| input | |
+|---|---|
+| arrow keys | step through the adjacent enemies, as a **looped** list — off the end wraps to the start |
+| `SPACE` / fire 1 | attack the highlighted enemy |
+| fire 2 / `ENTER` | cancel the attack and deselect the unit |
+
+**The arrows are modal here.** They cycle the target list, not the cursor.
+That is the whole reason the mode exists as a mode: the same keys mean
+something different while a target is being chosen, so the mode has to be
+visible enough that the player knows which meaning is live. The
+highlighted enemy is what makes it visible.
+
+**Cancelling does not undo the move.** The unit has moved; the movement is
+spent and the unit stays where it is. Only the attack is forfeited. That
+follows from § Actions — the move-then-strike exception is one action, and
+declining the strike does not buy the move back.
+
+Cancelling out of this mode follows § The Ladder below.
+
+##### Clicking a red enemy still goes through this mode
+
+Clicking a red enemy names the target, but it does **not** skip
+enemy-selection mode: the unit moves into contact and the mode opens with
+that enemy highlighted. `SPACE` then confirms the attack.
+
+It costs a keypress for a choice the player has already made, and buys two
+things worth more:
+
+- **One flow for every attack.** There is no second path into combat that
+  behaves differently — which matters for the code as much as for the
+  player, since the attack is entered from one place.
+- **A mis-aimed click stays recoverable.** Without the mode, clicking
+  would be the only irreversible keypress in the design: § The Ladder
+  cannot back out of a decision that has already been executed. With it,
+  `ENTER` or fire 2 does.
+
+The arrows still cycle from there, so a player who clicked the wrong one
+of two adjacent enemies can switch target without cancelling and starting
+again.
+
+#### Which square does it move to?
+
+**The reachable adjacent tile with the best cover.** Ties break by fewest
+movement points, so the choice is always deterministic — the player must be
+able to learn what the game will do, and "best cover" alone does not settle
+it when two tiles match.
+
+The counter-attack rule is why: the square decides how much the unit takes
+back (§ Adjacency), so approaching over open ground when a tile one step
+further has 50% cover is a real cost. The player is not choosing the
+square, so the game owes them the good one.
+
+Two consequences to keep in mind:
+
+- **A unit already adjacent does not move**, even if a neighbouring tile
+  has better cover. It attacks where it stands. Shuffling a unit sideways
+  before it strikes would spend movement the player did not ask to spend,
+  and would move a unit they had deliberately placed.
+- **The approach may look indirect.** Best cover is not nearest, so a unit
+  will sometimes walk around to arrive from a wood or a city rather than
+  straight in. That is the rule working; the blue highlight already shows
+  the whole reachable area, so the route is never a surprise about *where*
+  it could go, only about which square it chose.
+
+The movement search already produces distances for the tie-break, and
+`terrain_cover[]` is a lookup, so this costs a scan of at most four tiles
+per highlighted enemy.
+
+#### The colours already work — do not redesign them
+
+Highlighting is attribute-only, one byte per 8x8 cell, so a highlight
+repaints a whole cell. That sounds like it would swamp the art, and it does
+not, because the three attributes already in use are chosen to avoid it:
+
+```
+ATTR_RANGE   0x4F   bright white ink, BLUE paper    movement area
+ATTR_TARGET  0x57   bright white ink, RED paper     attackable enemy
+ATTR_CURSOR  0x78   black ink,        WHITE paper   cursor
+```
+
+**Only the paper changes; the ink stays white.** So the sprite or terrain
+pixels in a highlighted cell stay legible instead of vanishing into their
+background, and the cursor stays visible on top of either highlight
+because it inverts to black-on-white rather than competing for a hue.
+
+This is proven in play and adequate. § Selection and highlighting uses
+more of it at once — a whole movement area rather than a cell — but it
+introduces no new colour problem and needs no new attributes.
+
+The one thing to preserve is the property that makes it work: **paper
+carries the meaning, ink stays bright.** A future highlight that changes
+ink instead will disappear against the art it lands on.
+
+### The Ladder
+
+`ENTER` and fire 2 (`X`) both mean **back out of whatever you are in**.
+They resolve against the innermost open context first, and only reach the
+outermost one when nothing is open.
+
+| context | `ENTER` / fire 2 does |
+|---|---|
+| choosing a target in enemy-selection mode | cancel the attack, deselect the unit |
+| a unit is selected, no target being chosen | deselect it |
+| nothing selected | `ENTER` ends the turn; `X` quits to the title |
+
+So `ENTER` still ends the turn — but only when there is nothing to back
+out of first. A player reaching for "end turn" with a target highlighted
+cancels the attack instead, and has to press it again. That is the right
+way round: cancelling costs nothing, whereas ending a turn with an attack
+half-given cannot be taken back.
+
+**This is the existing rule generalised, not a new one.** `src/game.c`
+already does exactly this for `X` — it drops a held unit on the first
+press and quits only on the second — and the comment there says why: "so
+the exit cannot be hit while giving an order". Enemy-selection mode is one
+more rung on the same ladder.
+
+Two properties to preserve when adding any future context:
+
+- **The two keys stay identical.** One rule to learn, not two exceptions.
+  A joystick player has fire 2; a keyboard player has both.
+- **Every rung is free.** Nothing on this ladder spends an action, a move
+  or a turn. That is what makes it safe to press when unsure, and it is
+  why the destructive things — ending a turn, quitting — sit at the bottom
+  where they can only be reached with nothing else open.
 
 ### Actions
 

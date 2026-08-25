@@ -332,12 +332,25 @@ static void move_cursor(void)
    Deliberately, for now: the alternative is spreading it over 16 frames,
    which makes a single cursor step take a third of a second.  The double
    buffer is what removes the tear (docs/PLAN.md § P7). */
+static void cursor_to(uint8_t cell);
+
 static void move_play_cursor(void)
 {
     uint8_t nx, ny;
     int8_t dx, dy;
 
     if (!nav_step(cursor_x, cursor_y, &nx, &ny)) return;
+
+    /* The arrows are MODAL in enemy-selection mode: they walk the target
+       list instead of the cursor (docs/DESIGN.md § Enemy-selection mode).
+       The cursor then follows the chosen target, which is what makes the
+       mode visible -- there is no separate highlight to maintain. */
+    if (targeting) {
+        int8_t d = (int8_t)((nx > cursor_x || ny > cursor_y) ? 1 : -1);
+        targeting_step(d);
+        cursor_to(target_now());
+        return;
+    }
 
     dx = (int8_t)(nx - cursor_x);
     dy = (int8_t)(ny - cursor_y);
@@ -361,6 +374,17 @@ static void move_play_cursor(void)
 
 static uint8_t enemy_active;
 static uint8_t enemy_beat;
+
+/* Put the cursor on a cell and bring the window with it. */
+static void cursor_to(uint8_t cell)
+{
+    if (cell == NO_CELL) return;
+    cursor_x = col_of[cell];
+    cursor_y = (uint8_t)(cell / GRID_COLS);
+    set_page();
+    render_play();
+    redraw_status = 1;
+}
 
 /* Bring the window to a cell without a scroll.  The enemy can act
    anywhere on the board, including several cells away, and sliding
@@ -467,16 +491,56 @@ static void handle_input(void)
                 uint8_t cell = cell_of(cursor_x, cursor_y);
                 uint8_t u = occupancy[cell];
 
-                if (selected == NO_UNIT) {
+                if (targeting) {
+                    /* SPACE confirms the highlighted target.  Nothing else
+                       on this screen can act while the mode is up. */
+                    attack(target_now());
+                    targeting = 0;
+                } else if (selected == NO_UNIT) {
+                    /* An own unit with an action left can be ordered; ANY
+                       enemy can be looked at.  select_unit() decides which
+                       from the side bit and sets `inspecting`. */
                     if (u != NO_UNIT &&
-                        (u_flags[u] & (U_SIDE | U_ACTED)) == SIDE_PLAYER)
+                        ((u_flags[u] & (U_SIDE | U_ACTED)) == SIDE_PLAYER
+                         || (u_flags[u] & U_SIDE)))
                         select_unit(u);
+                } else if (inspecting) {
+                    /* Nothing can be ordered while looking at an enemy.
+                       SPACE on another unit looks at that one instead,
+                       which saves a cancel between two glances; anywhere
+                       else puts the board back. */
+                    if (u != NO_UNIT && u != selected) select_unit(u);
+                    else                               deselect();
                 } else if (is_target(cell)) {
-                    /* An enemy in reach, washed red.  Checked before the
-                       move, because an occupied cell is never in the
-                       movement set anyway — the two can never both be
-                       true for the same cell. */
-                    attack(cell);
+                    /* An enemy washed red.  Checked before the move,
+                       because an occupied cell is never in the movement
+                       set anyway -- the two can never both be true.
+
+                       Clicking does NOT attack.  Either the unit can
+                       already hit it, in which case enemy-selection mode
+                       opens where it stands, or it closes to the
+                       best-cover adjacent tile first and the mode opens
+                       there.  Both ways the player confirms, so a
+                       mis-aimed click stays recoverable
+                       (docs/DESIGN.md § Clicking a red enemy).
+
+                       "Can I hit it from here" rather than "am I
+                       adjacent": a Cannon shoots at range 4 and is never
+                       adjacent to anything it fires at, and asking the
+                       narrower question left it unable to fire at all. */
+                    if (targeting_open(selected, cell)) {
+                        cursor_to(target_now());
+                    } else {
+                        uint8_t step = best_adjacent(cell);
+
+                        if (step != NO_CELL) {
+                            sel_x = col_of[u_cell[selected]];
+                            sel_y = (uint8_t)(u_cell[selected] / GRID_COLS);
+                            move_selected_to(step);
+                            targeting_open(selected, cell);
+                            cursor_to(target_now());
+                        }
+                    }
                 } else if (u == NO_UNIT && cost[cell] != NO_COST &&
                            !(u_flags[selected] & U_ACTED)) {
                     move_selected();
@@ -497,7 +561,17 @@ static void handle_input(void)
                SPACE looked like it did nothing but advance the turn.
                Fire 1 is ACT_SPACE now and the collision is gone at
                source, but one keypress should still mean one action. */
-            if ((edge & ACT_SELECT) && !(edge & ACT_SPACE)) {
+            /* ENTER follows § The Ladder: it backs out of the innermost
+               open context first and only ends the turn when there is
+               nothing to back out of.  With a unit held it deselects --
+               otherwise reaching for "end turn" while looking at a unit's
+               reach throws the turn away, and that cannot be undone,
+               whereas deselecting costs nothing. */
+            if ((edge & ACT_SELECT) && !(edge & ACT_SPACE)
+                && (targeting || selected != NO_UNIT)) {
+                if (targeting) targeting_cancel();
+                else           deselect();
+            } else if ((edge & ACT_SELECT) && !(edge & ACT_SPACE)) {
                 end_turn();
                 /* Hand straight over to the enemy.  The turn counter has
                    already moved on, so what follows belongs to them. */
@@ -510,7 +584,8 @@ static void handle_input(void)
             /* X drops the held unit first and only quits on a second
                press, so the exit cannot be hit while giving an order. */
             if (edge & ACT_BACK) {
-                if (selected != NO_UNIT) deselect();
+                if (targeting)           targeting_cancel();
+                else if (selected != NO_UNIT) deselect();
                 else                     set_state(ST_TITLE);
             }
             /* A base or an army was destroyed.  logic.c raised the flag

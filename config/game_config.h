@@ -146,6 +146,38 @@ static const uint8_t unit_movement[UNIT_TYPES] = { 3, 2, 0, 0 };
 #define AI_W_COVER       8      /* divisor, not multiplier: cover / 8 */
 #define AI_SCORE_BASE  200      /* keeps the sum inside a byte */
 
+/* --- What the enemy thinks an exchange is worth -----------------------
+ * Under docs/DESIGN.md § Adjacency an attack is a TRADE: the defender
+ * hits back for half unless it dies.  So the enemy scores
+ *
+ *     score = gain - counter * AI_W_COUNTER
+ *
+ * and not just the damage it deals.  Without this it walks into
+ * exchanges it should refuse, and wounded-damage then grinds its own
+ * units down for the rest of the level.
+ */
+
+/* A kill takes no counter at all, so it is worth more than its damage
+ * number -- this is what makes the enemy finish what it starts rather
+ * than spreading damage around. */
+#define AI_KILL          200
+
+/* On top of the score, so a base is worth walking into a bad trade for.
+ * It is the win condition; nothing else on the board is. */
+#define AI_BASE_BONUS    150
+
+/* How much the counter weighs against the damage dealt.  1 is an even
+ * trade, higher makes the enemy cautious, 0 makes it ignore counters
+ * altogether -- which is how it behaved before these rules existed, and
+ * is worth keeping reachable for comparison. */
+#define AI_W_COUNTER     1
+
+/* Refuse an exchange scoring at or below this and move instead.  0 means
+ * "never take a trade that loses more than it deals".  Raise it to make
+ * the enemy hold out for good trades; drop it below zero to let it throw
+ * units away. */
+#define AI_MIN_TRADE     0
+
 static const uint8_t terrain_move_cost[TER_TYPES] = { 1, 2, 0, 2, 1 };
 
 /* Percent of incoming damage cancelled by standing here.  The formula

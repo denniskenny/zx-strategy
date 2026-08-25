@@ -113,6 +113,18 @@ extern uint8_t player_won;      /* the outcome ST_OVER is reporting     */
  * has spent its action moving. */
 uint8_t attack_reach(uint8_t u);
 uint8_t is_target(uint8_t cell);   /* selected can hit whoever is here  */
+uint8_t in_blue(uint8_t cell);     /* show this cell as reach/range     */
+extern uint8_t inspecting;         /* held unit is an enemy: look only   */
+
+/* Enemy-selection mode; see docs/DESIGN.md § Enemy-selection mode. */
+extern uint8_t targeting;
+uint8_t target_now(void);          /* cell SPACE would attack, or NO_CELL */
+uint8_t targeting_open(uint8_t u, uint8_t prefer);
+void targeting_step(int8_t d);
+void targeting_cancel(void);
+uint8_t move_selected_to(uint8_t to);
+uint8_t best_adjacent(uint8_t enemy);
+uint8_t is_adjacent(uint8_t a, uint8_t b);
 void attack(uint8_t cell);         /* ...so do it, and spend the action */
 uint8_t damage_at(uint8_t attacker, uint8_t cell);
 

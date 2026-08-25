@@ -60,6 +60,12 @@
    turns blue.  Distinct from the cursor (white paper) and from every
    terrain and unit colour, all of which use black paper. */
 #define ATTR_RANGE  0x4F    /* bright white ink, blue paper   */
+/* The same idea in the enemy's colour.  Blue is what YOU can do; magenta
+   is what THEY can do, so the two never have to be told apart by counting
+   which unit is held.  Paper carries the meaning and the ink stays bright
+   white, which is the rule that keeps the art underneath legible
+   (docs/DESIGN.md § The colours already work). */
+#define ATTR_RANGE_E 0x5F   /* bright white ink, magenta paper */
 
 /* An enemy the held unit can hit.  Red paper, distinct from the blue of
    ground it can walk to — one glance separates "go there" from "shoot
