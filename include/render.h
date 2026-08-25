@@ -182,6 +182,7 @@ void set_page(void);            /* page the view onto the cursor        */
 void draw_view(void);           /* every cell, pixels and colour        */
 void scroll_view(int8_t dx, int8_t dy);  /* push the window one cell    */
 void render_boom(uint8_t wx, uint8_t wy); /* a unit died here          */
+void sfx(uint8_t voice);                 /* SFX_MOVE / ATTACK / BOOM  */
 void draw_view_cell(uint8_t vx, uint8_t vy);
 void attr_view_cell(uint8_t vx, uint8_t vy);    /* colour only          */
 

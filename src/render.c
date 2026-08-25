@@ -1344,15 +1344,22 @@ static void noise_cycle(void) __naked
  * The width of the period is what stops it settling into a tone, and its
  * lowness is what makes it a crunch rather than a hiss.  Blocking, which
  * is fine -- a unit dies between turns, not inside a frame budget. */
-static void noise(uint8_t len, uint8_t border)
+static void noise(uint8_t len, uint8_t border, uint16_t base, uint16_t mask)
 {
     static prng_t np = { 0xACE1u, 0x1234u };
 
     noise_port = border;
     while (len--) {
-        noise_hold = (uint16_t)((prng_next(&np) & 0x05FF) + 300);
+        noise_hold = (uint16_t)((prng_next(&np) & mask) + base);
         noise_cycle();
     }
+}
+
+/* One of the voices in config/game_config.h.  Border left alone -- only
+   the explosion flickers it, and that is part of the explosion. */
+void sfx(uint8_t voice)
+{
+    noise(sfx_len[voice], 7, sfx_base[voice], sfx_mask[voice]);
 }
 
 /* Draw the explosion over the terrain at a view cell, in `attr`. */
@@ -1397,7 +1404,10 @@ void render_boom(uint8_t wx, uint8_t wy)
     for (step = 0; step < 4; step++) {           /* 2 frames x 2 cycles */
         boom_cell((uint8_t)vx, (uint8_t)vy, (uint8_t)(step & 1),
                   boom_attr[step & 1]);
-        noise((uint8_t)(24 - step * 4), (uint8_t)(step & 1 ? 2 : 7));
+        /* Shortening bursts, so the bang decays rather than droning. */
+        noise((uint8_t)(sfx_len[SFX_BOOM] - step * 4),
+              (uint8_t)(step & 1 ? 2 : 7),
+              sfx_base[SFX_BOOM], sfx_mask[SFX_BOOM]);
     }
 
     /* Put the cell back to whatever it should be now -- empty ground, or

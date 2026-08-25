@@ -18,6 +18,35 @@
 
 #include <stdint.h>
 
+/* --- Sound effects --------------------------------------------------
+ * White noise, and the only knob that matters is the PERIOD of a speaker
+ * half-cycle in loop counts: the routine holds for `base + (random &
+ * mask)` counts each way, at ~26 T-states a count.  So
+ *
+ *     Hz  ~=  67300 / counts
+ *
+ * A WIDE mask is what stops it settling into a tone -- the spread matters
+ * as much as the centre.  Narrow it and it starts to whistle, which is
+ * what the first version of this did by accident.
+ *
+ * `len` is how many cycles the burst lasts.  A low voice takes far longer
+ * per cycle, so equal `len` does NOT mean equal duration; these are tuned
+ * for roughly comparable lengths.
+ */
+#define SFX_MOVE        0       /* a unit moves:  ~180-560 Hz, a thud   */
+#define SFX_ATTACK      1       /* a strike:      ~400-1680 Hz, a crack */
+#define SFX_BOOM        2       /* a death:       ~37-224 Hz, a crunch  */
+#define SFX_VOICES      3
+
+static const uint16_t sfx_base[SFX_VOICES] = {    120,     40,    300 };
+static const uint16_t sfx_mask[SFX_VOICES] = { 0x00FF, 0x007F, 0x05FF };
+static const uint8_t  sfx_len[SFX_VOICES]  = {      3,      8,     24 };
+/* MOVE is deliberately the shortest burst of the three -- a tick, not a
+ * thud.  It fires on every step of every unit, so it is the one sound the
+ * player hears constantly, and anything with a tail makes holding a
+ * direction feel like wading.  At ~3.7 ms a cycle three of them is about
+ * 11 ms; ten was 37 ms and dragged. */
+
 /* --- Unit types ---------------------------------------------------- */
 /* Ids are indices, and the order is load-bearing: it is the sprite
  * column order in assets/units_view.zxp and assets/units_map.zxp, and

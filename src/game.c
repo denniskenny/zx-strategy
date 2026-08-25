@@ -494,6 +494,7 @@ static void handle_input(void)
                 if (targeting) {
                     /* SPACE confirms the highlighted target.  Nothing else
                        on this screen can act while the mode is up. */
+                    sfx(SFX_ATTACK);
                     attack(target_now());
                     targeting = 0;
                 } else if (selected == NO_UNIT) {
@@ -543,6 +544,7 @@ static void handle_input(void)
                     }
                 } else if (u == NO_UNIT && cost[cell] != NO_COST &&
                            !(u_flags[selected] & U_ACTED)) {
+                    sfx(SFX_MOVE);
                     move_selected();
                 } else {
                     /* Its own cell, ground it cannot reach, or a unit
