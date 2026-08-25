@@ -13,6 +13,7 @@ Most of it describes a game that runs today. These parts do not yet:
 | § Actions — the attack half | **Built**, including move-into-contact-and-strike as one action. |
 | § Adjacency, counter-attack and wounded damage | **Built.** All three rules, the resolution order, and the AI's exchange scoring. Balance untested in a full campaign. |
 | § Selection and highlighting | **Built**, including enemy-selection mode, best-cover approach, and magenta for enemy reach. `O`/`P` cycling is gone. |
+| § Sprite masks and animation | **Not built.** Masks and a 128K-only second frame. The dirty-cell budget is the open problem, not the data. |
 | § Stalemate | **Not built** as such — `X` already quits to the title, which is the whole mechanism, but nothing detects the stalemate. |
 
 Everything else — the board, terrain, unit placement, selection, movement,
@@ -97,6 +98,139 @@ needs a different price from any other. This applies to the cursor as well as
 to units.
 
 The cursor is constrained by none of this — see § Cursor and movement.
+
+### Sprite masks and animation
+
+**Not built.** Two related additions to the graphics pipeline: a mask per
+sprite, generated at build time, and a second frame of animation that only
+a 128K gets.
+
+#### Masks
+
+A unit sprite currently occupies its whole 32x32 cell, so terrain does not
+show through it. A mask fixes that: one bit per pixel marking what is
+transparent, and the blit becomes
+
+```
+screen = (screen AND mask) OR sprite
+```
+
+**Generated at build time, never by hand.** `tools/zxp_tiles_zx0.py`
+already reads the .zxp sheets, so it derives the mask from the artwork and
+emits it alongside the pixels -- the artist draws one thing and the tool
+produces both. Nothing about a mask is a decision anybody should be making
+twice.
+
+**Nothing is keyed and nothing extra is drawn: the mask is derived from
+the sprite.** White is solid, black is transparent, and the white region is
+the sprite **dilated by one pixel** -- one pixel wider all round, diagonals
+included.
+
+That one pixel is the whole point. It puts a black rim between the sprite
+and whatever it stands on, so a unit stays legible over busy terrain
+instead of dissolving into it. The artist draws the sprite and gets the
+outline for free; there is no second image to keep in step, which is the
+failure mode a hand-drawn mask always ends in.
+
+**Store the mask INVERTED.** The blit wants
+
+```
+screen = (screen AND NOT mask) OR sprite
+```
+
+and inverting at build time turns the inner loop into AND then OR with no
+complement per byte. It is free to do in the tool and saves an instruction
+in the one loop that cannot afford them.
+
+**The artwork must leave a one-pixel margin inside its cell.** Dilation of
+a sprite that already touches the edge of its 32x32 cell would spill
+outside it, and the blit cannot reach there -- the outline would simply be
+missing on that side, which looks like a drawing mistake rather than a
+clipping one. `tools/zxp_tiles_zx0.py` should **fail the build** if a
+sprite has ink on its outer edge, rather than silently clipping: a tool
+that quietly produces a slightly wrong mask is worse than one that stops.
+
+Costs, with today's numbers:
+
+| | bytes |
+|---|---|
+| `units_view` pixels, decompressed | 512 |
+| masks for the same | **+512** |
+| free above MEM_END (0xF7AA-0xFFFF) | 2 134 |
+
+So the masks fit where the sheets already live, with room to spare. The
+cycle cost is the part to watch: a masked byte is load, AND, OR, store
+where an unmasked one is a store, so **roughly three times the work per
+byte**. That lands inside the vblank window, which is the one budget this
+program has never had slack in.
+
+#### Two frames, 128K only
+
+A second frame doubles the sprite data again -- another 512 bytes of
+pixels and 512 of mask. **The 128K gets it; the 48K keeps one frame** and
+must look deliberate rather than broken.
+
+The second frame belongs in a **bank block**: banks are 128K/+3 only, so a
+48K never loads it and pays nothing for it, and `tools/mktap.py` already
+takes repeatable `--code` blocks. `is_128k` picks at runtime, which is the
+same switch the shadow screen uses. Putting it in the contended asset
+block at 0x6000 instead would make a 48K carry data it cannot use, on a
+machine with less to spare.
+
+#### The problem to solve first
+
+**The renderer is built around two to four stale cells per frame.**
+`DIRTY_MAX` is 4, sized for one unit moving and up to two dying, and
+`draw_view_cell()` is expensive enough that a page flip spends its budget
+on two of them.
+
+Animation is the opposite shape: **every cell containing a unit goes stale
+on the same frame**, every few frames, forever. A dozen units would need a
+dozen redraws in one frame and the dirty list would drop most of them --
+silently, which is the bug that already cost a playtest once and is why
+`mark_dirty()` now complains in the debug build.
+
+#### Animate only when the screen is at rest
+
+So animation does not use the dirty list at all. **It runs only in the
+frames where the renderer has nothing else to do**, and stops the moment it
+has.
+
+That inverts the problem. The expensive frames -- a scroll, a move, a
+death, a recolour -- are exactly the frames animation is skipped, so it
+never competes for the budget it would otherwise blow. And a frame at rest
+is almost entirely spare: the whole vblank window is going unused, which is
+where the redraws have to happen anyway.
+
+**At rest** is a state the renderer can already answer for itself, from
+counters that exist:
+
+```
+dirty_n == 0        nothing stale to repaint
+attrs_left == 0     no recolour in progress
+not scrolling       the view is where it was last frame
+```
+
+No new bookkeeping, and nothing to keep in step.
+
+Consequences, all of which seem right rather than merely tolerable:
+
+- **Units freeze while the board is busy.** During a scroll, a move or an
+  attack, everything holds still. That reads as the board's attention
+  being elsewhere, and it is what makes the animation affordable.
+- **A held arrow key stops the animation**, because the view is scrolling.
+  Movement stops the idling and idling resumes when movement does -- there
+  is no state where both are trying to draw.
+- **The enemy turn animates in its gaps.** ENEMY_BEAT leaves frames at rest
+  between actions, so the board stays alive while the player watches.
+- **The cost is bounded by what a resting frame can afford**, not by how
+  many units are on the board. If a full sweep will not fit, it spreads
+  over several resting frames; there is no worst case where it has to.
+
+This is what makes the feature affordable, and it is worth building in this
+order: masks first, since they are useful on their own and their cost is
+per-blit rather than per-frame, then the resting check, then the second
+frame behind it.
 
 ### Tiles
 

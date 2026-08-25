@@ -608,7 +608,24 @@ uint8_t in_blue(uint8_t cell)
                                      : (uint8_t)(col_of[from] - col_of[cell]);
     dy = cell > from ? (uint8_t)((cell - from) / GRID_COLS)
                      : (uint8_t)((from - cell) / GRID_COLS);
-    return (uint8_t)(dx + dy) <= attack_reach(selected) && cell != from;
+
+    /* Reach for one of ours, RANGE for one of theirs.
+
+       attack_reach() answers "what can this unit still do this turn", and
+       returns 1 once U_ACTED is set.  Every enemy has that set for the
+       whole of the player's turn, so asking it here drew an enemy
+       Cannon's threat as a single ring of neighbours instead of its range
+       of 4 -- it looked as though terrain were clipping it.
+
+       What the player needs from an enemy is its CAPABILITY: what it will
+       be able to hit once its action comes back.  Terrain has never
+       entered into it; attack range is arithmetic, with no line of sight
+       and no path (docs/DESIGN.md § Attack Range). */
+    {
+        uint8_t reach = inspecting ? unit_range[u_type[selected]]
+                                   : attack_reach(selected);
+        return (uint8_t)(dx + dy) <= reach && cell != from;
+    }
 }
 
 /* Is there a tile the selected unit can REACH that is next to `cell`?
