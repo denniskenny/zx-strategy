@@ -163,7 +163,7 @@ include/units_map.h: assets/units_map.zxp tools/zxp_tiles_zx0.py
 # stream would have buried those runs in sprite detail and lost most of
 # that.  mkassets.py picks it up from the header automatically, so it
 # lands in the contended block at 0x6000 with the other blobs.
-include/units_view.h: assets/units_view_animated.zxp tools/zxp_tiles_zx0.py
+include/units_view.h: assets/units_view_short.zxp tools/zxp_tiles_zx0.py
 	$(ZXP_TILES_ZX0) $< $@ --name units_view --tiles $(VIEW_SPRITES) \
 	    --frames 2 --mask --attr-mode bright --zx0 $(ZX0)
 

@@ -80,10 +80,22 @@
  || (UNITS_MAP_TILE_H != TILES_MAP_TILE_H)
 #error "units_map.zxp tiles are not the size of a campaign-map cell"
 #endif
-#if (UNITS_VIEW_TILE_W != TILES_VIEW_TILE_W) \
- || (UNITS_VIEW_TILE_H != TILES_VIEW_TILE_H)
-#error "units_view.zxp tiles are not the size of a play-view cell"
+/* Unit sprites are HALF the cell height and sit in its lower half: a unit
+   stands on the ground, and the top half of the cell stays terrain, which
+   is both less to store and less to cover up.  Full width, exactly half
+   height, and a whole number of character rows -- anything else and the
+   attribute split below has nowhere to land. */
+#if UNITS_VIEW_TILE_W != TILES_VIEW_TILE_W
+#error "units_view.zxp tiles are not the width of a play-view cell"
 #endif
+#if UNITS_VIEW_TILE_H * 2 != TILES_VIEW_TILE_H
+#error "units_view.zxp tiles must be exactly half the height of a cell"
+#endif
+#if (UNITS_VIEW_TILE_ROWS * 2) != TILES_VIEW_TILE_ROWS
+#error "units_view.zxp tiles must be a whole number of character rows"
+#endif
+#define UNIT_ROW_OFF   UNITS_VIEW_TILE_ROWS   /* char rows of terrain above */
+#define UNIT_PIX_OFF   UNITS_VIEW_TILE_H      /* pixel rows of terrain above */
 
 /* ------------------------------------------------- 48K / 128K paths --
    The only place the two machines are told apart.  `hw_detect()` sets
@@ -651,8 +663,9 @@ static void compose_tile(uint8_t vx, uint8_t vy, const uint8_t *src)
 static void compose_masked(uint8_t vx, uint8_t vy,
                            const uint8_t *src, const uint8_t *mask)
 {
-    uint8_t *d = VBUF + (uint16_t)vy * (VIEW_CH * 8) * 32 + vx * VIEW_CW;
-    uint8_t r = VIEW_CH * 8;
+    uint8_t *d = VBUF + (uint16_t)(vy * (VIEW_CH * 8) + UNIT_PIX_OFF) * 32
+                      + vx * VIEW_CW;
+    uint8_t r = UNITS_VIEW_TILE_H;
 
     while (r--) {
         d[0] = (uint8_t)((d[0] & mask[0]) | src[0]);
@@ -671,11 +684,12 @@ static void compose_masked(uint8_t vx, uint8_t vy,
 
 /* One cell's attributes, either flooded with a single colour or copied
    from a sheet block with the side's ink ORed over it. */
-static void compose_attr(uint8_t vx, uint8_t vy, uint8_t flat,
-                         const uint8_t *src, uint8_t or_mask)
+static void compose_attr_rows(uint8_t vx, uint8_t vy, uint8_t row0,
+                              uint8_t rows, uint8_t flat,
+                              const uint8_t *src, uint8_t or_mask)
 {
-    uint8_t *d = VATTR + (uint16_t)vy * VIEW_CH * 32 + vx * VIEW_CW;
-    uint8_t r = VIEW_CH;
+    uint8_t *d = VATTR + (uint16_t)(vy * VIEW_CH + row0) * 32 + vx * VIEW_CW;
+    uint8_t r = rows;
 
     while (r--) {
         if (src) {
@@ -689,6 +703,12 @@ static void compose_attr(uint8_t vx, uint8_t vy, uint8_t flat,
         }
         d += 32;
     }
+}
+
+static void compose_attr(uint8_t vx, uint8_t vy, uint8_t flat,
+                         const uint8_t *src, uint8_t or_mask)
+{
+    compose_attr_rows(vx, vy, 0, VIEW_CH, flat, src, or_mask);
 }
 
 /* --- Presenting ------------------------------------------------------
@@ -885,7 +905,15 @@ static const uint8_t *cell_attr(uint8_t vx, uint8_t vy,
     if (u != NO_UNIT) {
         if (u == selected)            *flat = ATTR_HINT;
         else if (is_target(cell))     *flat = ATTR_TARGET;
-        else if (u_flags[u] & U_SIDE) *flat = ATTR_UNIT_E;
+        else if (u_flags[u] & U_SIDE) {
+            /* The enemy gets the sheet's per-cell BRIGHT bit too, which it
+               never had: it was a flat colour, so every cell of an enemy
+               sprite was the same shade.  Green can do this and red cannot
+               -- see ATTR_UNIT_P -- so the two sides are asymmetric here
+               out of necessity rather than choice. */
+            *mask = ATTR_UNIT_E;
+            return unit_view_attr_of(u_type[u]);
+        }
         else if (u_flags[u] & U_ACTED) *flat = ATTR_UNIT_P_DONE;
         else {
             *mask = ATTR_UNIT_P;
@@ -901,12 +929,51 @@ static const uint8_t *cell_attr(uint8_t vx, uint8_t vy,
 }
 
 /* Colour, into the buffer. */
+static void cell_layers(uint8_t vx, uint8_t vy, const uint8_t **bg,
+                        const uint8_t **sp, const uint8_t **mask);
+
+/* The terrain's own attribute block for a view cell, off-board included --
+   the same answer cell_layers() gives for the background picture, so the
+   colours above a unit's head always match the ground it is standing on. */
+static const uint8_t *tile_attr_of(uint8_t vx, uint8_t vy)
+{
+    int8_t wx = (int8_t)(page_x + vx);
+    int8_t wy = (int8_t)(page_y + vy);
+
+    if (wx < 0 || wx >= GRID_COLS || wy < 0 || wy >= GRID_ROWS)
+        return view_attr_of(TER_SEA);
+    return view_attr_of(terrain[cell_of((uint8_t)wx, (uint8_t)wy)]);
+}
+
+/* A cell's colour.  With half-height sprites an occupied cell has TWO
+   colourings: terrain in the top character rows, the unit's own block in
+   the bottom ones where the sprite actually is.  Colouring the whole cell
+   for the unit would paint terrain the unit's colour above its head,
+   which is most of what covering the cell used to cost. */
 static void compose_view_attr(uint8_t vx, uint8_t vy)
 {
     uint8_t flat = 0, mask = 0;
     const uint8_t *blk = cell_attr(vx, vy, &flat, &mask);
+    const uint8_t *bg, *sp, *m;
 
-    compose_attr(vx, vy, flat, blk, mask);
+    cell_layers(vx, vy, &bg, &sp, &m);
+    if (!sp) {
+        compose_attr(vx, vy, flat, blk, mask);
+        return;
+    }
+
+    /* A cell with a unit in it: the TOP rows are the tile's own colours,
+       always.  Whatever cell_attr() decided -- the unit's block, a flat
+       enemy red, a target wash -- applies only to the bottom rows where
+       the sprite is.
+
+       `flat` used to short-circuit this and colour the cell entire, which
+       covered the terrain above an ENEMY unit (flat red) and above any
+       unit that had already acted.  Those are the common cases, so most
+       of the point of half-height sprites was being lost. */
+    compose_attr_rows(vx, vy, 0, UNIT_ROW_OFF, 0, tile_attr_of(vx, vy), 0);
+    compose_attr_rows(vx, vy, UNIT_ROW_OFF, UNITS_VIEW_TILE_ROWS,
+                      flat, blk, mask);
 }
 
 /* What a cell is made of: always a background tile, and for an occupied
@@ -1033,15 +1100,25 @@ static void slice_col(uint8_t vx, uint8_t sub, uint8_t dcol)
         uint8_t *d = VBUF + (uint16_t)vy * (VIEW_CH * 8) * 32 + dcol;
         uint8_t r = VIEW_CH * 8;
 
+        uint8_t row = 0;
+
         cell_layers(vx, vy, &bg, &art, &mask);
         bg += sub;
         if (art) { art += sub; mask += sub; }
 
         while (r--) {
-            *d = art ? (uint8_t)((*bg & *mask) | *art) : *bg;
+            /* The sprite is half-height and sits low, so the top of the
+               cell is terrain even where a unit stands. */
+            if (art && row >= UNIT_PIX_OFF) {
+                *d = (uint8_t)((*bg & *mask) | *art);
+                art += VIEW_CW;
+                mask += VIEW_CW;
+            } else {
+                *d = *bg;
+            }
             bg += VIEW_CW;
-            if (art) { art += VIEW_CW; mask += VIEW_CW; }
             d += 32;
+            row++;
         }
     }
 }
@@ -1060,7 +1137,17 @@ static void slice_row(uint8_t vy, uint8_t sub, uint8_t drow)
 
         cell_layers(vx, vy, &bg, &art, &mask);
         bg += skip;
-        if (art) { art += skip; mask += skip; }
+        /* The sprite covers only the lower half of the cell, so a slice
+           from the top half has terrain and nothing else. */
+        if (art) {
+            if (skip + 8 * VIEW_CW <= (uint16_t)UNIT_PIX_OFF * VIEW_CW) {
+                art = 0;
+            } else {
+                uint16_t s2 = skip - (uint16_t)UNIT_PIX_OFF * VIEW_CW;
+                art += s2;
+                mask += s2;
+            }
+        }
 
         while (r--) {
             if (art) {
@@ -1094,11 +1181,25 @@ static void slice_attr_col(uint8_t vx, uint8_t sub, uint8_t dcol)
     for (vy = 0; vy < VIEW_ROWS; vy++) {
         uint8_t flat = 0, mask = 0;
         const uint8_t *blk = cell_attr(vx, vy, &flat, &mask);
+        const uint8_t *bg, *sp, *m;
+        const uint8_t *ter = tile_attr_of(vx, vy);
         uint8_t *d = VATTR + (uint16_t)vy * VIEW_CH * 32 + dcol;
         uint8_t r;
 
+        /* Same split as compose_view_attr(): terrain above, unit below.
+           Not merely for consistency -- a unit's attribute block is
+           UNITS_VIEW_TILE_ROWS tall, which is HALF the cell, so indexing
+           it by the cell's row read off the end of the block for the top
+           rows and wrote whatever followed it into the screen.  That is
+           the ragged colour at a scrolling edge. */
+        cell_layers(vx, vy, &bg, &sp, &m);
         for (r = 0; r < VIEW_CH; r++) {
-            *d = blk ? (uint8_t)(blk[r * VIEW_CW + sub] | mask) : flat;
+            if (sp && r < UNIT_ROW_OFF) {
+                *d = ter[r * VIEW_CW + sub];
+            } else {
+                uint8_t br = (uint8_t)(sp ? r - UNIT_ROW_OFF : r);
+                *d = blk ? (uint8_t)(blk[br * VIEW_CW + sub] | mask) : flat;
+            }
             d += 32;
         }
     }
@@ -1113,11 +1214,25 @@ static void slice_attr_row(uint8_t vy, uint8_t sub, uint8_t drow)
     for (vx = 0; vx < VIEW_COLS; vx++) {
         uint8_t flat = 0, mask = 0;
         const uint8_t *blk = cell_attr(vx, vy, &flat, &mask);
+        const uint8_t *bg, *sp, *m;
         uint8_t *d = VATTR + (uint16_t)drow * 32 + vx * VIEW_CW;
         uint8_t c;
 
-        for (c = 0; c < VIEW_CW; c++)
-            d[c] = blk ? (uint8_t)(blk[sub * VIEW_CW + c] | mask) : flat;
+        /* As slice_attr_col(): a unit's block is half the cell tall, so a
+           sub-row above the sprite must take the terrain's colours and
+           must NOT index the unit block, which does not reach that far. */
+        cell_layers(vx, vy, &bg, &sp, &m);
+        if (sp && sub < UNIT_ROW_OFF) {
+            const uint8_t *ter = tile_attr_of(vx, vy);
+
+            for (c = 0; c < VIEW_CW; c++)
+                d[c] = ter[sub * VIEW_CW + c];
+        } else {
+            uint8_t br = (uint8_t)(sp ? sub - UNIT_ROW_OFF : sub);
+
+            for (c = 0; c < VIEW_CW; c++)
+                d[c] = blk ? (uint8_t)(blk[br * VIEW_CW + c] | mask) : flat;
+        }
     }
 }
 

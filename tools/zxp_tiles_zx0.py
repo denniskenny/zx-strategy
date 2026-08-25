@@ -48,6 +48,9 @@ import sys
 
 VSYNC_MARKER = 0x03
 
+# How many pixels wide the mask's outline is.
+MASK_GROW = 2
+
 
 ZX0_NOTE = '/* The BYTES do not belong in the program.  They are read once, at\n   boot, to decompress into the tile buffers, so they live in the\n   standalone asset block at 0x6000 instead of spending the 16 KB\n   code budget below 0xC000.\n\n   tools/mkassets.py parses the array below out of this header and\n   emits two things: the binary that mktap.py ships as its own CODE\n   block, and a `defc` that resolves the extern to its address at\n   zero cost.  Nothing defines %s, so no translation\n   unit ever carries a copy -- the array is here to be read by the\n   tool, not by the compiler. */\n'
 
@@ -131,16 +134,25 @@ def dilate(pixels, cols, tw, th, y0=0):
        is what lets both frames share it whatever they look like."""
     if not isinstance(cols, (list, tuple)):
         cols = (cols,)
-    grown = [[False] * tw for _ in range(th)]
-    for y in range(th):
-        for x in range(tw):
-            if not any(pixels[y0 + y][x0 + x] == "1" for x0 in cols):
-                continue
-            for dy in (-1, 0, 1):
-                for dx in (-1, 0, 1):
-                    ny, nx = y + dy, x + dx
-                    if 0 <= ny < th and 0 <= nx < tw:
-                        grown[ny][nx] = True
+    grown = [[any(pixels[y0 + y][x0 + x] == "1" for x0 in cols)
+              for x in range(tw)] for y in range(th)]
+
+    # TWO passes, so the rim is two pixels wide.  One pixel is enough to
+    # separate a sprite from flat ground and not enough against the busier
+    # terrain -- the eye loses the outline in the texture.  Each pass is a
+    # full 8-way grow of the previous result, and both clip at the cell
+    # edge, so a sprite standing on the bottom row still meets the ground.
+    for _ in range(MASK_GROW):
+        prev = [row[:] for row in grown]
+        for y in range(th):
+            for x in range(tw):
+                if not prev[y][x]:
+                    continue
+                for dy in (-1, 0, 1):
+                    for dx in (-1, 0, 1):
+                        ny, nx = y + dy, x + dx
+                        if 0 <= ny < th and 0 <= nx < tw:
+                            grown[ny][nx] = True
     return grown
 
 
@@ -179,8 +191,12 @@ def check_margin(pixels, x0, tw, th, name, tile, y0=0):
     edges = []
     if any(pixels[y0][x0 + x] == "1" for x in range(tw)):
         edges.append("top")
-    if any(pixels[y0 + th - 1][x0 + x] == "1" for x in range(tw)):
-        edges.append("bottom")
+    # The BOTTOM edge is allowed.  A unit stands on the ground, so its feet
+    # are meant to meet the terrain -- a black rim underneath would make it
+    # look like it is floating.  The dilation simply clips there, which is
+    # the right picture rather than a compromise.  Half-height sprites make
+    # this the normal case: they sit in the lower half of the cell and the
+    # cell's bottom IS the ground line.
     if any(pixels[y0 + y][x0] == "1" for y in range(th)):
         edges.append("left")
     if any(pixels[y0 + y][x0 + tw - 1] == "1" for y in range(th)):

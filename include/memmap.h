@@ -72,7 +72,14 @@
 /* Unpacked sheets: terrain map + terrain view + unit map + unit view,
    plus one mask for the view units.  The view sheet gained the explosion
    sprite, so both it and its mask are 5 tiles now, not 4. */
-#define MEM_TILES_SIZE  3104    /* +640 for the second animation frame */
+/* Sized to the sheets as they actually are, not rounded up:
+ *   terrain map 180 + terrain view 720 + unit map 144
+ * + unit view 360 + its mask 320 + frame 2 320  =  2044
+ * src/render.c has an #error that adds these up and checks. Half-height
+ * unit sprites took 640 bytes off this; leaving the old figure would have
+ * left that free space stranded between the sheets and MEM_LOGIC, where
+ * nothing could reach it. */
+#define MEM_TILES_SIZE  2044
 
 /* --- src/logic.c: scratch with no deadline on it --- */
 #define MEM_LOGIC       (MEM_TILES + MEM_TILES_SIZE)

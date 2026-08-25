@@ -40,8 +40,18 @@
    (docs/DESIGN.md: "Enemy units are red, player units are green").
    The sheets supply a BRIGHT flag per character cell — the sprite's
    shading — which is ORed over the side's ink. */
-#define ATTR_UNIT_P 0x04    /* green ink, black paper; sheet adds BRIGHT */
-#define ATTR_UNIT_E 0x42    /* bright red ink, black paper             */
+/* Player red must carry BRIGHT, and that costs the sprite its shading.
+   Non-bright red on black is 0x02, and 0x02/0x03 are reserved for the
+   floating bus sync marker -- a unit wearing one would be mistaken for the
+   marker and the vsync could latch onto a tank.
+
+   So the artist's per-cell BRIGHT bit, which the sheet carries and the
+   enemy now uses, is forced on for every cell of a player unit: red units
+   are one flat shade and there is no way around it on black paper.  Green
+   has no such problem, which is very likely why the sides were the other
+   way round to begin with. */
+#define ATTR_UNIT_P 0x42    /* bright red ink, black paper; BRIGHT forced */
+#define ATTR_UNIT_E 0x04    /* green ink, black paper; sheet adds BRIGHT */
 #define ATTR_BRIGHT 0x40    /* the BRIGHT bit the unit sheets carry     */
 
 /* The enemy is always bright, and cannot be otherwise: non-bright red
@@ -54,18 +64,25 @@
 /* A player unit that has spent its action goes uniformly dim — the
    sheet's shading is dropped, which is what makes "used" legible at a
    glance against an otherwise shaded sprite. */
-#define ATTR_UNIT_P_DONE 0x04   /* green ink, black paper, not bright */
+/* Spent units shift hue rather than dropping BRIGHT, because dropping it
+   from red lands on the reserved 0x02.  Magenta is the neighbouring hue
+   and reads as the same unit gone quiet. */
+#define ATTR_UNIT_P_DONE 0x43   /* bright magenta ink, black paper */
 
 /* Ground the selected unit can reach: the terrain art stays, its paper
    turns blue.  Distinct from the cursor (white paper) and from every
    terrain and unit colour, all of which use black paper. */
-#define ATTR_RANGE  0x4F    /* bright white ink, blue paper   */
-/* The same idea in the enemy's colour.  Blue is what YOU can do; magenta
+#define ATTR_RANGE  0x5F    /* bright white ink, MAGENTA paper */
+/* The same idea in the enemy's colour.  MAGENTA is what YOU can do, BLUE
    is what THEY can do, so the two never have to be told apart by counting
-   which unit is held.  Paper carries the meaning and the ink stays bright
-   white, which is the rule that keeps the art underneath legible
-   (docs/DESIGN.md § The colours already work). */
-#define ATTR_RANGE_E 0x5F   /* bright white ink, magenta paper */
+   which unit is held.  Each side's highlight is the lighter relative of
+   its unit colour -- red units, magenta reach; green units, blue reach --
+   so the pairing is learnable rather than arbitrary.
+
+   Paper carries the meaning and the ink stays bright white, which is the
+   rule that keeps the art underneath legible (docs/DESIGN.md § The colours
+   already work). */
+#define ATTR_RANGE_E 0x4F   /* bright white ink, blue paper    */
 /* Destruction.  FLASH set on both, so the hardware flip runs on top of the
    frame swap and two rates of flicker land at once. */
 #define ATTR_BOOM_A 0xD7    /* flash, bright, white ink, red paper   */
