@@ -320,14 +320,19 @@ static uint8_t dirty_x[DIRTY_MAX], dirty_y[DIRTY_MAX];
 #define MEM_VIEW_TILES  (MEM_MAP_TILES  + TILES_MAP_RAW_SIZE)
 #define MEM_UMAP_TILES  (MEM_VIEW_TILES + TILES_VIEW_RAW_SIZE)
 #define MEM_UVIEW_TILES (MEM_UMAP_TILES + UNITS_MAP_RAW_SIZE)
+/* Masks for the VIEW unit sprites only -- see docs/DESIGN.md.  Terrain is
+   the background and needs none; the map-view sprites are 16x16 markers on
+   a schematic and are drawn flat. */
+#define MEM_UVIEW_MASK  (MEM_UVIEW_TILES + UNITS_VIEW_RAW_SIZE)
 
 #define map_tiles       ((uint8_t *)MEM_MAP_TILES)
 #define view_tiles      ((uint8_t *)MEM_VIEW_TILES)
 #define unit_map_tiles  ((uint8_t *)MEM_UMAP_TILES)
 #define unit_view_tiles ((uint8_t *)MEM_UVIEW_TILES)
+#define unit_view_mask  ((uint8_t *)MEM_UVIEW_MASK)
 
 #if (TILES_MAP_RAW_SIZE + TILES_VIEW_RAW_SIZE + UNITS_MAP_RAW_SIZE \
-     + UNITS_VIEW_RAW_SIZE) > MEM_TILES_SIZE
+     + UNITS_VIEW_RAW_SIZE + UNITS_VIEW_MASK_RAW_SIZE) > MEM_TILES_SIZE
 #error "the unpacked sheets have outgrown MEM_TILES_SIZE in memmap.h"
 #endif
 
@@ -430,6 +435,7 @@ void load_tiles(void)
     dzx0_decompress(tiles_view_zx0, view_tiles);
     dzx0_decompress(units_map_zx0, unit_map_tiles);
     dzx0_decompress(units_view_zx0, unit_view_tiles);
+    dzx0_decompress(units_view_mask_zx0, unit_view_mask);
 }
 
 /* The status panel's colour for a unit: side, dimmed once spent.  One
@@ -613,6 +619,32 @@ static void compose_tile(uint8_t vx, uint8_t vy, const uint8_t *src)
     while (r--) {
         d[0] = src[0]; d[1] = src[1]; d[2] = src[2]; d[3] = src[3];
         src += VIEW_CW;
+        d += 32;
+    }
+}
+
+/* A sprite over what is already in the buffer.
+
+   The mask is stored INVERTED by tools/zxp_tiles_zx0.py -- set where the
+   background should survive, clear over the sprite and its one-pixel
+   outline -- so this is AND then OR with no complement per byte.
+
+   Three memory accesses and two ALU ops per byte where compose_tile()
+   manages one store, which is why only the view unit sprites get it:
+   terrain is the background and has nothing to show through to. */
+static void compose_masked(uint8_t vx, uint8_t vy,
+                           const uint8_t *src, const uint8_t *mask)
+{
+    uint8_t *d = VBUF + (uint16_t)vy * (VIEW_CH * 8) * 32 + vx * VIEW_CW;
+    uint8_t r = VIEW_CH * 8;
+
+    while (r--) {
+        d[0] = (uint8_t)((d[0] & mask[0]) | src[0]);
+        d[1] = (uint8_t)((d[1] & mask[1]) | src[1]);
+        d[2] = (uint8_t)((d[2] & mask[2]) | src[2]);
+        d[3] = (uint8_t)((d[3] & mask[3]) | src[3]);
+        src += VIEW_CW;
+        mask += VIEW_CW;
         d += 32;
     }
 }
@@ -861,33 +893,46 @@ static void compose_view_attr(uint8_t vx, uint8_t vy)
     compose_attr(vx, vy, flat, blk, mask);
 }
 
-/* The art a view cell shows: sea off the board, the unit if one stands
-   here, the terrain otherwise.
+/* What a cell is made of: always a background tile, and for an occupied
+   cell a sprite and its mask on top.  `*sp` is 0 when there is no unit.
 
-   Returning the unit sprite INSTEAD of the terrain, not on top of it.
-   Sprites are opaque and cover the whole cell, so the terrain underneath
-   was being composed and then completely overwritten — half the work for
-   every occupied cell, and there are 14 of them on a starting board. */
-static const uint8_t *cell_art(uint8_t vx, uint8_t vy)
+   ONE answer, shared by every path that draws — the whole-cell compose
+   and both scroll-edge slices.  They had drifted: the slices called
+   cell_art() and copied it straight, so a sprite entering the view during
+   a scroll arrived unmasked and stayed that way until something redrew
+   its cell.  A second routine that draws the same thing differently is
+   how that happens, so now there is not one. */
+static void cell_layers(uint8_t vx, uint8_t vy, const uint8_t **bg,
+                        const uint8_t **sp, const uint8_t **mask)
 {
     int8_t wx = (int8_t)(page_x + vx);
     int8_t wy = (int8_t)(page_y + vy);
     uint8_t cell, u;
 
-    if (wx < 0 || wx >= GRID_COLS || wy < 0 || wy >= GRID_ROWS)
-        return view_tiles + (uint16_t)TER_SEA * TILES_VIEW_TILE_SIZE;
-
+    *sp = 0;
+    *mask = 0;
+    if (wx < 0 || wx >= GRID_COLS || wy < 0 || wy >= GRID_ROWS) {
+        *bg = view_tiles + (uint16_t)TER_SEA * TILES_VIEW_TILE_SIZE;
+        return;
+    }
     cell = cell_of((uint8_t)wx, (uint8_t)wy);
+    *bg = view_tiles + (uint16_t)terrain[cell] * TILES_VIEW_TILE_SIZE;
+
     u = occupancy[cell];
-    if (u != NO_UNIT)
-        return unit_view_tiles + (uint16_t)u_type[u] * UNITS_VIEW_TILE_SIZE;
-    return view_tiles + (uint16_t)terrain[cell] * TILES_VIEW_TILE_SIZE;
+    if (u != NO_UNIT) {
+        uint16_t off = (uint16_t)u_type[u] * UNITS_VIEW_TILE_SIZE;
+        *sp = unit_view_tiles + off;
+        *mask = unit_view_mask + off;
+    }
 }
 
-/* Art, into the buffer. */
 static void compose_view_cell(uint8_t vx, uint8_t vy)
 {
-    compose_tile(vx, vy, cell_art(vx, vy));
+    const uint8_t *bg, *sp, *mask;
+
+    cell_layers(vx, vy, &bg, &sp, &mask);
+    compose_tile(vx, vy, bg);
+    if (sp) compose_masked(vx, vy, sp, mask);
     compose_view_attr(vx, vy);
 }
 
@@ -966,13 +1011,18 @@ static void slice_col(uint8_t vx, uint8_t sub, uint8_t dcol)
     uint8_t vy;
 
     for (vy = 0; vy < VIEW_ROWS; vy++) {
-        const uint8_t *sp = cell_art(vx, vy) + sub;
+        const uint8_t *bg, *art, *mask;
         uint8_t *d = VBUF + (uint16_t)vy * (VIEW_CH * 8) * 32 + dcol;
         uint8_t r = VIEW_CH * 8;
 
+        cell_layers(vx, vy, &bg, &art, &mask);
+        bg += sub;
+        if (art) { art += sub; mask += sub; }
+
         while (r--) {
-            *d = *sp;
-            sp += VIEW_CW;
+            *d = art ? (uint8_t)((*bg & *mask) | *art) : *bg;
+            bg += VIEW_CW;
+            if (art) { art += VIEW_CW; mask += VIEW_CW; }
             d += 32;
         }
     }
@@ -985,13 +1035,27 @@ static void slice_row(uint8_t vy, uint8_t sub, uint8_t drow)
     uint8_t vx;
 
     for (vx = 0; vx < VIEW_COLS; vx++) {
-        const uint8_t *sp = cell_art(vx, vy) + (uint16_t)sub * 8 * VIEW_CW;
+        const uint8_t *bg, *art, *mask;
         uint8_t *d = VBUF + (uint16_t)drow * 32 + vx * VIEW_CW;
+        uint16_t skip = (uint16_t)sub * 8 * VIEW_CW;
         uint8_t r = 8;
 
+        cell_layers(vx, vy, &bg, &art, &mask);
+        bg += skip;
+        if (art) { art += skip; mask += skip; }
+
         while (r--) {
-            d[0] = sp[0]; d[1] = sp[1]; d[2] = sp[2]; d[3] = sp[3];
-            sp += VIEW_CW;
+            if (art) {
+                d[0] = (uint8_t)((bg[0] & mask[0]) | art[0]);
+                d[1] = (uint8_t)((bg[1] & mask[1]) | art[1]);
+                d[2] = (uint8_t)((bg[2] & mask[2]) | art[2]);
+                d[3] = (uint8_t)((bg[3] & mask[3]) | art[3]);
+                art += VIEW_CW;
+                mask += VIEW_CW;
+            } else {
+                d[0] = bg[0]; d[1] = bg[1]; d[2] = bg[2]; d[3] = bg[3];
+            }
+            bg += VIEW_CW;
             d += 32;
         }
     }

@@ -96,6 +96,73 @@ def tile_bytes(pixels, x0, tw, th):
     return bytes(out)
 
 
+def dilate(pixels, x0, tw, th):
+    """The sprite grown by one pixel all round, diagonals included.
+
+       That extra pixel is the whole point of the mask: it puts a black rim
+       between the sprite and whatever it stands on, so a unit stays legible
+       over busy terrain instead of dissolving into it (docs/DESIGN.md
+       § Sprite masks and animation)."""
+    grown = [[False] * tw for _ in range(th)]
+    for y in range(th):
+        for x in range(tw):
+            if pixels[y][x0 + x] != "1":
+                continue
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    ny, nx = y + dy, x + dx
+                    if 0 <= ny < th and 0 <= nx < tw:
+                        grown[ny][nx] = True
+    return grown
+
+
+def mask_bytes(pixels, x0, tw, th):
+    """One tile's mask, INVERTED, row-major, MSB leftmost.
+
+       Inverted because the blit is
+
+           screen = (screen AND NOT mask) OR sprite
+
+       and doing the NOT here makes the inner loop AND then OR with no
+       complement per byte -- free in the tool, one instruction saved in
+       the one loop that cannot afford them.
+
+       So a bit is SET where the screen should be kept and CLEAR over the
+       sprite and its outline."""
+    grown = dilate(pixels, x0, tw, th)
+    out = bytearray()
+    for y in range(th):
+        for bx in range(tw // 8):
+            b = 0
+            for bit in range(8):
+                if not grown[y][bx * 8 + bit]:
+                    b |= 0x80 >> bit
+            out.append(b)
+    return bytes(out)
+
+
+def check_margin(pixels, x0, tw, th, name, tile):
+    """Refuse artwork with ink on the outer edge of its cell.
+
+       Dilating it would spill outside the cell, where the blit cannot
+       reach, and the outline would simply be missing on that side -- which
+       reads as a drawing mistake rather than a clipping one.  Stopping is
+       better than quietly emitting a slightly wrong mask."""
+    edges = []
+    if any(pixels[0][x0 + x] == "1" for x in range(tw)):
+        edges.append("top")
+    if any(pixels[th - 1][x0 + x] == "1" for x in range(tw)):
+        edges.append("bottom")
+    if any(pixels[y][x0] == "1" for y in range(th)):
+        edges.append("left")
+    if any(pixels[y][x0 + tw - 1] == "1" for y in range(th)):
+        edges.append("right")
+    if edges:
+        die(f"{name} tile {tile} has ink on its {', '.join(edges)} edge: "
+            f"the mask needs a 1-pixel margin inside the cell to dilate "
+            f"into, or the outline goes missing on that side")
+
+
 def tile_attrs(attrs, cols, tile, tw_ch, th_ch, name, mode):
     """One tile's attribute block, row-major: th_ch rows of tw_ch cells."""
     if not attrs:
@@ -126,6 +193,8 @@ def main():
     ap.add_argument("input")
     ap.add_argument("output")
     ap.add_argument("--name", required=True, help="C identifier prefix")
+    ap.add_argument("--mask", action="store_true",
+                    help="also emit a dilated, inverted mask blob")
     ap.add_argument("--tiles", type=int, required=True,
                     help="number of tiles, side by side in the sheet")
     ap.add_argument("--attr-mode", choices=("full", "bright"), default="full",
@@ -149,6 +218,17 @@ def main():
         die(f"tile size {tw}x{h} must be a whole number of 8x8 characters")
 
     tiles = [tile_bytes(pixels, t * tw, tw, h) for t in range(args.tiles)]
+
+    # Masks, when asked for.  Kept as their OWN blob rather than appended
+    # to the pixels: they are mostly solid runs, so ZX0 crushes them far
+    # harder on their own than mixed in with sprite detail, and a build
+    # that does not want them then costs nothing at all.
+    masks = None
+    if args.mask:
+        for t in range(args.tiles):
+            check_margin(pixels, t * tw, tw, h, args.name, t)
+        masks = b"".join(mask_bytes(pixels, t * tw, tw, h)
+                         for t in range(args.tiles))
     blocks = [tile_attrs(attrs, w // 8, t, tw // 8, h // 8,
                          args.name, args.attr_mode)
               for t in range(args.tiles)]
@@ -169,6 +249,18 @@ def main():
                    capture_output=True)
     zdata = open(comp, "rb").read()
 
+    mdata = None
+    if masks is not None:
+        mraw = "/tmp/%s_mask.bin" % args.name
+        mcomp = "/tmp/%s_mask.zx0" % args.name
+        open(mraw, "wb").write(masks)
+        if os.path.exists(mcomp):
+            os.remove(mcomp)
+        subprocess.run([args.zx0, "-f", mraw, mcomp], check=True,
+                       capture_output=True)
+        mdata = open(mcomp, "rb").read()
+
+    MASK_RAW = len(masks) if masks is not None else 0
     upper = args.name.upper()
     guard = f"_{os.path.basename(args.output).replace('.', '_').upper()}_"
     with open(args.output, "w") as f:
@@ -223,6 +315,25 @@ def main():
             f.write("    " + ", ".join(f"0x{b:02X}" for b in chunk))
             f.write(",\n" if i + 16 < len(zdata) else "\n")
         f.write("};\n#endif\n\n")
+
+        if mdata is not None:
+            f.write(f"/* Mask: the sprite dilated one pixel, INVERTED, so\n"
+                    f"   the blit is (screen AND mask) OR sprite with no\n"
+                    f"   complement per byte.  {MASK_RAW} bytes -> {len(mdata)}\n"
+                    f"   ZX0: mostly solid runs, which is why it is a blob of\n"
+                    f"   its own rather than appended to the pixels.\n"
+                    f"   Decompress to {upper}_MASK_RAW_SIZE bytes. */\n")
+            f.write(f"#define {upper}_MASK_RAW_SIZE  {MASK_RAW}\n")
+            f.write(ZX0_NOTE % f"{U}_MASK_ZX0_INLINE")
+            f.write(f"extern const uint8_t {args.name}_mask_zx0[{len(mdata)}];\n"
+                    f"#ifdef {U}_MASK_ZX0_INLINE\n"
+                    f"const uint8_t {args.name}_mask_zx0[{len(mdata)}] = {{\n")
+            for i in range(0, len(mdata), 16):
+                chunk = mdata[i:i + 16]
+                f.write("    " + ", ".join(f"0x{b:02X}" for b in chunk))
+                f.write(",\n" if i + 16 < len(mdata) else "\n")
+            f.write("};\n#endif\n\n")
+
         f.write(f"#endif /* {guard} */\n")
 
     distinct = sorted({a for b in blocks for a in b})
@@ -231,6 +342,9 @@ def main():
           f"({len(pixel_bytes)} pixel + {len(attr_bytes)} attr), "
           f"{args.attr_mode} attrs: "
           + " ".join(f"0x{a:02X}" for a in distinct))
+    if mdata is not None:
+        print(f"  mask: ZX0 {len(mdata)} B <- {MASK_RAW} B "
+              f"({100 - 100 * len(mdata) // MASK_RAW}% saved)")
 
 
 if __name__ == "__main__":

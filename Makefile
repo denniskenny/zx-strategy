@@ -149,8 +149,17 @@ include/units_map.h: assets/units_map.zxp tools/zxp_tiles_zx0.py
 	$(ZXP_TILES_ZX0) $< $@ --name units_map --tiles $(UNIT_COUNT) \
 	    --attr-mode bright --zx0 $(ZX0)
 
+# --mask: unit sprites are drawn OVER terrain, so they need one.  The
+# terrain sheets do not -- they ARE the background.
+#
+# The mask is a separate ZX0 blob and crushes far harder than the pixels
+# do: 512 bytes of mostly solid runs go to 172, a 67%% saving, where the
+# sprites themselves only manage 576 -> 301.  Appending it to the pixel
+# stream would have buried those runs in sprite detail and lost most of
+# that.  mkassets.py picks it up from the header automatically, so it
+# lands in the contended block at 0x6000 with the other blobs.
 include/units_view.h: assets/units_view.zxp tools/zxp_tiles_zx0.py
-	$(ZXP_TILES_ZX0) $< $@ --name units_view --tiles $(UNIT_COUNT) \
+	$(ZXP_TILES_ZX0) $< $@ --name units_view --tiles $(UNIT_COUNT) --mask \
 	    --attr-mode bright --zx0 $(ZX0)
 
 # List generated headers here so `make assets` and `make clean` know them.

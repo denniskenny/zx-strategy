@@ -107,8 +107,20 @@ a 128K gets.
 
 #### Masks
 
-A unit sprite currently occupies its whole 32x32 cell, so terrain does not
-show through it. A mask fixes that: one bit per pixel marking what is
+**Only the VIEW unit sprites are masked.** Nothing else needs it and
+nothing else gets it:
+
+- **Terrain is the background.** There is nothing behind it to show
+  through to, so a mask would cost three memory accesses a byte to
+  composite against blank buffer.
+- **The map-view sprites are not masked either.** They are 16x16 markers
+  on a schematic overview, drawn flat, where a one-pixel outline would be
+  a quarter of the sprite.
+- **Only `units_view.zxp` is built with `--mask`**, and it is the only
+  sheet that needs the one-pixel margin the tool insists on.
+
+A unit sprite otherwise occupies its whole 32x32 cell, so terrain does not
+show through it. The mask fixes that: one bit per pixel marking what is
 transparent, and the blit becomes
 
 ```

@@ -33,3 +33,5 @@
     defc    _units_map_zx0 = 0x6329
     PUBLIC  _units_view_zx0
     defc    _units_view_zx0 = 0x6395
+    PUBLIC  _units_view_mask_zx0
+    defc    _units_view_mask_zx0 = 0x64C2
