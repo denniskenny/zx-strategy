@@ -348,12 +348,32 @@ tight: have `tmx2header.py` emit `extern` declarations with one definition.
 The movement fill is unaffected (40 470 T against 41 616 before — it and its
 `RELAX` macro stayed in the same file).
 
-### P4 — Combat and the real win condition
+### P4 — Combat and the real win condition  ✓ done
 
-Target list by Manhattan distance, O/P cycling, SPACE confirms, damage with the
-cover formula `(dmg * (100 - cover) + 99) / 100`, death, then the win check
-over the loser's roster → `ST_OVER` with `player_won` set for real. Delete the
-P0 debug keys.
+Damage with the cover formula, death, and the win check over the loser's
+roster → `ST_OVER` with `player_won` set for real.
+
+**Built beyond the original plan**, because the rules grew (docs/DESIGN.md
+§ Adjacency and § Selection and highlighting):
+
+- mobile units strike only from adjacent, so `attack_reach()` returns 1 for
+  anything that moves and the Cannon is the only ranged unit;
+- the defender counter-attacks for half unless it dies, and a counter can
+  kill and end the level -- so `check_win()` runs on each death, not once;
+- damage scales with the attacker's health, which makes fights snowball;
+- **O/P cycling was never built and is not coming.** It is replaced by
+  enemy-selection mode: targets are highlighted on the board, the arrows
+  walk a looped list, SPACE confirms, ENTER or fire 2 cancels;
+- the enemy scores whole exchanges (`gain - counter * AI_W_COUNTER`) rather
+  than damage dealt, and refuses trades below `AI_MIN_TRADE`.
+
+The P0 debug keys are still there, behind `DEBUG_KEYS=1`, because
+`tests/p0_state_walk.py` needs them. They cost 99 bytes and are out of the
+shipping tap.
+
+**Untested: balance.** Every rule works and both suites pass, but nobody
+has played ten levels through with the snowball and the counter-attacks in
+place. That is P6.
 
 - **Acceptance**: unit-test the damage table on the host (the numbers in
   `docs/DESIGN.md` § Cover); kill a base in the emulator and land in `ST_OVER`;
@@ -883,8 +903,28 @@ reduction.
 
 ### P6 — Balance and polish
 
-Weights, a level indicator in the status panel, and
-whatever the ten maps show up as unplayable.
+Weights, a level indicator in the status panel, and whatever the ten maps
+show up as unplayable.
+
+Now the substantial phase rather than a tidy-up, because P4's rules changed
+what the numbers mean and none of them have been retuned:
+
+- **Does the Cannon dominate?** It is the only unit that shoots without
+  being counter-attacked, so it never enters the health spiral. Three
+  advantages on one unit whose only cost is being immobile. Its damage of
+  30 is the dial.
+- **Is the snowball too steep?** Wounded units hit softer, so the side
+  that wins the first exchange tends to win all of them. Fun or brutal is
+  a question for play, not for reading.
+- **Is `AI_W_COUNTER 1` right?** 0 is the pre-rules control case; 2+ makes
+  the enemy passive. See docs/DESIGN.md § The knobs.
+- **§ Stalemate is still unbuilt** -- the last thing in DESIGN that is not.
+  It needs a position where neither side can reach the other, which this
+  AI may never produce; build it if play shows it.
+
+Four bugs in this phase surfaced in play and none in the test suites, which
+read states and pixels rather than rules. Expect balance work to be the
+same: it cannot be tested, only played.
 
 
 ## Risks

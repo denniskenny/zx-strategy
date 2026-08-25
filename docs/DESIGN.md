@@ -7,12 +7,12 @@ Most of it describes a game that runs today. These parts do not yet:
 
 | Section | Status |
 |---------|--------|
-| § Cover, § Attack Range | **Not built.** Specified only; combat arrives in plan phase P4. |
-| § Win Conditions | **Not built.** `ST_OVER` is reachable, but only through the `DEBUG_STATE_WALK` keys — nothing can actually win or lose a level yet (P4). |
-| § Enemy turn | **Not built.** The enemy army is placed and drawn, but never acts (P5). |
-| § Actions — the attack half | **Partly built.** A unit spends its action by moving; attacking, and the "move into contact and strike" exception, are P4. |
-| § Adjacency, counter-attack and wounded damage | **Not built.** Fully specified, including resolution order and the AI's scoring. Nothing implemented. |
-| § Selection and highlighting | **Not built.** Replaces the `O`/`P` cycling under § Attack Range. Specified apart from the clicked-enemy flow. |
+| § Cover, § Attack Range | **Built.** Cover reduces damage, rounding up; reach comes from `attack_reach()`. |
+| § Win Conditions | **Built.** `check_win()` fires on every death, including a death caused by a counter-attack. |
+| § Enemy turn | **Built.** The enemy moves and attacks, scoring exchanges rather than blows. |
+| § Actions — the attack half | **Built**, including move-into-contact-and-strike as one action. |
+| § Adjacency, counter-attack and wounded damage | **Built.** All three rules, the resolution order, and the AI's exchange scoring. Balance untested in a full campaign. |
+| § Selection and highlighting | **Built**, including enemy-selection mode, best-cover approach, and magenta for enemy reach. `O`/`P` cycling is gone. |
 | § Stalemate | **Not built** as such — `X` already quits to the title, which is the whole mechanism, but nothing detects the stalemate. |
 
 Everything else — the board, terrain, unit placement, selection, movement,
@@ -157,9 +157,9 @@ Attack range is calculated using a simple algorithm that calculates the distance
 
 ### Adjacency, counter-attack and wounded damage
 
-Three rules that only make sense together. **Not built yet**; the
-resolution order and the AI's scoring at the end of this section are part
-of the specification, not notes.
+Three rules that only make sense together. **Built** — the resolution
+order and the AI's scoring at the end of this section are part of the
+specification, not notes, and are implemented as written.
 
 **1. Mobile units must be adjacent to attack.** Anything with a movement
 allowance — Infantry, Tank — can only strike a unit orthogonally next to
@@ -265,6 +265,34 @@ later "fixed" back into ignoring them:
 This is the largest of the three pieces of work, and the one that decides
 whether the rules read as tactics or as an enemy behaving stupidly.
 
+##### The knobs, in config/game_config.h
+
+| | default | what it does |
+|---|---|---|
+| `AI_W_COUNTER` | 1 | how heavily the counter weighs against the damage dealt |
+| `AI_KILL` | 200 | score for a kill, which takes no counter |
+| `AI_BASE_BONUS` | 150 | added, so a base is worth a bad trade |
+| `AI_MIN_TRADE` | 0 | refuse exchanges scoring at or below this and move instead |
+
+**`AI_W_COUNTER` is the difficulty dial**, and the most useful one here:
+
+- **0** — counters are ignored entirely. This is exactly how the enemy
+  behaved before these rules existed, so it is the control case: if the
+  new AI feels wrong, set this to 0 and see whether the rules or the
+  scoring are at fault. It plays recklessly, trading units away, and
+  wounded-damage then compounds every bad trade it makes.
+- **1** — an even trade. A point taken back is worth a point dealt, so
+  the enemy attacks when it comes out ahead and holds when it does not.
+- **2 and up** — cautious to timid. It will decline exchanges a human
+  would take, hang back, and let the player dictate the tempo. Useful for
+  an easier level rather than a harder one, which is the opposite of what
+  the number looks like it should do.
+
+Raising `AI_MIN_TRADE` has a similar effect from the other side: it makes
+the enemy hold out for good trades rather than acceptable ones. Both dials
+make the enemy *passive* when raised, so an easier game is a bigger
+number, and neither makes it cleverer.
+
 ### Units
 Units have an attack range and damage value. They have a health value and can be killed. They also have a movement range
 
@@ -324,7 +352,7 @@ Movement : 0
 
 ### Selection and highlighting
 
-The interaction model. **Not built** — this replaces the `O`/`P` cycling
+The interaction model. **Built**, and it replaces the `O`/`P` cycling
 described under § Attack Range.
 
 "Clicking" here means putting the cursor on a cell and pressing `SPACE`;
