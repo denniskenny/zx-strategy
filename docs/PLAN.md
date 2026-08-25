@@ -901,6 +901,99 @@ being optional for animations and more tiles. A 48K gets 0xC000-0xDAFF as
 spare rather than code, which could later hold a second buffer for 48K tear
 reduction.
 
+### P11 — Animated sprites on a 128K  (plan only, not started)
+
+Two frames per unit, the second one 128K-only, driven by the at-rest rule
+already settled in docs/DESIGN.md § Sprite masks and animation. Fix the
+outstanding tile-rendering bugs first — this touches the same paths.
+
+#### The sheet becomes a grid
+
+`assets/units_view.zxp` today is a horizontal strip of four 32x32 tiles.
+It becomes **two columns**: column 1 the units, column 2 each unit's second
+frame, so unit *n* is row *n* and frame *f* is column *f*.
+
+`tools/zxp_tiles_zx0.py` **only slices horizontally** — `tile_bytes()`
+takes `x0 = t * tw` and reads the full sheet height. Two-dimensional
+slicing is the first piece of work, and it is a change to the tool's
+central assumption rather than an addition to it. Everything else in the
+pipeline reads whatever the tool emits, so nothing downstream needs to
+know.
+
+#### One mask for both frames
+
+Agreed, to save 512 bytes and a second decompression. It puts a real
+constraint on the artwork:
+
+**Frame 2 must keep its ink inside frame 1's outline.** The mask preserves
+background wherever it is set, and the sprite is ORed over the top — so a
+frame-2 pixel outside frame 1's dilated silhouette still draws, but with no
+black rim around it. One limb sticking out further on the second frame and
+that limb loses its outline, on that frame only, which reads as a
+flickering edge rather than as a mask problem.
+
+So `--mask` should **check frame 2 against frame 1's mask and fail the
+build** if it has ink outside it, the same way the margin check already
+refuses ink on a cell edge. The tool has the data; nobody should be finding
+this by looking at a flickering knee.
+
+#### Where the two frames live
+
+Frame 1 goes where the sheet goes today: compressed in the **contended
+block at 0x6000**, decompressed into `MEM_TILES` above 0xDB00.
+
+Frame 2 into a **bank**, so a 48K neither loads nor pays for it, and
+`is_128k` picks at runtime. **This is the hard part, and P10 already found
+out why:**
+
+- `SECTION CODE_1` reaches the tap, but as a **headerless block** that the
+  BASIC loader does not load — appmake emits banked blocks for a program
+  that loads its own banks at runtime.
+- `LOAD ""CODE` cannot read a headerless block; it wants a header.
+
+Three ways out, in the order I would try them:
+
+1. **`tools/mktap.py` gives the bank block a header**, and the BASIC loader
+   pages the bank in before loading into 0xC000 and pages back after —
+   BASIC can do that with `OUT 32765`. The catch is that a 48K would run
+   the same loader: the `OUT` is harmless there but the `LOAD` is not
+   wanted, so the loader has to branch on machine type in BASIC, or the
+   48K has to tolerate 512 bytes landing in spare RAM at 0xC000. The
+   latter is probably fine and much simpler — worth checking before
+   building the former.
+2. **Load it low and copy it up.** The block loads into the contended
+   window like any other asset, and a 128K copies it into the bank at boot
+   and reuses the space. Costs a 48K the tape time and the asset-block
+   bytes for something it never uses, which is what banking was meant to
+   avoid.
+3. **Two taps again.** Rejected in P8 for good reasons; recorded only so
+   nobody re-proposes it as new.
+
+**Prove the loading before writing the animation.** A bank block that
+silently does not arrive reads as "the second frame is blank", and this
+project has already lost time to `org` sections that linked correctly and
+shipped nothing.
+
+#### Steps
+
+1. Fix the outstanding tile-rendering bugs. This work touches
+   `cell_layers()` and both slice paths; doing it on top of a known-good
+   renderer is the difference between one bug and two.
+2. Two-dimensional slicing in `zxp_tiles_zx0.py`, plus the frame-2 mask
+   check. Verifiable on its own: build the sheet, read the blob sizes.
+3. Prove a bank block loads, with a sentinel, on a 128K **and a +3**, and
+   that a 48K still boots. Nothing depends on it until this passes.
+4. Frame 2 into the bank, `is_128k` selecting the frame pointer.
+5. The at-rest animation tick (§ Sprite masks and animation), which is the
+   only part that touches the frame budget.
+
+#### What it costs
+
+512 bytes of bank on a 128K, nothing on a 48K, and `cell_layers()` gains a
+frame index — it already returns the sprite pointer, so animation is a
+different offset rather than a different path. That is the payoff for
+having consolidated the three draw paths into it.
+
 ### P6 — Balance and polish
 
 Weights, a level indicator in the status panel, and whatever the ten maps

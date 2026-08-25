@@ -1144,6 +1144,32 @@ void scroll_view(int8_t dx, int8_t dy)
 {
     uint8_t sub;
 
+    /* Pay off the dirty list BEFORE pushing the buffer.
+
+       A scroll shifts what is already in VBUF and composes only the
+       incoming edge -- it never revisits the cells it slides along.  So a
+       cell still waiting to be redrawn gets pushed WITH ITS STALE PIXELS
+       and presented that way, and a held arrow key keeps pushing it: the
+       old picture travels across the screen until render_tick() next gets
+       a frame in.
+
+       That is the artefact seen when selecting or moving a unit, which is
+       exactly when the list is non-empty -- the sprite leaving one cell
+       and arriving in another are the two marks, and moving the cursor
+       immediately afterwards is the natural thing to do.
+
+       Draining here rather than gating input: the marks are world
+       coordinates and survive the scroll perfectly well, they simply have
+       to be applied before the pixels move. */
+    while (dirty_n) {
+        uint8_t i = --dirty_n;
+        int8_t vx = (int8_t)(dirty_x[i] - page_x);
+        int8_t vy = (int8_t)(dirty_y[i] - page_y);
+
+        if (vx >= 0 && vx < VIEW_COLS && vy >= 0 && vy < VIEW_ROWS)
+            compose_view_cell((uint8_t)vx, (uint8_t)vy);
+    }
+
     /* Tear-free where there are two screens to swap between: each
        sub-step is composed off-display and revealed whole.  A 48K has
        nowhere to hide the work and presents into the live screen, which

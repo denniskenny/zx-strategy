@@ -178,6 +178,13 @@ program has never had slack in.
 
 #### Two frames, 128K only
 
+**The sheet is a grid, not a strip**: column 1 is the units, column 2 each
+unit's second frame, so unit *n* is row *n* and frame *f* is column *f*.
+Both frames **share one mask**, generated from frame 1 — which requires
+frame 2 to keep its ink inside frame 1's outline, or it draws without a
+black rim on that frame only and the edge appears to flicker. See
+docs/PLAN.md P11.
+
 A second frame doubles the sprite data again -- another 512 bytes of
 pixels and 512 of mask. **The 128K gets it; the 48K keeps one frame** and
 must look deliberate rather than broken.
