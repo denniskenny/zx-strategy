@@ -240,6 +240,7 @@ uint8_t sel_x, sel_y;
 uint8_t level;
 uint16_t turn;
 uint8_t player_won;
+uint8_t boom_cell_at = NO_CELL;  /* a unit died here; game.c animates it */
 uint8_t outcome_ready;
 
 /* --- Locators for the hand-placed arrays -----------------------------
@@ -774,6 +775,9 @@ static uint8_t strike(uint8_t cell, uint8_t dmg)
     u_hp[v] = 0;
     occupancy[cell] = NO_UNIT;
     mark_dirty(col_of[cell], (uint8_t)(cell / GRID_COLS));
+    /* Where to put the explosion.  logic.c does not draw (docs/DESIGN.md
+       § Logic and rendering) -- it records, and game.c plays it. */
+    boom_cell_at = cell;
     return (uint8_t)(u_flags[v] & U_SIDE);
 }
 

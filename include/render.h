@@ -66,6 +66,10 @@
    white, which is the rule that keeps the art underneath legible
    (docs/DESIGN.md § The colours already work). */
 #define ATTR_RANGE_E 0x5F   /* bright white ink, magenta paper */
+/* Destruction.  FLASH set on both, so the hardware flip runs on top of the
+   frame swap and two rates of flicker land at once. */
+#define ATTR_BOOM_A 0xD7    /* flash, bright, white ink, red paper   */
+#define ATTR_BOOM_B 0xFA    /* flash, bright, red ink, white paper   */
 
 /* An enemy the held unit can hit.  Red paper, distinct from the blue of
    ground it can walk to — one glance separates "go there" from "shoot
@@ -152,6 +156,7 @@
 extern int8_t page_x, page_y;
 extern uint8_t attrs_left;      /* view cells still to recolour         */
 extern uint8_t dirty_n;         /* cells whose picture is stale         */
+extern uint8_t anim_frame;      /* 0/1: the sprite frame on show        */
 
 /* --- Setup ----------------------------------------------------------- */
 void load_tiles(void);          /* unpack the four sheets, once         */
@@ -176,6 +181,7 @@ void draw_status(const char *label, uint8_t x, uint8_t y);
 void set_page(void);            /* page the view onto the cursor        */
 void draw_view(void);           /* every cell, pixels and colour        */
 void scroll_view(int8_t dx, int8_t dy);  /* push the window one cell    */
+void render_boom(uint8_t wx, uint8_t wy); /* a unit died here          */
 void draw_view_cell(uint8_t vx, uint8_t vy);
 void attr_view_cell(uint8_t vx, uint8_t vy);    /* colour only          */
 

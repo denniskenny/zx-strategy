@@ -969,10 +969,135 @@ Three ways out, in the order I would try them:
 3. **Two taps again.** Rejected in P8 for good reasons; recorded only so
    nobody re-proposes it as new.
 
-**Prove the loading before writing the animation.** A bank block that
-silently does not arrive reads as "the second frame is blank", and this
-project has already lost time to `org` sections that linked correctly and
-shipped nothing.
+#### Route 1 is dead: BASIC cannot be trusted to page
+
+**Tested, three ways, all failed.** `tools/mktap.py --bank` and
+`src/bankprobe.c` exist and work; the loading does not.
+
+| loader | `bank_probe` | |
+|---|---|---|
+| `OUT 32765,17` / `16` | **2** | bank 1 readable, wrong contents |
+| `OUT 32765,1` / `0` | **0** | never reached our code |
+| `POKE 23388,n` + `OUT 32765,n` | **0** | never reached our code, PC in the ROM ISR at 90s |
+
+The first is explainable: bit 4 is the ROM select, and setting it swaps
+the 48K ROM in underneath the 128K editor mid-`LOAD`. Clearing it, with or
+without keeping BANKM in step, stops the machine reaching our program at
+all, and I could not establish why within the time spent.
+
+**What matters more than the cause:** in the first case the game **booted
+and rendered perfectly** -- title bar painted, PC in our code, shadow
+screen armed -- while the data was simply absent. Every outward sign was
+green. That is the third time on this project, after the `org` section and
+the headerless `CODE_1` block, and it is exactly why the probe was written
+rather than trusting the boot.
+
+Do not revive this without a probe. `--bank` is left in mktap.py but
+**nothing should use it**.
+
+#### Option 1 is arithmetically out of reach
+
+Freeing the 0xC000 window -- what the reference project does, and what
+would make banking straightforward -- was measured rather than judged:
+
+```
+buffers to relocate        8138 bytes   (0xDB00..0xFACA)
+contended window total     8096 bytes   (0x6000..0x7FA0)
+                             -42 bytes over, before anything else
+```
+
+The buffers are larger than the whole contended window, so freeing
+0xC000+ means they fill it and BOTH current occupants move above 0x8000:
+
+```
+needed above 0x8000        5690 bytes   (assets 1390 + logic.c ~4300)
+free above 0x8000          3182 bytes
+SHORTFALL                  2508 bytes
+```
+
+And `logic.c` cannot go back on its own -- it is ~4300 bytes against 3182
+free, which is why it was moved in the first place.
+
+**Every window is committed.** 0xC000+ holds the buffers and the shadow
+screen, 0x6000-0x7FA0 holds the assets and cold code, 0x8000-0xC000 is
+80% full. The reference can bank because it keeps 0xC000+ empty; that is a
+choice made early and it is mutually exclusive with the one this project
+made to buy code space.
+
+#### So frame 2 is an ordinary asset, and BOTH machines animate
+
+It goes above MEM_TILES with the other decompressed sheets -- **real RAM on
+a 48K, page 7 on a 128K, the same addresses either way** -- so there is no
+bank, no paging, no custom loader, no .sna, and no `is_128k` branch. One
+code path, and a 48K animates too.
+
+```
+MEM_END .. top of RAM   0xFACA..0x10000   1334 bytes free
+frame 2 decompressed                        640 bytes
+left over                                   694 bytes
+```
+
+**This was the answer all along and step 3 need not have happened.** The
+measurement that settles it is one line -- free space above MEM_END -- and
+it went unrun because "128K only" was taken from the brief as a
+constraint rather than as a guess. Measure the cheap thing first.
+
+The 694 bytes left are the real ceiling: a THIRD frame needs another 640
+and does not fit. Two frames is the design, not a starting point.
+
+#### For the future: bootstrap should be able to load into pages
+
+The one thing worth building before the banks are wanted in earnest is a
+loader that can put a block into a page at 0xC000 -- `LOAD ""CODE` into a
+low staging buffer, then `RANDOMIZE USR` a copier that pages, copies, and
+pages back in machine code. Doing it that way round is what BASIC cannot
+break, and it turns 64 KB of banks from a dead end into a warehouse. Worth
+having in the bootstrap before something actually needs it, rather than
+under the pressure of a feature that is waiting on it.
+
+#### The 64 KB of banks: bank things you SWAP, keep things you ALTERNATE
+
+Banks 1, 3, 4 and 6 are unused and hold 64 KB. **Banking gives storage,
+not addressable memory**: reading a bank means paging it at 0xC000, which
+evicts the buffers at 0xDB00 and the shadow screen with them, so every
+banked byte has to be copied down into a low buffer before it can be used.
+
+So the deciding test is not "is it big" but **"is it only needed one at a
+time"**:
+
+| | low RAM needed |
+|---|---|
+| alternate tileset -> the existing MEM_TILES | **none** |
+| another tune -> the existing music buffer | **none** |
+| extra levels -> MEM_TERRAIN, rewritten per level anyway | **none** |
+| a second sprite frame live *alongside* the first | **640 bytes** |
+
+The first three are SWAPS. The buffer already exists and is already
+rewritten at a state change; the bank only changes where the bytes come
+from. Genuinely free, and you need room for the largest single item rather
+than for the whole warehouse.
+
+The last is ADDITIVE, and that is why frame 2 does not belong in a bank:
+animation alternates between two frames every tick, so neither can replace
+the other, and the 640 bytes of low RAM are owed whatever you do. Once
+that is paid the bank adds nothing but a loader and a paging window.
+
+**When you next want the 64 KB, look for what is big AND needed one at a
+time.** Levels and music qualify. Sprites in an animation loop never will.
+
+#### Getting data into a bank: BASIC loads, our code pages
+
+The route that sidesteps everything that failed above. A loader can
+
+```
+LOAD ""CODE            into a low staging buffer -- no paging
+RANDOMIZE USR copier   pages the bank in, copies, pages back
+```
+
+with the paging in machine code, `di` and BANKM handled the way
+src/pageprobe.c proved works. Repeat per block and the staging buffer is
+reused, so 64 KB costs one buffer. **BASIC never touches 0x7FFD**, which
+is what broke all three attempts.
 
 #### Steps
 

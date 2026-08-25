@@ -588,6 +588,14 @@ static void handle_input(void)
                 else if (selected != NO_UNIT) deselect();
                 else                     set_state(ST_TITLE);
             }
+            /* Something died: play it before anything else changes, so
+               the explosion lands where the unit was rather than where
+               the board has since moved on to. */
+            if (boom_cell_at != NO_CELL) {
+                render_boom(col_of[boom_cell_at],
+                            (uint8_t)(boom_cell_at / GRID_COLS));
+                boom_cell_at = NO_CELL;
+            }
             /* A base or an army was destroyed.  logic.c raised the flag
                and set player_won; turning it into a state change is the
                loop's job, not its. */

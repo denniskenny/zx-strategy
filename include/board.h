@@ -125,6 +125,7 @@ void targeting_cancel(void);
 uint8_t move_selected_to(uint8_t to);
 uint8_t best_adjacent(uint8_t enemy);
 uint8_t is_adjacent(uint8_t a, uint8_t b);
+extern uint8_t boom_cell_at;       /* NO_CELL, or where a unit just died */
 void attack(uint8_t cell);         /* ...so do it, and spend the action */
 uint8_t damage_at(uint8_t attacker, uint8_t cell);
 

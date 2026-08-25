@@ -30,6 +30,17 @@
 #define UNIT_BASE       3
 #define UNIT_TYPES      4
 
+/* The view sheet carries one sprite that is NOT a unit type: an explosion,
+ * used as a transient effect where something died.  It is a sprite index,
+ * not a type -- nothing has one of these, it has no health, damage, range
+ * or movement, and it must never appear in the tables below or in
+ * unit_count.  Hence a separate count for the sheet.
+ *
+ * The MAP sheet does not have it: an explosion is a moment on the board,
+ * and the map view is a schematic of where things are. */
+#define SPRITE_EXPLOSION  4
+#define VIEW_SPRITES      5
+
 /* --- Army composition ---------------------------------------------- */
 /* How many of each type a side starts level 1 with, and how many more
  * it gains on each odd-numbered level after that ("each subsequent
@@ -101,10 +112,10 @@ static const uint8_t unit_level_gain[UNIT_TYPES] = {
  *
  * Cannon and Base have Movement 0 — they are placed and never move,
  * which is what makes the stalemate rule in docs/DESIGN.md necessary. */
-static const uint8_t unit_range[UNIT_TYPES]    = { 3, 2, 4, 0 };
-static const uint8_t unit_damage[UNIT_TYPES]   = { 10, 20, 30, 0 };
-static const uint8_t unit_health[UNIT_TYPES]   = { 100, 150, 200, 255 };
-static const uint8_t unit_movement[UNIT_TYPES] = { 3, 2, 0, 0 };
+static const uint8_t unit_range[UNIT_TYPES]    = {  3,  2,  4,  0 };
+static const uint8_t unit_damage[UNIT_TYPES]   = {  5, 10,  8,  0 };
+static const uint8_t unit_health[UNIT_TYPES]   = { 10, 15, 20, 25 };
+static const uint8_t unit_movement[UNIT_TYPES] = {  3,  2,  0,  0 };
 
 /* The widest movement budget in the roster, which is the number of
  * buckets Dial's algorithm needs (docs/PLAN.md, "Movement range").

@@ -82,10 +82,10 @@ def parse_zxp(path):
     return pixels, attrs
 
 
-def tile_bytes(pixels, x0, tw, th):
+def tile_bytes(pixels, x0, tw, th, y0=0):
     """Row-major bytes for one tile (MSB = leftmost pixel)."""
     out = bytearray()
-    for y in range(th):
+    for y in range(y0, y0 + th):
         row = pixels[y]
         for bx in range(tw // 8):
             b = 0
@@ -96,17 +96,45 @@ def tile_bytes(pixels, x0, tw, th):
     return bytes(out)
 
 
-def dilate(pixels, x0, tw, th):
+def frames_layout(pixels, tiles, frames):
+    """Where each (unit, frame) tile sits, and how big it is.
+
+       With --frames the sheet is a GRID: one column per frame, one row
+       per unit, so unit u frame f is at (f * tw, u * th).  Without it the
+       sheet is the horizontal strip it has always been and frame 0 is the
+       only frame -- the two layouts are different shapes, so the flag
+       chooses rather than extends.  Existing sheets are untouched. */"""
+    h = len(pixels)
+    w = len(pixels[0])
+    if frames < 2:
+        tw = w // tiles
+        return tw, h, [[(t * tw, 0)] for t in range(tiles)]
+    tw = w // frames
+    th = h // tiles
+    if w % frames or h % tiles:
+        die(f"sheet {w}x{h} does not divide into {frames} frames "
+            f"by {tiles} units")
+    return tw, th, [[(f * tw, u * th) for f in range(frames)]
+                    for u in range(tiles)]
+
+
+def dilate(pixels, cols, tw, th, y0=0):
     """The sprite grown by one pixel all round, diagonals included.
 
        That extra pixel is the whole point of the mask: it puts a black rim
        between the sprite and whatever it stands on, so a unit stays legible
        over busy terrain instead of dissolving into it (docs/DESIGN.md
-       § Sprite masks and animation)."""
+       § Sprite masks and animation).
+
+       `cols` may be several x-origins, in which case the frames are
+       UNIONED before dilating -- one mask that covers every frame, which
+       is what lets both frames share it whatever they look like."""
+    if not isinstance(cols, (list, tuple)):
+        cols = (cols,)
     grown = [[False] * tw for _ in range(th)]
     for y in range(th):
         for x in range(tw):
-            if pixels[y][x0 + x] != "1":
+            if not any(pixels[y0 + y][x0 + x] == "1" for x0 in cols):
                 continue
             for dy in (-1, 0, 1):
                 for dx in (-1, 0, 1):
@@ -116,7 +144,7 @@ def dilate(pixels, x0, tw, th):
     return grown
 
 
-def mask_bytes(pixels, x0, tw, th):
+def mask_bytes(pixels, cols, tw, th, y0=0):
     """One tile's mask, INVERTED, row-major, MSB leftmost.
 
        Inverted because the blit is
@@ -129,7 +157,7 @@ def mask_bytes(pixels, x0, tw, th):
 
        So a bit is SET where the screen should be kept and CLEAR over the
        sprite and its outline."""
-    grown = dilate(pixels, x0, tw, th)
+    grown = dilate(pixels, cols, tw, th, y0)
     out = bytearray()
     for y in range(th):
         for bx in range(tw // 8):
@@ -141,7 +169,7 @@ def mask_bytes(pixels, x0, tw, th):
     return bytes(out)
 
 
-def check_margin(pixels, x0, tw, th, name, tile):
+def check_margin(pixels, x0, tw, th, name, tile, y0=0):
     """Refuse artwork with ink on the outer edge of its cell.
 
        Dilating it would spill outside the cell, where the blit cannot
@@ -149,13 +177,13 @@ def check_margin(pixels, x0, tw, th, name, tile):
        reads as a drawing mistake rather than a clipping one.  Stopping is
        better than quietly emitting a slightly wrong mask."""
     edges = []
-    if any(pixels[0][x0 + x] == "1" for x in range(tw)):
+    if any(pixels[y0][x0 + x] == "1" for x in range(tw)):
         edges.append("top")
-    if any(pixels[th - 1][x0 + x] == "1" for x in range(tw)):
+    if any(pixels[y0 + th - 1][x0 + x] == "1" for x in range(tw)):
         edges.append("bottom")
-    if any(pixels[y][x0] == "1" for y in range(th)):
+    if any(pixels[y0 + y][x0] == "1" for y in range(th)):
         edges.append("left")
-    if any(pixels[y][x0 + tw - 1] == "1" for y in range(th)):
+    if any(pixels[y0 + y][x0 + tw - 1] == "1" for y in range(th)):
         edges.append("right")
     if edges:
         die(f"{name} tile {tile} has ink on its {', '.join(edges)} edge: "
@@ -163,15 +191,22 @@ def check_margin(pixels, x0, tw, th, name, tile):
             f"into, or the outline goes missing on that side")
 
 
-def tile_attrs(attrs, cols, tile, tw_ch, th_ch, name, mode):
-    """One tile's attribute block, row-major: th_ch rows of tw_ch cells."""
+def tile_attrs(attrs, cols, tile, tw_ch, th_ch, name, mode,
+               cc0=None, cr0=0):
+    """One tile's attribute block, row-major: th_ch rows of tw_ch cells.
+
+       (cc0, cr0) is the tile's top-left in CHARACTER cells.  It defaults
+       to the horizontal strip -- tile n at column n * tw_ch, row 0 -- so
+       existing sheets are unaffected; the grid layout passes both."""
+    if cc0 is None:
+        cc0 = tile * tw_ch
     if not attrs:
         die("the sheet has no attribute data; colour the tiles in "
             "ZX-Paintbrush so each cell carries its ink/paper")
     out = bytearray()
     for cr in range(th_ch):
         for cc in range(tw_ch):
-            idx = cr * cols + tile * tw_ch + cc
+            idx = (cr0 + cr) * cols + cc0 + cc
             if idx >= len(attrs):
                 die(f"attribute data is short: expected {cols * th_ch} cells")
             a = attrs[idx]
@@ -193,6 +228,9 @@ def main():
     ap.add_argument("input")
     ap.add_argument("output")
     ap.add_argument("--name", required=True, help="C identifier prefix")
+    ap.add_argument("--frames", type=int, default=1,
+                    help="frames per unit; >1 makes the sheet a grid, one "
+                         "column per frame and one row per unit")
     ap.add_argument("--mask", action="store_true",
                     help="also emit a dilated, inverted mask blob")
     ap.add_argument("--tiles", type=int, required=True,
@@ -211,13 +249,16 @@ def main():
         if len(row) != w:
             die(f"{args.input}: pixel row {y} is {len(row)} wide, expected {w}")
 
-    if w % args.tiles:
+    if args.frames < 2 and w % args.tiles:
         die(f"sheet width {w} is not divisible by {args.tiles} tiles")
-    tw = w // args.tiles
-    if tw % 8 or h % 8:
-        die(f"tile size {tw}x{h} must be a whole number of 8x8 characters")
+    tw, th, grid = frames_layout(pixels, args.tiles, args.frames)
+    if tw % 8 or th % 8:
+        die(f"tile size {tw}x{th} must be a whole number of 8x8 characters")
 
-    tiles = [tile_bytes(pixels, t * tw, tw, h) for t in range(args.tiles)]
+    # Frame 1 is what every machine gets, and is the sheet as far as the
+    # rest of the pipeline is concerned.
+    tiles = [tile_bytes(pixels, grid[t][0][0], tw, th, grid[t][0][1])
+             for t in range(args.tiles)]
 
     # Masks, when asked for.  Kept as their OWN blob rather than appended
     # to the pixels: they are mostly solid runs, so ZX0 crushes them far
@@ -225,12 +266,39 @@ def main():
     # that does not want them then costs nothing at all.
     masks = None
     if args.mask:
+        # Every frame's ink must clear the cell edge, because the mask is
+        # dilated from all of them together.
         for t in range(args.tiles):
-            check_margin(pixels, t * tw, tw, h, args.name, t)
-        masks = b"".join(mask_bytes(pixels, t * tw, tw, h)
+            y0 = grid[t][0][1]
+            for x0, _ in grid[t]:
+                check_margin(pixels, x0, tw, th, args.name, t, y0)
+        # ONE mask per sprite, from the frames COMBINED: union them, then
+        # dilate the combined outline.  Both frames are inside it by
+        # construction, so no frame can draw a pixel without its black rim
+        # however different the two are -- which an explosion's frames very
+        # much are.  The cost is a rim sized to the larger frame, so the
+        # smaller one carries a slightly thicker edge.
+        masks = b"".join(mask_bytes(pixels, [x0 for x0, _ in grid[t]],
+                                    tw, th, grid[t][0][1])
                          for t in range(args.tiles))
-    blocks = [tile_attrs(attrs, w // 8, t, tw // 8, h // 8,
-                         args.name, args.attr_mode)
+
+    # Frame 2, pixels only -- it shares frame 1's mask and attributes.
+    # Its own blob because it has its own destination: a RAM bank, which
+    # only a 128K has (docs/PLAN.md P11).  The `_bank_` in the name is
+    # what keeps tools/mkassets.py from sweeping it into the contended
+    # block with everything else.
+    frame2 = None
+    if args.frames > 1:
+        frame2 = b"".join(tile_bytes(pixels, grid[t][1][0], tw, th,
+                                     grid[t][1][1])
+                          for t in range(args.tiles))
+    # Frame 1's attributes, positioned from the same grid the pixels use.
+    # Passing h // 8 here was what made the two disagree: the attribute
+    # slicing kept reading the whole sheet height as one tile while the
+    # pixels had already moved to rows.
+    blocks = [tile_attrs(attrs, w // 8, t, tw // 8, th // 8,
+                         args.name, args.attr_mode,
+                         grid[t][0][0] // 8, grid[t][0][1] // 8)
               for t in range(args.tiles)]
 
     # Pixels for every tile, then attributes for every tile: one stream,
@@ -248,6 +316,17 @@ def main():
     subprocess.run([args.zx0, "-f", raw, comp], check=True,
                    capture_output=True)
     zdata = open(comp, "rb").read()
+
+    f2data = None
+    if frame2 is not None:
+        f2raw = "/tmp/%s_f2.bin" % args.name
+        f2comp = "/tmp/%s_f2.zx0" % args.name
+        open(f2raw, "wb").write(frame2)
+        if os.path.exists(f2comp):
+            os.remove(f2comp)
+        subprocess.run([args.zx0, "-f", f2raw, f2comp], check=True,
+                       capture_output=True)
+        f2data = open(f2comp, "rb").read()
 
     mdata = None
     if masks is not None:
@@ -271,11 +350,11 @@ def main():
         f.write(f"#define {upper}_TILES     {args.tiles}\n")
         f.write(f"#define {upper}_TILE_W    {tw // 8}"
                 f"   /* character columns */\n")
-        f.write(f"#define {upper}_TILE_ROWS {h // 8}"
+        f.write(f"#define {upper}_TILE_ROWS {th // 8}"
                 f"   /* character rows    */\n")
-        f.write(f"#define {upper}_TILE_H    {h}"
+        f.write(f"#define {upper}_TILE_H    {th}"
                 f"   /* pixel rows        */\n")
-        f.write(f"#define {upper}_TILE_SIZE {tw // 8 * h}"
+        f.write(f"#define {upper}_TILE_SIZE {tw // 8 * th}"
                 f"   /* pixel bytes per tile */\n")
         f.write(f"#define {upper}_ATTR_SIZE {attr_size}"
                 f"   /* attribute bytes per tile */\n")
@@ -334,14 +413,38 @@ def main():
                 f.write(",\n" if i + 16 < len(mdata) else "\n")
             f.write("};\n#endif\n\n")
 
+        if f2data is not None:
+            f.write(f"/* Frame 2, pixels only: shares frame 1's mask and\n"
+                    f"   attributes.  An ordinary asset in the contended\n"
+                    f"   block, decompressed above MEM_TILES like the\n"
+                    f"   sheets -- which is real RAM on a 48K and page 7 on\n"
+                    f"   a 128K, so BOTH machines animate.  It was going to\n"
+                    f"   be banked until the free space above MEM_END was\n"
+                    f"   measured: 1334 bytes, and this needs 640.\n"
+                    f"   {len(frame2)} bytes -> {len(f2data)} ZX0. */\n")
+            f.write(f"#define {upper}_F2_RAW_SIZE  {len(frame2)}\n")
+            f.write(ZX0_NOTE % f"{U}_F2_ZX0_INLINE")
+            f.write(f"extern const uint8_t {args.name}_f2_zx0"
+                    f"[{len(f2data)}];\n"
+                    f"#ifdef {U}_F2_ZX0_INLINE\n"
+                    f"const uint8_t {args.name}_f2_zx0"
+                    f"[{len(f2data)}] = {{\n")
+            for i in range(0, len(f2data), 16):
+                chunk = f2data[i:i + 16]
+                f.write("    " + ", ".join(f"0x{b:02X}" for b in chunk))
+                f.write(",\n" if i + 16 < len(f2data) else "\n")
+            f.write("};\n#endif\n\n")
+
         f.write(f"#endif /* {guard} */\n")
 
     distinct = sorted({a for b in blocks for a in b})
-    print(f"wrote {args.output}: {args.tiles} tiles of {tw}x{h}, "
+    print(f"wrote {args.output}: {args.tiles} tiles of {tw}x{th}, "
           f"ZX0 {len(zdata)} B <- {len(blob)} B "
           f"({len(pixel_bytes)} pixel + {len(attr_bytes)} attr), "
           f"{args.attr_mode} attrs: "
           + " ".join(f"0x{a:02X}" for a in distinct))
+    if f2data is not None:
+        print(f"  frame 2: ZX0 {len(f2data)} B <- {len(frame2)} B  (frame 2)")
     if mdata is not None:
         print(f"  mask: ZX0 {len(mdata)} B <- {MASK_RAW} B "
               f"({100 - 100 * len(mdata) // MASK_RAW}% saved)")

@@ -26,7 +26,8 @@ import sys
 STACK_FLOOR = 0x7FA0
 
 # BASIC tokens
-CLEAR, LOAD, CODE, RANDOMIZE, USR = 0xFD, 0xEF, 0xAF, 0xF9, 0xC0
+CLEAR, LOAD, CODE, RANDOMIZE, USR, OUT, POKE = \
+    0xFD, 0xEF, 0xAF, 0xF9, 0xC0, 0xDF, 0xF4
 
 
 def number(n):
@@ -44,12 +45,47 @@ def basic_line(num, body):
     return struct.pack('>H', num) + struct.pack('<H', len(body) + 1) + body + b'\x0D'
 
 
-def loader(clear_addr, usr_addr, n_blocks):
-    prog = basic_line(10, bytes([CLEAR]) + number(clear_addr))
+def loader(clear_addr, usr_addr, n_blocks, banks):
+    """CLEAR, then one LOAD ""CODE per block, then RANDOMIZE USR.
+
+       A BANK block is loaded with the bank paged in at 0xC000 and paged
+       out again afterwards, which BASIC can do with `OUT 32765`.
+
+       A 48K runs the same two OUTs harmlessly -- it has no paging -- and
+       then loads the block into 0xC000, which on a 48K is spare RAM
+       (docs/PLAN.md P11).  It costs the tape time and nothing else, which
+       is far simpler than branching on machine type in BASIC, and means
+       one loader for every machine."""
+    line = 10
+    prog = basic_line(line, bytes([CLEAR]) + number(clear_addr))
     for i in range(n_blocks):
-        prog += basic_line(20 + i, bytes([LOAD, ord('"'), ord('"'), CODE]))
-    prog += basic_line(20 + n_blocks,
-                       bytes([RANDOMIZE, USR]) + number(usr_addr))
+        line += 10
+        prog += basic_line(line, bytes([LOAD, ord('"'), ord('"'), CODE]))
+    for bank in banks:
+        line += 10
+        # POKE BANKM as well as OUT, and in that order.
+        #
+        # 0x7FFD is write-only, so the ROM keeps its own copy at BANKM
+        # (23388 / 0x5B5C) and writes it back whenever it touches paging
+        # -- the interrupt handler included.  BASIC's OUT sets the port
+        # and not the variable, so the ROM undoes the switch part way
+        # through the LOAD and the bytes land in whatever bank BANKM
+        # still names.  That is bank 0, and bank_probe read 2 ("readable,
+        # wrong contents") every time.
+        #
+        # Bit 4 stays CLEAR: it is the ROM select, and this runs while
+        # the 128K editor is executing the LOAD.  Setting it swaps the 48K
+        # ROM in underneath the editor mid-load.
+        line += 10
+        prog += basic_line(line, bytes([LOAD, ord('"'), ord('"'), CODE]))
+        line += 10
+        prog += basic_line(line, bytes([POKE]) + number(0x5B5C)
+                           + b"," + number(0))
+        line += 10
+        prog += basic_line(line, bytes([OUT]) + number(0x7FFD)
+                           + b"," + number(0))
+    line += 10
+    prog += basic_line(line, bytes([RANDOMIZE, USR]) + number(usr_addr))
     return prog
 
 
@@ -76,9 +112,21 @@ def main():
     ap.add_argument('--name', default='zxstrategy')
     ap.add_argument('--code', nargs=2, action='append', metavar=('ADDR', 'FILE'),
                     required=True, help='load address and binary, repeatable')
+    ap.add_argument('--bank', nargs=2, action='append', default=[],
+                    metavar=('BANK', 'FILE'),
+                    help='RAM bank number and binary, loaded at 0xC000 with '
+                         'that bank paged in; 128K only in effect, harmless '
+                         'on a 48K')
     a = ap.parse_args()
 
     codes = [(int(addr, 0), open(f, 'rb').read()) for addr, f in a.code]
+    banks = [(int(b, 0), open(f, 'rb').read()) for b, f in a.bank]
+    for bank, data in banks:
+        if not 0 <= bank <= 7:
+            sys.exit('mktap: bank %d is not 0-7' % bank)
+        if 0xC000 + len(data) > 0x10000:
+            sys.exit('mktap: %d bytes at 0xC000 overruns the bank'
+                     % len(data))
 
     for i, (addr, data) in enumerate(codes):
         end = addr + len(data)
@@ -112,15 +160,23 @@ def main():
                          'of the earlier one'
                          % (addr, end, other, other + len(odata)))
 
-    prog = loader(a.clear, a.usr, len(codes))
+    prog = loader(a.clear, a.usr, len(codes), [b for b, _ in banks])
     tap = header(0, a.name[:10], len(prog), 10, len(prog))   # p1=autostart line
     tap += block(bytes([0xFF]) + prog)
     for addr, data in codes:
         tap += header(3, a.name[:10], len(data), addr, 0x8000)
         tap += block(bytes([0xFF]) + data)
+    # Bank blocks come last, in the order the loader pages them.
+    for bank, data in banks:
+        tap += header(3, a.name[:10], len(data), 0xC000, 0x8000)
+        tap += block(bytes([0xFF]) + data)
 
     open(a.output, 'wb').write(tap)
-    print('mktap: %s  loader + %d CODE blocks' % (a.output, len(codes)))
+    print('mktap: %s  loader + %d CODE blocks%s'
+          % (a.output, len(codes),
+             (' + %d bank' % len(banks)) if banks else ''))
+    for bank, data in banks:
+        print('       bank %d @0xC000  %6d bytes' % (bank, len(data)))
     for addr, data in sorted(codes):
         print('       0x%04X .. 0x%04X  %6d bytes' % (addr, addr + len(data), len(data)))
     # What is left in the contended window, which is the budget that

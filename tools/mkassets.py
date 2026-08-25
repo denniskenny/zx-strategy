@@ -51,6 +51,12 @@ def blobs():
         for m in re.finditer(
                 r'const uint8_t (\w+_zx0)\[(\d+)\] = \{(.*?)\};', src, re.S):
             name, n, body = m.group(1), int(m.group(2)), m.group(3)
+            # `_bank_` blobs go to a RAM bank, which only a 128K has, and
+            # are packaged separately.  Sweeping them in here would put
+            # them in the block every machine loads -- which is the cost
+            # banking exists to avoid.
+            if '_bank_' in name:
+                continue
             data = [int(v, 0) for v in re.findall(r'0x[0-9A-Fa-f]+', body)]
             if len(data) != n:
                 sys.exit('mkassets: %s declares %d bytes but lists %d'

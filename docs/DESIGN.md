@@ -176,18 +176,33 @@ where an unmasked one is a store, so **roughly three times the work per
 byte**. That lands inside the vblank window, which is the one budget this
 program has never had slack in.
 
-#### Two frames, 128K only
+#### Two frames, on every machine
 
 **The sheet is a grid, not a strip**: column 1 is the units, column 2 each
 unit's second frame, so unit *n* is row *n* and frame *f* is column *f*.
-Both frames **share one mask**, generated from frame 1 — which requires
-frame 2 to keep its ink inside frame 1's outline, or it draws without a
-black rim on that frame only and the edge appears to flicker. See
-docs/PLAN.md P11.
+Both frames **share one mask, built from the two frames COMBINED**: union
+the frames, then dilate the combined outline.
 
-A second frame doubles the sprite data again -- another 512 bytes of
-pixels and 512 of mask. **The 128K gets it; the 48K keeps one frame** and
-must look deliberate rather than broken.
+Deriving it from frame 1 alone does not work, and the explosion sprite is
+why. A shared mask silently assumes frame 2 is a variation of frame 1 -- a
+limb shifting, a turret turning -- and an explosion **expands**, so its
+second frame is legitimately larger. Any pixel outside frame 1's outline
+would draw with no black rim, on that frame only, which reads as an edge
+that flickers.
+
+Unioning first removes the assumption rather than constraining the art:
+every frame is inside the mask by construction, however different they are.
+The cost is a rim sized to the LARGER frame, so the smaller one carries a
+slightly thicker black edge -- invisible at this resolution, and cheaper
+than a second mask or a rule the artist has to remember.
+
+Still one mask, still 512 bytes. See docs/PLAN.md P11.
+
+A second frame adds 640 bytes of pixels and no mask, the mask being shared.
+**Both machines get it.** It was going to be 128K-only, in a RAM bank,
+until the free space above MEM_END was measured: 1334 bytes, against 640
+needed. It sits with the decompressed sheets, which is plain RAM on a 48K
+and page 7 on a 128K -- same addresses, one code path, no paging.
 
 The second frame belongs in a **bank block**: banks are 128K/+3 only, so a
 48K never loads it and pays nothing for it, and `tools/mktap.py` already

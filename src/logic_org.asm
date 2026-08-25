@@ -7,6 +7,6 @@
 ; Moving ALL code down here instead cost about 50%.  The render
 ; path stays at 0x8000 for that reason.
 ;
-; 0x6600 is the first free byte after the asset blobs.
+; 0x6800 is the first free byte after the asset blobs.
     SECTION LOGIC
-    org     0x6600
+    org     0x6800

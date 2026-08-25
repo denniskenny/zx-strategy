@@ -69,7 +69,10 @@
 /* --- src/render.c: the unpacked tile sheets ---
    Reserved by size; render.c carves it up and checks it fits. */
 #define MEM_TILES       (MEM_VIEW_OFF + 256)
-#define MEM_TILES_SIZE  2176    /* +512 for the view-unit masks */
+/* Unpacked sheets: terrain map + terrain view + unit map + unit view,
+   plus one mask for the view units.  The view sheet gained the explosion
+   sprite, so both it and its mask are 5 tiles now, not 4. */
+#define MEM_TILES_SIZE  3104    /* +640 for the second animation frame */
 
 /* --- src/logic.c: scratch with no deadline on it --- */
 #define MEM_LOGIC       (MEM_TILES + MEM_TILES_SIZE)

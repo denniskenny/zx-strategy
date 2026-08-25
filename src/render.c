@@ -33,6 +33,7 @@
 #include "../include/dzx0.h"
 #include "../include/gfx.h"
 #include "../include/hw.h"
+#include "../include/prng.h"
 #include "../include/level_1.h"
 #include "../include/memmap.h"
 #include "../include/render.h"
@@ -66,8 +67,14 @@
 #if (TILES_MAP_TILES != TER_COUNT) || (TILES_VIEW_TILES != TER_COUNT)
 #error "tile sheets and the .tmx tileset disagree on the terrain count"
 #endif
-#if (UNITS_MAP_TILES != UNIT_TYPES) || (UNITS_VIEW_TILES != UNIT_TYPES)
-#error "unit sheets and game_config.h disagree on the unit type count"
+/* The MAP sheet is one sprite per unit type.  The VIEW sheet carries those
+   PLUS the explosion effect, which is a sprite and not a type -- hence two
+   counts, and VIEW_SPRITES is the one that must match this sheet. */
+#if UNITS_MAP_TILES != UNIT_TYPES
+#error "units_map.zxp and game_config.h disagree on the unit type count"
+#endif
+#if UNITS_VIEW_TILES != VIEW_SPRITES
+#error "units_view.zxp and game_config.h disagree on the view sprite count"
 #endif
 #if (UNITS_MAP_TILE_W != TILES_MAP_TILE_W) \
  || (UNITS_MAP_TILE_H != TILES_MAP_TILE_H)
@@ -277,6 +284,7 @@ void render_show(void)
 int8_t page_x, page_y;
 uint8_t attrs_left;
 uint8_t dirty_n;
+uint8_t anim_frame;             /* 0 or 1: which sprite frame is showing */
 
 /* World cells whose PICTURE is stale, redrawn on the next frame: a unit
    sprite that left one cell and arrived in another.  Orders are given
@@ -324,15 +332,22 @@ static uint8_t dirty_x[DIRTY_MAX], dirty_y[DIRTY_MAX];
    the background and needs none; the map-view sprites are 16x16 markers on
    a schematic and are drawn flat. */
 #define MEM_UVIEW_MASK  (MEM_UVIEW_TILES + UNITS_VIEW_RAW_SIZE)
+/* The second animation frame, pixels only -- it shares frame 1's mask and
+   attributes.  Up here with the sheets rather than in a RAM bank: this
+   region is plain RAM on a 48K and page 7 on a 128K, so one copy serves
+   both machines and neither needs paging to read it. */
+#define MEM_UVIEW_F2    (MEM_UVIEW_MASK + UNITS_VIEW_MASK_RAW_SIZE)
 
 #define map_tiles       ((uint8_t *)MEM_MAP_TILES)
 #define view_tiles      ((uint8_t *)MEM_VIEW_TILES)
 #define unit_map_tiles  ((uint8_t *)MEM_UMAP_TILES)
 #define unit_view_tiles ((uint8_t *)MEM_UVIEW_TILES)
 #define unit_view_mask  ((uint8_t *)MEM_UVIEW_MASK)
+#define unit_view_f2    ((uint8_t *)MEM_UVIEW_F2)
 
 #if (TILES_MAP_RAW_SIZE + TILES_VIEW_RAW_SIZE + UNITS_MAP_RAW_SIZE \
-     + UNITS_VIEW_RAW_SIZE + UNITS_VIEW_MASK_RAW_SIZE) > MEM_TILES_SIZE
+     + UNITS_VIEW_RAW_SIZE + UNITS_VIEW_MASK_RAW_SIZE \
+     + UNITS_VIEW_F2_RAW_SIZE) > MEM_TILES_SIZE
 #error "the unpacked sheets have outgrown MEM_TILES_SIZE in memmap.h"
 #endif
 
@@ -436,6 +451,7 @@ void load_tiles(void)
     dzx0_decompress(units_map_zx0, unit_map_tiles);
     dzx0_decompress(units_view_zx0, unit_view_tiles);
     dzx0_decompress(units_view_mask_zx0, unit_view_mask);
+    dzx0_decompress(units_view_f2_zx0, unit_view_f2);
 }
 
 /* The status panel's colour for a unit: side, dimmed once spent.  One
@@ -921,7 +937,9 @@ static void cell_layers(uint8_t vx, uint8_t vy, const uint8_t **bg,
     u = occupancy[cell];
     if (u != NO_UNIT) {
         uint16_t off = (uint16_t)u_type[u] * UNITS_VIEW_TILE_SIZE;
-        *sp = unit_view_tiles + off;
+        /* One frame index for the whole board, so every unit is in step.
+           The mask is shared, being the union of both frames. */
+        *sp = (anim_frame ? unit_view_f2 : unit_view_tiles) + off;
         *mask = unit_view_mask + off;
     }
 }
@@ -1276,6 +1294,152 @@ void render_discard(void)
    Moving the cursor is NOT in here.  The window follows the cursor, so
    a step changes every cell and there is nothing to spread — it is
    repainted in one go and accepts the tear (docs/PLAN.md § P7). */
+/* --- Destruction --------------------------------------------------- */
+
+/* One speaker cycle: up for `noise_hold` counts, down for the same.
+ *
+ * Globals rather than arguments on purpose.  A __naked function has to dig
+ * its parameters off the stack by hand, and the first version of this got
+ * the offsets subtly wrong -- it worked, at the wrong pitch, which is the
+ * hardest kind of wrong to see.  Two bytes of static costs less than that
+ * risk.
+ *
+ * The hold is 16-bit and the loop is `dec de / ld a,d / or e`, ~26 T per
+ * iteration.  With holds of 300-1800 that is roughly 8 000-47 000 T a half
+ * cycle: about 40-220 Hz, which is low and crunchy.  The old version used
+ * an 8-bit hold of 8-71 in a 13 T loop -- 2-16 kHz, which is why it
+ * whistled.
+ */
+static uint16_t noise_hold;
+static uint8_t  noise_port;
+
+static void noise_cycle(void) __naked
+{
+    __asm
+        ld  a, (_noise_port)
+        or  #0x10               ; speaker up
+        out (0xFE), a
+        ld  de, (_noise_hold)
+    _nc_up:
+        dec de
+        ld  a, d
+        or  e
+        jr  nz, _nc_up
+
+        ld  a, (_noise_port)
+        and #0x07               ; speaker down, border kept
+        out (0xFE), a
+        ld  de, (_noise_hold)
+    _nc_dn:
+        dec de
+        ld  a, d
+        or  e
+        jr  nz, _nc_dn
+        ret
+    __endasm;
+}
+
+/* A burst of white noise: `len` cycles, each with its own random period.
+ *
+ * The width of the period is what stops it settling into a tone, and its
+ * lowness is what makes it a crunch rather than a hiss.  Blocking, which
+ * is fine -- a unit dies between turns, not inside a frame budget. */
+static void noise(uint8_t len, uint8_t border)
+{
+    static prng_t np = { 0xACE1u, 0x1234u };
+
+    noise_port = border;
+    while (len--) {
+        noise_hold = (uint16_t)((prng_next(&np) & 0x05FF) + 300);
+        noise_cycle();
+    }
+}
+
+/* Draw the explosion over the terrain at a view cell, in `attr`. */
+static void boom_cell(uint8_t vx, uint8_t vy, uint8_t frame, uint8_t attr)
+{
+    int8_t wx = (int8_t)(page_x + vx);
+    int8_t wy = (int8_t)(page_y + vy);
+    uint16_t off = (uint16_t)SPRITE_EXPLOSION * UNITS_VIEW_TILE_SIZE;
+    const uint8_t *bg;
+
+    if (wx < 0 || wx >= GRID_COLS || wy < 0 || wy >= GRID_ROWS) return;
+    bg = view_tiles + (uint16_t)terrain[cell_of((uint8_t)wx, (uint8_t)wy)]
+                      * TILES_VIEW_TILE_SIZE;
+
+    compose_tile(vx, vy, bg);
+    compose_masked(vx, vy,
+                   (frame ? unit_view_f2 : unit_view_tiles) + off,
+                   unit_view_mask + off);
+    compose_attr(vx, vy, attr, 0, 0);
+    present_cell(vx, vy);
+}
+
+/* Two frames, twice round, in FLASHing red and white, with a bang.
+
+   The explosion is a sprite and not a unit type (SPRITE_EXPLOSION), so
+   nothing on the board owns it -- by the time this runs the cell is empty
+   and it is drawn straight over the terrain.
+
+   Attributes alternate white-on-red and red-on-white, both with FLASH set,
+   so the hardware flip runs on top of the frame swap: two rates of
+   flicker at once, which is more violent than either alone and costs
+   nothing to do. */
+void render_boom(uint8_t wx, uint8_t wy)
+{
+    static const uint8_t boom_attr[2] = { ATTR_BOOM_A, ATTR_BOOM_B };
+    int8_t vx = (int8_t)(wx - page_x);
+    int8_t vy = (int8_t)(wy - page_y);
+    uint8_t step;
+
+    if (vx < 0 || vx >= VIEW_COLS || vy < 0 || vy >= VIEW_ROWS) return;
+
+    for (step = 0; step < 4; step++) {           /* 2 frames x 2 cycles */
+        boom_cell((uint8_t)vx, (uint8_t)vy, (uint8_t)(step & 1),
+                  boom_attr[step & 1]);
+        noise((uint8_t)(24 - step * 4), (uint8_t)(step & 1 ? 2 : 7));
+    }
+
+    /* Put the cell back to whatever it should be now -- empty ground, or
+       the unit that survived if this was only a near miss. */
+    mark_dirty(wx, wy);
+}
+
+/* Frames between animation steps.  Slow on purpose: the sprites are two
+   poses, not a walk cycle, and a fast flip reads as a flicker. */
+#define ANIM_BEAT   18
+
+static uint8_t anim_beat;
+
+/* Swap every unit to the other frame.
+
+   Runs ONLY when the screen is at rest (docs/DESIGN.md § Animate only
+   when the screen is at rest): nothing stale to repaint, no recolour in
+   progress, and the view where it was.  That inverts the cost -- the
+   expensive frames are exactly the ones this is skipped on, so it never
+   competes for the budget it would otherwise blow, and a resting frame
+   has the whole vblank window going spare anyway.
+
+   Marking every occupied cell dirty would overrun DIRTY_MAX four times
+   over, so this repaints them itself, in place, and leaves the dirty list
+   alone. */
+static void animate(void)
+{
+    uint8_t i;
+
+    anim_frame = (uint8_t)!anim_frame;
+    for (i = 0; i < unit_count; i++) {
+        int8_t vx, vy;
+
+        if (u_type[i] == NO_UNIT) continue;
+        vx = (int8_t)(col_of[u_cell[i]] - page_x);
+        vy = (int8_t)((u_cell[i] / GRID_COLS) - page_y);
+        if (vx < 0 || vx >= VIEW_COLS || vy < 0 || vy >= VIEW_ROWS)
+            continue;
+        draw_view_cell((uint8_t)vx, (uint8_t)vy);
+    }
+}
+
 void render_tick(void)
 {
     if (dirty_n) {
@@ -1300,6 +1464,13 @@ void render_tick(void)
                            (uint8_t)(i / VIEW_COLS));
             attrs_left--;
         }
+        return;
+    }
+
+    /* At rest: nothing else wanted this frame, so the board may breathe. */
+    if (++anim_beat >= ANIM_BEAT) {
+        anim_beat = 0;
+        animate();
     }
 }
 

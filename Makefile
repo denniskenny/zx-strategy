@@ -144,6 +144,11 @@ include/tiles_view.h: assets/tiles_view.zxp tools/zxp_tiles_zx0.py
 # choose, but which of its cells are BRIGHT is — that is the sprite's shading,
 # and it is all that survives from the sheet.
 UNIT_COUNT = 4
+# The view sheet carries the units PLUS an explosion effect, and now comes
+# as a 2-frame grid: one column per frame, one row per sprite.  The map
+# sheet is still four units in a strip -- an explosion is a moment, and the
+# map view is a schematic.
+VIEW_SPRITES = 5
 
 include/units_map.h: assets/units_map.zxp tools/zxp_tiles_zx0.py
 	$(ZXP_TILES_ZX0) $< $@ --name units_map --tiles $(UNIT_COUNT) \
@@ -158,9 +163,9 @@ include/units_map.h: assets/units_map.zxp tools/zxp_tiles_zx0.py
 # stream would have buried those runs in sprite detail and lost most of
 # that.  mkassets.py picks it up from the header automatically, so it
 # lands in the contended block at 0x6000 with the other blobs.
-include/units_view.h: assets/units_view.zxp tools/zxp_tiles_zx0.py
-	$(ZXP_TILES_ZX0) $< $@ --name units_view --tiles $(UNIT_COUNT) --mask \
-	    --attr-mode bright --zx0 $(ZX0)
+include/units_view.h: assets/units_view_animated.zxp tools/zxp_tiles_zx0.py
+	$(ZXP_TILES_ZX0) $< $@ --name units_view --tiles $(VIEW_SPRITES) \
+	    --frames 2 --mask --attr-mode bright --zx0 $(ZX0)
 
 # List generated headers here so `make assets` and `make clean` know them.
 GENERATED_HEADERS = $(LEVEL_HEADERS) \
