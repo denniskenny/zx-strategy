@@ -47,6 +47,12 @@ static const uint8_t  sfx_len[SFX_VOICES]  = {      3,      8,     24 };
  * direction feel like wading.  At ~3.7 ms a cycle three of them is about
  * 11 ms; ten was 37 ms and dragged. */
 
+/* Turns a level is "meant" to take.  The score for winning is this less
+ * the turns spent, floored at zero -- so 20 is both the par and the best
+ * possible score, and a level dragged past it is worth nothing rather
+ * than a negative.  Raise it to be kinder about slow play. */
+#define SCORE_PAR   20
+
 /* --- Unit types ---------------------------------------------------- */
 /* Ids are indices, and the order is load-bearing: it is the sprite
  * column order in assets/units_view.zxp and assets/units_map.zxp, and

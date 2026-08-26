@@ -463,6 +463,7 @@ static void handle_input(void)
             if (edge & ACT_GO) {
                 turn = 1;
                 level = 1;
+                campaign_score = 0;
                 /* Decompressing a map and placing two armies runs long.
                    No banner is put back: enter_play() repaints the
                    screen and enter_state() flushes the keyboard. */
@@ -494,6 +495,7 @@ static void handle_input(void)
                 if (targeting) {
                     /* SPACE confirms the highlighted target.  Nothing else
                        on this screen can act while the mode is up. */
+                    render_hint("");
                     sfx(SFX_ATTACK);
                     attack(target_now());
                     targeting = 0;
@@ -531,6 +533,12 @@ static void handle_input(void)
                        narrower question left it unable to fire at all. */
                     if (targeting_open(selected, cell)) {
                         cursor_to(target_now());
+                        /* Say so.  The cursor is the "which target" cue,
+                           but the player just put it there themselves, so
+                           for a unit that does not move -- a Cannon -- the
+                           first press changed nothing visible and looked
+                           like a shot that did no damage. */
+                        render_hint(" O/P TARGET  FIRE=ATTACK");
                     } else {
                         uint8_t step = best_adjacent(cell);
 
@@ -540,11 +548,11 @@ static void handle_input(void)
                             move_selected_to(step);
                             targeting_open(selected, cell);
                             cursor_to(target_now());
+                            render_hint(" O/P TARGET  FIRE=ATTACK");
                         }
                     }
                 } else if (u == NO_UNIT && cost[cell] != NO_COST &&
                            !(u_flags[selected] & U_ACTED)) {
-                    sfx(SFX_MOVE);
                     move_selected();
                 } else {
                     /* Its own cell, ground it cannot reach, or a unit
@@ -603,6 +611,10 @@ static void handle_input(void)
                loop's job, not its. */
             if (outcome_ready) {
                 outcome_ready = 0;
+                /* Banked HERE, once, at the transition -- render_over()
+                   runs every frame the screen is up, so adding it there
+                   would count the level again on each one. */
+                if (player_won) campaign_score += level_score();
                 set_state(ST_OVER);
             }
 #if DEBUG_STATE_WALK

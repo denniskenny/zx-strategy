@@ -125,7 +125,16 @@ void targeting_cancel(void);
 uint8_t move_selected_to(uint8_t to);
 uint8_t best_adjacent(uint8_t enemy);
 uint8_t is_adjacent(uint8_t a, uint8_t b);
+
+/* A unit walks at most its movement allowance in tiles, and the cheapest
+   terrain costs 1, so a route cannot be longer than the best allowance.
+   Eight is slack for that. */
+#define WALK_MAX 8
+uint8_t walk_path(uint8_t from, uint8_t to, uint8_t *out);
 extern uint8_t boom_cell_at;       /* NO_CELL, or where a unit just died */
+extern uint8_t walking;            /* a unit is mid-walk                 */
+extern uint16_t campaign_score;    /* every level's score so far         */
+uint8_t level_score(void);         /* this level's, par less the turns   */
 void attack(uint8_t cell);         /* ...so do it, and spend the action */
 uint8_t damage_at(uint8_t attacker, uint8_t cell);
 

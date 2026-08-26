@@ -51,7 +51,13 @@
    has no such problem, which is very likely why the sides were the other
    way round to begin with. */
 #define ATTR_UNIT_P 0x42    /* bright red ink, black paper; BRIGHT forced */
-#define ATTR_UNIT_E 0x04    /* green ink, black paper; sheet adds BRIGHT */
+/* Dark yellow is non-bright yellow, which is legal (only 0x02 and 0x03
+   are reserved) -- so the enemy gets its per-cell SHADING back: the
+   sheet's BRIGHT bit comes through where the artist set it, and is off
+   where they did not.  The player's red cannot do this, because non-bright
+   red is the reserved marker value, so the two sides differ here out of
+   necessity. */
+#define ATTR_UNIT_E 0x06    /* yellow ink, black paper; sheet adds BRIGHT */
 #define ATTR_BRIGHT 0x40    /* the BRIGHT bit the unit sheets carry     */
 
 /* The enemy is always bright, and cannot be otherwise: non-bright red
@@ -73,16 +79,19 @@
    turns blue.  Distinct from the cursor (white paper) and from every
    terrain and unit colour, all of which use black paper. */
 #define ATTR_RANGE  0x5F    /* bright white ink, MAGENTA paper */
-/* The same idea in the enemy's colour.  MAGENTA is what YOU can do, BLUE
-   is what THEY can do, so the two never have to be told apart by counting
-   which unit is held.  Each side's highlight is the lighter relative of
-   its unit colour -- red units, magenta reach; green units, blue reach --
-   so the pairing is learnable rather than arbitrary.
+/* The same idea in the enemy's colour.  MAGENTA is what YOU can do, DARK
+   CYAN is what THEY can do, so the two never have to be told apart by
+   counting which unit is held.  Each side's highlight sits beside its unit
+   colour on the palette -- red units, magenta reach; blue units, cyan
+   reach -- so the pairing is learnable rather than arbitrary.
+
+   The enemy's is the only one without BRIGHT, which is deliberate: the
+   player's own reach should be the one that draws the eye.
 
    Paper carries the meaning and the ink stays bright white, which is the
    rule that keeps the art underneath legible (docs/DESIGN.md § The colours
    already work). */
-#define ATTR_RANGE_E 0x4F   /* bright white ink, blue paper    */
+#define ATTR_RANGE_E 0x2F   /* white ink, DARK cyan paper      */
 /* Destruction.  FLASH set on both, so the hardware flip runs on top of the
    frame swap and two rates of flicker land at once. */
 #define ATTR_BOOM_A 0xD7    /* flash, bright, white ink, red paper   */
@@ -200,6 +209,25 @@ void draw_view(void);           /* every cell, pixels and colour        */
 void scroll_view(int8_t dx, int8_t dy);  /* push the window one cell    */
 void render_boom(uint8_t wx, uint8_t wy); /* a unit died here          */
 void sfx(uint8_t voice);                 /* SFX_MOVE / ATTACK / BOOM  */
+
+/* Frames held per visual step of a walk, and the only dial for how fast a
+   unit moves.  Both sides use it: player and AI moves go through the same
+   walk_to().
+
+   Two vertical half-steps or one horizontal step per tile, so a three-tile
+   move is at most six of these.
+
+   Back to 3 now that SFX_MOVE fires on every step rather than once a
+   move: the sound is ~11 ms of its own, and a step that both holds for 6
+   frames AND makes a noise reads as trudging.  3 frames plus the tick is
+   about the same total as 6 frames silent.
+
+   It multiplies on the enemy turn -- several units, each walking, on top
+   of ENEMY_BEAT between them -- so raising it costs there first. */
+#define WALK_BEAT 3
+void render_clear_highlights(void);
+void render_walk_step(uint8_t prev, uint8_t cell, uint8_t high);
+void render_walk_end(void);
 void draw_view_cell(uint8_t vx, uint8_t vy);
 void attr_view_cell(uint8_t vx, uint8_t vy);    /* colour only          */
 

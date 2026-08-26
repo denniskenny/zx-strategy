@@ -97,6 +97,27 @@
 #define UNIT_ROW_OFF   UNITS_VIEW_TILE_ROWS   /* char rows of terrain above */
 #define UNIT_PIX_OFF   UNITS_VIEW_TILE_H      /* pixel rows of terrain above */
 
+/* A WALKING unit sits in the UPPER half of its cell for half of every
+   vertical step (docs/DESIGN.md § Walking a unit to its destination).
+   Vertical steps are two characters, which is half a cell, so a unit is
+   always in one half or the other of exactly one cell -- never across a
+   boundary, which is what keeps the blit shift-free.
+   
+   `walk_cell` is that cell and NO_CELL the rest of the time; `walk_high`
+   says which half.  Two bytes, consulted by every path that has to know
+   where in a cell the sprite goes -- and there are four of them, which is
+   why this is one answer and not four constants. */
+static uint8_t walk_cell = NO_CELL;
+static uint8_t walk_high;
+
+static uint8_t cell_row_off(uint8_t vx, uint8_t vy);
+
+/* Character rows of terrain ABOVE the sprite in this world cell. */
+static uint8_t row_off_of(uint8_t cell)
+{
+    return (uint8_t)((cell == walk_cell && walk_high) ? 0 : UNIT_ROW_OFF);
+}
+
 /* ------------------------------------------------- 48K / 128K paths --
    The only place the two machines are told apart.  `hw_detect()` sets
    is_128k; everything else in this file is written once and works on
@@ -663,7 +684,8 @@ static void compose_tile(uint8_t vx, uint8_t vy, const uint8_t *src)
 static void compose_masked(uint8_t vx, uint8_t vy,
                            const uint8_t *src, const uint8_t *mask)
 {
-    uint8_t *d = VBUF + (uint16_t)(vy * (VIEW_CH * 8) + UNIT_PIX_OFF) * 32
+    uint8_t *d = VBUF + (uint16_t)(vy * (VIEW_CH * 8)
+                                   + cell_row_off(vx, vy) * 8) * 32
                       + vx * VIEW_CW;
     uint8_t r = UNITS_VIEW_TILE_H;
 
@@ -888,9 +910,16 @@ static void present_cell(uint8_t vx, uint8_t vy)
    Split out from the compose below so the scroll can ask the same
    question about a single character column without duplicating the
    rules. */
+/* `whole` comes back 1 when the colour is a HIGHLIGHT rather than a unit's
+   own: those wash the entire cell, because a half-height wash reads as a
+   half-height thing rather than as "this cell is selected".  A unit's own
+   colours keep the split -- that is the point of the split. */
+static uint8_t attr_whole;
+
 static const uint8_t *cell_attr(uint8_t vx, uint8_t vy,
                                 uint8_t *flat, uint8_t *mask)
 {
+    attr_whole = 0;
     int8_t wx = (int8_t)(page_x + vx);
     int8_t wy = (int8_t)(page_y + vy);
     uint8_t cell, u;
@@ -903,8 +932,8 @@ static const uint8_t *cell_attr(uint8_t vx, uint8_t vy,
     u = occupancy[cell];
 
     if (u != NO_UNIT) {
-        if (u == selected)            *flat = ATTR_HINT;
-        else if (is_target(cell))     *flat = ATTR_TARGET;
+        if (u == selected)            { *flat = ATTR_HINT; attr_whole = 1; }
+        else if (is_target(cell))     { *flat = ATTR_TARGET; attr_whole = 1; }
         else if (u_flags[u] & U_SIDE) {
             /* The enemy gets the sheet's per-cell BRIGHT bit too, which it
                never had: it was a flat colour, so every cell of an enemy
@@ -932,6 +961,17 @@ static const uint8_t *cell_attr(uint8_t vx, uint8_t vy,
 static void cell_layers(uint8_t vx, uint8_t vy, const uint8_t **bg,
                         const uint8_t **sp, const uint8_t **mask);
 
+/* Where the sprite sits in this VIEW cell, in character rows. */
+static uint8_t cell_row_off(uint8_t vx, uint8_t vy)
+{
+    int8_t wx = (int8_t)(page_x + vx);
+    int8_t wy = (int8_t)(page_y + vy);
+
+    if (wx < 0 || wx >= GRID_COLS || wy < 0 || wy >= GRID_ROWS)
+        return UNIT_ROW_OFF;
+    return row_off_of(cell_of((uint8_t)wx, (uint8_t)wy));
+}
+
 /* The terrain's own attribute block for a view cell, off-board included --
    the same answer cell_layers() gives for the background picture, so the
    colours above a unit's head always match the ground it is standing on. */
@@ -957,7 +997,7 @@ static void compose_view_attr(uint8_t vx, uint8_t vy)
     const uint8_t *bg, *sp, *m;
 
     cell_layers(vx, vy, &bg, &sp, &m);
-    if (!sp) {
+    if (!sp || attr_whole) {
         compose_attr(vx, vy, flat, blk, mask);
         return;
     }
@@ -971,9 +1011,20 @@ static void compose_view_attr(uint8_t vx, uint8_t vy)
        covered the terrain above an ENEMY unit (flat red) and above any
        unit that had already acted.  Those are the common cases, so most
        of the point of half-height sprites was being lost. */
-    compose_attr_rows(vx, vy, 0, UNIT_ROW_OFF, 0, tile_attr_of(vx, vy), 0);
-    compose_attr_rows(vx, vy, UNIT_ROW_OFF, UNITS_VIEW_TILE_ROWS,
-                      flat, blk, mask);
+    {
+        uint8_t off = cell_row_off(vx, vy);
+
+        /* Terrain fills whichever half the unit is NOT in. */
+        if (off)
+            compose_attr_rows(vx, vy, 0, off, 0, tile_attr_of(vx, vy), 0);
+        compose_attr_rows(vx, vy, off, UNITS_VIEW_TILE_ROWS,
+                          flat, blk, mask);
+        if (!off)
+            compose_attr_rows(vx, vy, UNITS_VIEW_TILE_ROWS,
+                              (uint8_t)(VIEW_CH - UNITS_VIEW_TILE_ROWS), 0,
+                              tile_attr_of(vx, vy) + UNITS_VIEW_TILE_ROWS
+                                                     * VIEW_CW, 0);
+    }
 }
 
 /* What a cell is made of: always a background tile, and for an occupied
@@ -1192,13 +1243,17 @@ static void slice_attr_col(uint8_t vx, uint8_t sub, uint8_t dcol)
            it by the cell's row read off the end of the block for the top
            rows and wrote whatever followed it into the screen.  That is
            the ragged colour at a scrolling edge. */
+        uint8_t off = cell_row_off(vx, vy);
+
         cell_layers(vx, vy, &bg, &sp, &m);
         for (r = 0; r < VIEW_CH; r++) {
-            if (sp && r < UNIT_ROW_OFF) {
+            if (sp && r >= off && r < (uint8_t)(off + UNITS_VIEW_TILE_ROWS)) {
+                *d = (uint8_t)(blk ? (blk[(r - off) * VIEW_CW + sub] | mask)
+                                   : flat);
+            } else if (sp) {
                 *d = ter[r * VIEW_CW + sub];
             } else {
-                uint8_t br = (uint8_t)(sp ? r - UNIT_ROW_OFF : r);
-                *d = blk ? (uint8_t)(blk[br * VIEW_CW + sub] | mask) : flat;
+                *d = blk ? (uint8_t)(blk[r * VIEW_CW + sub] | mask) : flat;
             }
             d += 32;
         }
@@ -1221,14 +1276,17 @@ static void slice_attr_row(uint8_t vy, uint8_t sub, uint8_t drow)
         /* As slice_attr_col(): a unit's block is half the cell tall, so a
            sub-row above the sprite must take the terrain's colours and
            must NOT index the unit block, which does not reach that far. */
+        uint8_t off = cell_row_off(vx, vy);
+
         cell_layers(vx, vy, &bg, &sp, &m);
-        if (sp && sub < UNIT_ROW_OFF) {
+        if (sp && (sub < off
+                   || sub >= (uint8_t)(off + UNITS_VIEW_TILE_ROWS))) {
             const uint8_t *ter = tile_attr_of(vx, vy);
 
             for (c = 0; c < VIEW_CW; c++)
                 d[c] = ter[sub * VIEW_CW + c];
         } else {
-            uint8_t br = (uint8_t)(sp ? sub - UNIT_ROW_OFF : sub);
+            uint8_t br = (uint8_t)(sp ? sub - off : sub);
 
             for (c = 0; c < VIEW_CW; c++)
                 d[c] = blk ? (uint8_t)(blk[br * VIEW_CW + c] | mask) : flat;
@@ -1530,6 +1588,112 @@ void render_boom(uint8_t wx, uint8_t wy)
     mark_dirty(wx, wy);
 }
 
+/* One visual step of a walk: put the sprite in `cell` at `high` or low,
+   repaint what changed, show it, and hold for a beat.
+
+   `prev` is where the sprite was, so both cells get repainted -- the one
+   being left back to bare terrain, the one being entered with the unit in
+   it.  Two cells a step, which is inside DIRTY_MAX, but this does not use
+   the dirty list: a walk is a SEQUENCE and that list is an unordered set
+   of cells owed a repaint (docs/DESIGN.md § Walking a unit).
+
+   Blocking, like scroll_view(): a unit moves between turns, not inside a
+   frame budget. */
+void render_walk_step(uint8_t prev, uint8_t cell, uint8_t high)
+{
+    int8_t vx, vy;
+    uint8_t i;
+
+    walk_cell = cell;
+    walk_high = high;
+
+    /* Compose into the buffer, then present the WHOLE view and flip --
+       the same shape scroll_view() uses, and for the same reason.
+     *
+     * draw_view_cell() presents one cell to the screen currently being
+     * drawn into.  With a shadow screen there are two, so a cell touched
+     * that way is right on one and stale on the other, and the next flip
+     * shows the stale one: a frozen sprite where the unit used to be.
+     * That is the ghosting, and it is why it turned up on a +3 -- a 48K
+     * has one screen and cannot show it.
+     *
+     * copy_chrome() already solves this for the chrome.  The view area
+     * needs the same treatment, and present_all() gives it: every cell,
+     * every time, so the two screens cannot drift. */
+    for (i = 0; i < 2; i++) {
+        uint8_t c = i ? cell : prev;
+
+        vx = (int8_t)(col_of[c] - page_x);
+        vy = (int8_t)((c / GRID_COLS) - page_y);
+        if (vx >= 0 && vx < VIEW_COLS && vy >= 0 && vy < VIEW_ROWS)
+            compose_view_cell((uint8_t)vx, (uint8_t)vy);
+        if (c == cell) break;           /* same cell: one compose is enough */
+    }
+    if (shadow_ok) {
+        copy_chrome();
+        render_compose();
+        present_all();
+        render_show();
+    } else {
+        present_all();
+    }
+    /* One tick per character step, not one per move: the step is the thing
+       the player sees, so it is the thing that should be heard.  SFX_MOVE
+       is the shortest voice for exactly this reason. */
+    sfx(SFX_MOVE);
+    for (i = 0; i < WALK_BEAT; i++) vsync_wait();
+}
+
+/* Take every highlight off the board NOW, not over the next N frames.
+
+   recolour_page() only queues the work for render_tick(), and a walk
+   blocks -- so the movement wash would sit under the unit for the whole
+   animation.  It reads as the unit still choosing where to go. */
+void render_clear_highlights(void)
+{
+    uint8_t i;
+
+    for (i = 0; i < VIEW_CELLS; i++)
+        attr_view_cell((uint8_t)(i % VIEW_COLS), (uint8_t)(i / VIEW_COLS));
+    attrs_left = 0;
+}
+
+/* The walk is over: the sprite rests in the lower half again, and the
+   view is repainted whole.
+ *
+ * The repaint is a REMEDY, not a nicety, and it is worth being honest
+ * about which: ghost sprites were appearing a cell away from a unit and
+ * staying frozen while the real ones animated.  Repainting every cell on
+ * the animation beat made them vanish, which proves they are stale buffer
+ * content -- some path fails to repaint a cell it has invalidated -- but
+ * not WHICH path.  This clears them at the one moment a full repaint is
+ * affordable: the walk already blocks, so one more pass costs nothing the
+ * player can feel.
+ *
+ * It is a symptom fix.  The path that leaves the cell dirty is still in
+ * here, and will show up again anywhere a unit changes cell without a
+ * walk -- so if ghosts return, look there rather than adding a second
+ * repaint. */
+void render_walk_end(void)
+{
+    uint8_t i;
+
+    walk_cell = NO_CELL;
+    walk_high = 0;
+
+    /* One clean pass over both screens, so nothing is left half-updated
+       whichever one is on show when the walk ends. */
+    for (i = 0; i < VIEW_CELLS; i++)
+        compose_view_cell((uint8_t)(i % VIEW_COLS), (uint8_t)(i / VIEW_COLS));
+    if (shadow_ok) {
+        copy_chrome();
+        render_compose();
+        present_all();
+        render_show();
+    }
+    present_all();
+}
+
 /* Frames between animation steps.  Slow on purpose: the sprites are two
    poses, not a walk cycle, and a fast flip reads as a flicker. */
 #define ANIM_BEAT   18
@@ -1553,6 +1717,23 @@ static void animate(void)
     uint8_t i;
 
     anim_frame = (uint8_t)!anim_frame;
+
+#if DEBUG_STATE_WALK
+    /* DIAGNOSTIC: repaint the WHOLE view, not just the occupied cells.
+     *
+     * A ghost sprite is a cell holding a picture nothing believes is
+     * there, so nothing repaints it -- which is why it sits still while
+     * the real units animate.  If it vanishes on the next animation beat
+     * in this build, it is stale buffer content and the fault is a path
+     * that fails to repaint.  If it survives, something is actively
+     * drawing it and the fault is upstream in what a cell contains.
+     *
+     * Debug build only: this is VIEW_CELLS composes a beat, far past what
+     * a resting frame can afford. */
+    for (i = 0; i < VIEW_CELLS; i++)
+        draw_view_cell((uint8_t)(i % VIEW_COLS), (uint8_t)(i / VIEW_COLS));
+    return;
+#endif
     for (i = 0; i < unit_count; i++) {
         int8_t vx, vy;
 
@@ -1707,7 +1888,21 @@ void render_over(void)
 
     print_at(1, 10, player_won ? "LEVEL TAKEN    :" : "LEVEL LOST     :");
     print_num(18, 10, level, 2);
-    set_attr_rect(0, 10, 32, 1, ATTR_TEXT);
+    print_at(1, 11, "TURNS TAKEN    :");
+    print_num(18, 11, (uint8_t)(turn > 99 ? 99 : turn), 2);
+
+    /* Score is SCORE_PAR less the turns it took, so a quick win scores
+       high and a long one scores nothing -- never negative, because a
+       level that took longer than par is worth zero rather than a debt.
+       Only on a win: there is no score for losing. */
+    if (player_won) {
+        print_at(1, 12, "LEVEL SCORE    :");
+        print_num(18, 12, level_score(), 2);
+        print_at(1, 13, "TOTAL SCORE    :");
+        print_num(17, 13,
+                  (uint8_t)(campaign_score > 999 ? 999 : campaign_score), 3);
+    }
+    set_attr_rect(0, 10, 32, 4, ATTR_TEXT);
 
     render_hint(player_won ? "SPACE FOR THE NEXT LEVEL"
                            : "SPACE TO RETURN TO THE TITLE");
@@ -1721,8 +1916,11 @@ void render_won(void)
 
     print_at(4, 9,  "EVERY LEVEL TAKEN");
     print_at(4, 11, "LEVELS WON     :");
-    print_num(21, 11, LEVEL_COUNT, 2);
-    set_attr_rect(0, 9, 32, 3, ATTR_TEXT);
+    print_num(22, 11, LEVEL_COUNT, 2);
+    print_at(4, 12, "FINAL SCORE    :");
+    print_num(21, 12,
+              (uint8_t)(campaign_score > 999 ? 999 : campaign_score), 3);
+    set_attr_rect(0, 9, 32, 4, ATTR_TEXT);
 
     render_hint("PRESS A KEY");
     render_show();

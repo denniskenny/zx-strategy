@@ -13,6 +13,7 @@ Most of it describes a game that runs today. These parts do not yet:
 | § Actions — the attack half | **Built**, including move-into-contact-and-strike as one action. |
 | § Adjacency, counter-attack and wounded damage | **Built.** All three rules, the resolution order, and the AI's exchange scoring. Balance untested in a full campaign. |
 | § Selection and highlighting | **Built**, including enemy-selection mode, best-cover approach, and magenta for enemy reach. `O`/`P` cycling is gone. |
+| § Walking a unit to its destination | **Not built.** Needs a path and a beat of its own; two-character vertical and four-character horizontal steps keep the sprite inside one cell throughout. |
 | § Sprite masks and animation | **Not built.** Masks and a 128K-only second frame. The dirty-cell budget is the open problem, not the data. |
 | § Stalemate | **Not built** as such — `X` already quits to the title, which is the whole mechanism, but nothing detects the stalemate. |
 
@@ -265,6 +266,125 @@ This is what makes the feature affordable, and it is worth building in this
 order: masks first, since they are useful on their own and their cost is
 per-blit rather than per-frame, then the resting check, then the second
 frame behind it.
+
+### Walking a unit to its destination
+
+**Not built.** A move currently teleports: `move_selected_to()` updates
+`occupancy[]`, marks two cells dirty, and the unit is simply somewhere
+else on the next frame. Instead it should **step one character cell at a
+time** -- 8 pixels, so four steps per tile -- from where it stands to
+where it is going.
+
+This is a bigger change than it sounds, for three reasons.
+
+#### It needs a PATH, which nothing currently keeps
+
+`movement_range()` flood-fills `cost[]` and that is all that survives: the
+renderer knows which tiles are reachable and at what price, not how to get
+to one. Walking needs the route.
+
+The cheap answer is to **walk downhill through `cost[]`** from the
+destination back to the unit, since each step of the fill is one cheaper
+than the last -- no extra storage, and the route is recomputed rather than
+remembered. Downhill is not unique -- several neighbours may tie -- so the tie-break
+is **a fixed order, always the same one**. Not random.
+
+The route is cosmetic: `cost[]` already fixes the destination and the price,
+and nothing depends on which way the unit went -- no ambush, no
+interruption, no facing. So a fixed order cannot be *wrong*, only
+characteristic, and after two moves the player has learnt it. It looks like a rule.
+
+**The order is VERTICAL FIRST**, and for a reason rather than a toss-up:
+the vertical step is two characters and the horizontal one is four, so
+vertical is the half-cell step and the only one with an intermediate
+position. Leading with it means a move opens with the smooth part -- the
+unit visibly steps rather than appearing somewhere new -- and the hops
+follow once movement has already been established as motion. Horizontal
+first would start every move with a jump, which is the thing the whole
+feature exists to get away from.
+
+The consequence to accept: a unit moving mostly sideways takes its one
+vertical step and then a run of hops, so the smoothness is front-loaded
+rather than spread. That is the right way round -- the beginning of a move
+is where the player is looking.
+
+Random would be the same cost mechanically and worse in two ways. The same
+move would take a different route each time, so nothing is learnable --
+which is the problem the tie-break exists to solve. And it would make odd
+behaviour unreportable: most of the bugs found in this renderer were found
+by someone playing and describing what they saw, and "the tank went a
+strange way" stops being a reproducible observation the moment the route is
+a coin toss.
+
+#### A unit is always inside exactly one cell
+
+**Steps are two characters vertically and four horizontally**, and that
+choice makes the hard part disappear.
+
+A cell is 4 characters square; the sprite is 4 wide and 2 tall, sitting in
+the lower half. So:
+
+- **Horizontally, four characters is a whole cell.** The unit moves cell to
+  cell with nothing in between, always exactly aligned.
+- **Vertically, two characters is half a cell.** From the lower half of a
+  cell a step up lands in the UPPER half of the SAME cell; another lands in
+  the lower half of the one above. Downwards works the same in reverse.
+
+At every point the sprite occupies **two whole character rows of one
+cell** -- either its top half or its bottom half. It never spans a cell
+boundary, in either axis, at any moment of a move.
+
+That removes the whole difficulty:
+
+- **No boundary blit.** No sprite written across two cells, no second cell
+  to compose, and nothing to present in pairs.
+- **No pixel shifting.** Whole-character offsets mean bytes copy straight;
+  a sub-character offset would need a shift-and-or per byte per row, which
+  is the most expensive thing a Z80 blit can do.
+- **No partial attribute cells.** The unit's colours land on whole
+  character cells, as they already do.
+
+What it needs instead is small: the unit's row offset within its cell
+becomes a VARIABLE where `UNIT_ROW_OFF` is currently a constant -- 0 when
+the sprite is in the upper half, 2 when it is in the lower. That single
+number threads through `cell_layers()`, `compose_view_attr()` and both
+attribute slices, and the terrain fills whichever half the unit is not in.
+
+Note what is given up: **horizontal movement has no intermediate
+position**, so a unit crossing three tiles sideways is seen at three
+places rather than gliding. The route is still legible, which was the
+point -- particularly on the enemy turn -- and a smoother horizontal step
+would cost the shifting this avoids.
+
+#### Timing, and what it must not fight
+
+- **The at-rest rule already covers the frame animation**: during a walk
+  the screen is not at rest, so the two-frame idle stops by itself. No
+  interaction to manage.
+- **The dirty list must not be used for it.** Two cells per step, four
+  steps a tile, is well inside DIRTY_MAX, but the walk is a sequence over
+  TIME and the dirty list is a set of cells owed a repaint -- it has no
+  notion of order. Drive the walk like `scroll_view()` does its sub-steps,
+  or like the enemy turn does its beats.
+- **The view has to follow** if the destination is off-screen, which means
+  a scroll interleaved with the walk. Both push VBUF; doing them in the
+  same frame needs care, and the simplest correct answer is to finish the
+  walk within the current view and scroll only when it leaves it.
+- **The move sound fires once per move today** (SFX_MOVE). Per step it
+  would need rate limiting, or it becomes a machine-gun; per tile is
+  probably the right granularity.
+
+#### What it buys, and what it costs
+
+It makes movement legible -- the player sees which way a unit went, which
+matters most for the ENEMY turn, where a unit appearing somewhere new is
+currently the only evidence that anything happened.
+
+The cost is a blocking sequence on every move, of every unit, on both
+turns. At four steps a tile and three tiles of movement that is twelve
+draws of two cells, and the enemy moves several units a turn. If it drags,
+the dial is steps per tile (drop to two, 16 pixels) before it is anything
+structural.
 
 ### Tiles
 

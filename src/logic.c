@@ -241,6 +241,22 @@ uint8_t level;
 uint16_t turn;
 uint8_t player_won;
 uint8_t boom_cell_at = NO_CELL;  /* a unit died here; game.c animates it */
+uint8_t walking;                 /* a unit is walking: no reach shown  */
+
+/* Campaign score: the sum of every level's score so far.  Levels are
+   scored against a par (SCORE_PAR) rather than against each other, which
+   is crude but is the only scheme that works without knowing how hard a
+   level is -- and a par is at least a number the player can beat. */
+uint16_t campaign_score;
+
+/* This level's score: par less the turns spent, and never negative.  A
+   level taken in three turns is worth more than one taken in fifteen,
+   which is the whole point; one that drags past par is worth nothing
+   rather than costing the campaign. */
+uint8_t level_score(void)
+{
+    return (uint8_t)(turn >= SCORE_PAR ? 0 : (SCORE_PAR - turn));
+}
 uint8_t outcome_ready;
 
 /* --- Locators for the hand-placed arrays -----------------------------
@@ -600,6 +616,7 @@ uint8_t in_blue(uint8_t cell)
     uint8_t from, dx, dy;
 
     if (selected == NO_UNIT) return 0;
+    if (walking) return 0;          /* the choice has been made */
 
     if (unit_movement[u_type[selected]])
         return cost[cell] != NO_COST;
@@ -923,11 +940,65 @@ void deselect(void)
    and enemy-selection mode is now open, in which case the unit is STILL
    held -- the strike is part of the same action and the player has not
    finished giving it. */
+/* Walk `u` from where it stands to `to`, one visual step at a time.
+   Vertical moves take two steps -- the upper half of a cell, then the
+   lower -- because a vertical step is two characters and that is half a
+   cell.  Horizontal moves take one, four characters being a whole cell.
+   Either way the sprite is inside exactly one cell at every moment
+   (docs/DESIGN.md § A unit is always inside exactly one cell). */
+static void walk_to(uint8_t u, uint8_t to)
+{
+    uint8_t path[WALK_MAX];
+    uint8_t n = walk_path(u_cell[u], to, path);
+    uint8_t i, at = u_cell[u];
+
+    /* The order has been decided: the unit is going, so the choice of
+       where is no longer on offer.  Leaving the blue wash up during the
+       walk reads as the unit still deciding.
+
+       A FLAG rather than dropping `selected`: the unit stays held, because
+       a move that ends beside an enemy opens enemy-selection mode
+       immediately afterwards and attack() reads `selected`.  Clearing it
+       here broke that. */
+    walking = 1;
+    render_clear_highlights();
+
+    for (i = 0; i < n; i++) {
+        uint8_t next = path[i];
+        uint8_t vertical = col_of[next] == col_of[at];
+
+        if (vertical) {
+            /* Half a cell first.  Going UP that half is the top of the
+               cell being left; going DOWN it is the top of the one being
+               entered -- either way it is the half nearer the two. */
+            if (next < at) {
+                render_walk_step(at, at, 1);
+            } else {
+                occupancy[at] = NO_UNIT;
+                occupancy[next] = u;
+                u_cell[u] = next;
+                render_walk_step(at, next, 1);
+                at = next;
+                render_walk_step(at, at, 0);
+                continue;
+            }
+        }
+        occupancy[at] = NO_UNIT;
+        occupancy[next] = u;
+        u_cell[u] = next;
+        render_walk_step(at, next, 0);
+        at = next;
+    }
+    render_walk_end();
+    walking = 0;
+}
+
 uint8_t move_selected_to(uint8_t to)
 {
     uint8_t u = selected;
     uint8_t from = u_cell[u];
 
+    walk_to(u, to);
     occupancy[from] = NO_UNIT;
     occupancy[to] = u;
     u_cell[u] = to;
@@ -955,6 +1026,53 @@ void move_selected(void)
    fewest movement points (docs/DESIGN.md § Which square does it move to).
    The player is not choosing this square and will be counter-attacked on
    it, so the game owes them the good one. */
+/* The route a unit takes to `to`, as cells, in the order it walks them.
+   Returns how many were written; `out` wants room for WALK_MAX.
+
+   cost[] is the flood fill from where the unit stands, so every step of it
+   is one cheaper than the last -- walking DOWNHILL from the destination
+   arrives back at the unit, and reversing that gives the forward route.
+   No path is stored anywhere; it is recomputed from the fill that the
+   selection already paid for.
+
+   Downhill is not unique, so the tie-break is a FIXED order and
+   VERTICAL FIRST (docs/DESIGN.md § Walking a unit to its destination):
+   vertical steps are the smooth ones, so a move opens with the part that
+   reads as motion.  Never random -- the same move must always take the
+   same route, or nothing about it is learnable and an odd-looking move
+   stops being reportable. */
+uint8_t walk_path(uint8_t from, uint8_t to, uint8_t *out)
+{
+    uint8_t n = 0, c = to, i;
+
+    while (c != from && n < WALK_MAX) {
+        uint8_t col = col_of[c], row = (uint8_t)(c / GRID_COLS);
+        uint8_t best = NO_CELL;
+
+        out[n++] = c;
+
+        /* North, south, west, east: vertical before horizontal. */
+        if (row > 0 && cost[c - GRID_COLS] < cost[c])
+            best = (uint8_t)(c - GRID_COLS);
+        else if (row < GRID_ROWS - 1 && cost[c + GRID_COLS] < cost[c])
+            best = (uint8_t)(c + GRID_COLS);
+        else if (col > 0 && cost[c - 1] < cost[c])
+            best = (uint8_t)(c - 1);
+        else if (col < GRID_COLS - 1 && cost[c + 1] < cost[c])
+            best = (uint8_t)(c + 1);
+
+        if (best == NO_CELL) break;     /* no route: caller just jumps */
+        c = best;
+    }
+    /* Collected backwards, so turn it round. */
+    for (i = 0; i < (uint8_t)(n / 2); i++) {
+        uint8_t t = out[i];
+        out[i] = out[n - 1 - i];
+        out[n - 1 - i] = t;
+    }
+    return n;
+}
+
 uint8_t best_adjacent(uint8_t enemy)
 {
     uint8_t c = col_of[enemy], r = (uint8_t)(enemy / GRID_COLS);
@@ -1113,11 +1231,16 @@ static void ai_move(uint8_t u)
     }
 
     if (best != from) {
-        occupancy[from] = NO_UNIT;
-        occupancy[best] = u;
-        u_cell[u] = best;
-        mark_dirty(col_of[from], (uint8_t)(from / GRID_COLS));
-        mark_dirty(col_of[best], (uint8_t)(best / GRID_COLS));
+        /* The SAME walk the player's units use.  It was a direct commit
+           here -- occupancy moved and two cells marked dirty -- so an
+           enemy simply appeared somewhere new, silently.
+
+           That is the case the animation exists for: on the player's own
+           turn they know where they sent a unit, and on the enemy's turn
+           the walk is the only evidence of what happened.  Having two
+           routines for one action is how that came to be missing from the
+           half that needed it more. */
+        walk_to(u, best);
     }
 }
 
