@@ -45,45 +45,58 @@ def basic_line(num, body):
     return struct.pack('>H', num) + struct.pack('<H', len(body) + 1) + body + b'\x0D'
 
 
-def loader(clear_addr, usr_addr, n_blocks, banks):
-    """CLEAR, then one LOAD ""CODE per block, then RANDOMIZE USR.
+# src/bankcopy.asm, assembled standalone into the PRINTER BUFFER.  Fixed
+# addresses so the BASIC loader can name them without reading a link map
+# that does not exist until after the link.
+#
+# 0x5F00, just above the loader's CLEAR.  Everything below RAMTOP belongs
+# to the ROM or BASIC: 0x5AFA is the attribute file, and 0x5B00 is the
+# 128K's system variables (BANKM itself is at 0x5B5C).  Both crashed.
+BC_PARAMS = 0x5F00          # bank, length, destination
+BC_ENTRY  = 0x5F05
+STAGE     = 0x4000          # the screen: the only free 6912 bytes there is
 
-       A BANK block is loaded with the bank paged in at 0xC000 and paged
-       out again afterwards, which BASIC can do with `OUT 32765`.
 
-       A 48K runs the same two OUTs harmlessly -- it has no paging -- and
-       then loads the block into 0xC000, which on a 48K is spare RAM
-       (docs/PLAN.md P11).  It costs the tape time and nothing else, which
-       is far simpler than branching on machine type in BASIC, and means
-       one loader for every machine."""
+def loader(clear_addr, usr_addr, n_blocks, banks, dest=0):
+    """CLEAR, the bank blocks, then the program, then RANDOMIZE USR.
+
+       BANK BLOCKS COME FIRST, and before any code block, for two reasons.
+
+       They stage through the SCREEN -- the only free 6912 bytes on the
+       machine -- so doing them first means there is nothing else in
+       memory for the staging to land on.  And the copier itself has to be
+       resident before it can be called, so something has to be ordered
+       anyway; putting the whole bank phase up front makes that explicit
+       rather than incidental.
+
+       The load shows as noise on the screen, which is honest: something
+       is loading, and the next block along overwrites it.
+
+       BASIC never writes 0x7FFD.  It LOADs, POKEs the parameters and
+       calls the copier; the paging is machine code, with the ROM bit kept
+       and BANKM updated.  BASIC doing the paging failed three times --
+       see .claude/skills/zx-loader."""
     line = 10
     prog = basic_line(line, bytes([CLEAR]) + number(clear_addr))
+
+    if banks:
+        line += 10                          # the copier itself
+        prog += basic_line(line, bytes([LOAD, ord('"'), ord('"'), CODE]))
+    for bank, data in banks:
+        line += 10                          # the blob, into the screen
+        prog += basic_line(line, bytes([LOAD, ord('"'), ord('"'), CODE]))
+        for off, val in ((0, bank),
+                         (1, len(data) & 0xFF), (2, len(data) >> 8),
+                         (3, dest & 0xFF), (4, dest >> 8)):
+            line += 10
+            prog += basic_line(line, bytes([POKE]) + number(BC_PARAMS + off)
+                               + b"," + number(val))
+        line += 10
+        prog += basic_line(line, bytes([RANDOMIZE, USR]) + number(BC_ENTRY))
+
     for i in range(n_blocks):
         line += 10
         prog += basic_line(line, bytes([LOAD, ord('"'), ord('"'), CODE]))
-    for bank in banks:
-        line += 10
-        # POKE BANKM as well as OUT, and in that order.
-        #
-        # 0x7FFD is write-only, so the ROM keeps its own copy at BANKM
-        # (23388 / 0x5B5C) and writes it back whenever it touches paging
-        # -- the interrupt handler included.  BASIC's OUT sets the port
-        # and not the variable, so the ROM undoes the switch part way
-        # through the LOAD and the bytes land in whatever bank BANKM
-        # still names.  That is bank 0, and bank_probe read 2 ("readable,
-        # wrong contents") every time.
-        #
-        # Bit 4 stays CLEAR: it is the ROM select, and this runs while
-        # the 128K editor is executing the LOAD.  Setting it swaps the 48K
-        # ROM in underneath the editor mid-load.
-        line += 10
-        prog += basic_line(line, bytes([LOAD, ord('"'), ord('"'), CODE]))
-        line += 10
-        prog += basic_line(line, bytes([POKE]) + number(0x5B5C)
-                           + b"," + number(0))
-        line += 10
-        prog += basic_line(line, bytes([OUT]) + number(0x7FFD)
-                           + b"," + number(0))
     line += 10
     prog += basic_line(line, bytes([RANDOMIZE, USR]) + number(usr_addr))
     return prog
@@ -112,6 +125,11 @@ def main():
     ap.add_argument('--name', default='zxstrategy')
     ap.add_argument('--code', nargs=2, action='append', metavar=('ADDR', 'FILE'),
                     required=True, help='load address and binary, repeatable')
+    ap.add_argument('--bank-dest', default='0',
+                    help='offset within the bank (default 0; avoid 0, which '
+                         'collides with hw_detect on this project)')
+    ap.add_argument('--bankcopy', metavar='FILE',
+                    help='src/bankcopy.asm assembled; required with --bank')
     ap.add_argument('--bank', nargs=2, action='append', default=[],
                     metavar=('BANK', 'FILE'),
                     help='RAM bank number and binary, loaded at 0xC000 with '
@@ -121,12 +139,17 @@ def main():
 
     codes = [(int(addr, 0), open(f, 'rb').read()) for addr, f in a.code]
     banks = [(int(b, 0), open(f, 'rb').read()) for b, f in a.bank]
+    if banks and not a.bankcopy:
+        sys.exit('mktap: --bank needs --bankcopy: BASIC cannot page safely, '
+                 'so the copier has to be on the tape too')
+    for bank, data in banks:
+        if len(data) > 0x1B00:
+            sys.exit('mktap: %d bytes will not stage through the screen '
+                     '(6912 max)' % len(data))
     for bank, data in banks:
         if not 0 <= bank <= 7:
             sys.exit('mktap: bank %d is not 0-7' % bank)
-        if 0xC000 + len(data) > 0x10000:
-            sys.exit('mktap: %d bytes at 0xC000 overruns the bank'
-                     % len(data))
+
 
     for i, (addr, data) in enumerate(codes):
         end = addr + len(data)
@@ -160,15 +183,21 @@ def main():
                          'of the earlier one'
                          % (addr, end, other, other + len(odata)))
 
-    prog = loader(a.clear, a.usr, len(codes), [b for b, _ in banks])
+    prog = loader(a.clear, a.usr, len(codes), banks, int(a.bank_dest, 0))
     tap = header(0, a.name[:10], len(prog), 10, len(prog))   # p1=autostart line
     tap += block(bytes([0xFF]) + prog)
+    # Bank phase first: the copier, then each blob staged through the
+    # screen.  The loader above expects exactly this order.
+    if banks:
+        cp = open(a.bankcopy, 'rb').read()
+        tap += header(3, a.name[:10], len(cp), BC_PARAMS, 0x8000)
+        tap += block(bytes([0xFF]) + cp)
+    for bank, data in banks:
+        tap += header(3, a.name[:10], len(data), STAGE, 0x8000)
+        tap += block(bytes([0xFF]) + data)
+
     for addr, data in codes:
         tap += header(3, a.name[:10], len(data), addr, 0x8000)
-        tap += block(bytes([0xFF]) + data)
-    # Bank blocks come last, in the order the loader pages them.
-    for bank, data in banks:
-        tap += header(3, a.name[:10], len(data), 0xC000, 0x8000)
         tap += block(bytes([0xFF]) + data)
 
     open(a.output, 'wb').write(tap)

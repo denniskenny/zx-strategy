@@ -30,10 +30,10 @@
     PUBLIC  _tiles_view_zx0
     defc    _tiles_view_zx0 = 0x61AD
     PUBLIC  _units_map_zx0
-    defc    _units_map_zx0 = 0x6331
+    defc    _units_map_zx0 = 0x6340
     PUBLIC  _units_view_zx0
-    defc    _units_view_zx0 = 0x639D
+    defc    _units_view_zx0 = 0x63AC
     PUBLIC  _units_view_mask_zx0
-    defc    _units_view_mask_zx0 = 0x64A2
+    defc    _units_view_mask_zx0 = 0x64B1
     PUBLIC  _units_view_f2_zx0
-    defc    _units_view_f2_zx0 = 0x64D3
+    defc    _units_view_f2_zx0 = 0x64E2

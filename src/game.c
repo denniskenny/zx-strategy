@@ -60,6 +60,7 @@
 #include "../config/game_config.h"
 #include "../include/board.h"
 #include "../include/game.h"
+#include "../include/hw.h"
 #include "../include/gfx.h"
 #include "../include/input.h"
 #include "../include/music.h"
@@ -257,6 +258,20 @@ static void enter_state(uint8_t s)
             break;
         case ST_OVER:
             render_over();
+            break;
+        case ST_CUTSCENE:
+            render_cutscene();
+            /* lowlands_play() directly, NOT play_music().
+             *
+             * play_music() brackets the tune with busy_on()/busy_off(),
+             * which draw chrome and PRESENT -- and presenting flips to
+             * the shadow screen, which the cutscene never drew into.  The
+             * picture vanished and the display was left on a screen with
+             * nothing on it, which reads as a lock.
+             *
+             * The tune blocks either way; the picture just has to survive
+             * it. */
+            lowlands_play();
             break;
         case ST_WON:
             render_won();
@@ -469,7 +484,9 @@ static void handle_input(void)
                    screen and enter_state() flushes the keyboard. */
                 busy_on("DEPLOYING...");
                 load_map();
-                set_state(ST_PLAY);
+                /* Through the cutscene on a 128K; a 48K has no bank to
+                   read it from and goes straight to the board. */
+                set_state(is_128k ? ST_CUTSCENE : ST_PLAY);
             }
             break;
 
@@ -645,7 +662,7 @@ static void handle_input(void)
                     turn = 1;
                     busy_on("DEPLOYING...");
                     load_map();
-                    set_state(ST_PLAY);
+                    set_state(is_128k ? ST_CUTSCENE : ST_PLAY);
                 }
             }
             break;
@@ -661,6 +678,14 @@ static void handle_input(void)
                 key_down = any_key() ? (uint8_t)(key_down + 1) : 0;
                 if (key_down >= 2) set_state(ST_TITLE);
             }
+            break;
+
+        case ST_CUTSCENE:
+            /* Any key moves on: the level behind the picture is already
+               loaded and waiting.  enter_state() flushed the keyboard,
+               so the press that started the level cannot carry through
+               and skip this immediately. */
+            if (edge & (ACT_GO | ACT_BACK)) set_state(ST_PLAY);
             break;
     }
 

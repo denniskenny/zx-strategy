@@ -13,6 +13,11 @@ int main(void)
 {
     /* Both the 128K bank-switching test and the +2A/+3 floating bus
        probe need paging enabled, so they must run first. */
+    /* NOTE for anything reading tape-loaded banked data: hw_detect()
+     * proves a machine is a 128K by writing to BANK 1 AT 0xC000 and
+     * reading it back through another bank, so 0xC000 in banks 1 and 2
+     * is scratch from here on.  The cutscene blob is loaded at BANK_DEST
+     * (0x0100) for exactly that reason -- see the Makefile. */
     hw_detect();
     vsync_detect();
 

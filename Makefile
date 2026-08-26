@@ -26,7 +26,7 @@ UNAME_S := $(shell uname -s)
 # enforces it.  Above 0xC000 goes data, or a bank — never code.
 # The BASIC loader must CLEAR below the lowest thing it loads, or BASIC's
 # own workspace sits on top of the asset block at 0x6000.
-CLEAR_ADDR = 24575
+CLEAR_ADDR = 24319      # 0x5EFF: leaves 0x5F00 for the bank copier
 APP        = zxstrategy
 ORG_DEF    = -zorg=32768
 USR_ADDR   = 32768
@@ -264,9 +264,41 @@ src/assets_low.asm src/assets_low_syms.asm src/logic_org.asm logic_org.addr: $(G
 $(ASSETS_LOW_BIN): src/assets_low.asm
 	PATH=$(Z88DK)/bin:$$PATH $(Z88DK)/bin/z88dk-z80asm -b -O. -o$@ src/assets_low.asm
 
-$(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE) $(ASSETS_LOW_BIN) src/assets_low_syms.asm src/logic_org.asm logic_org.addr tools/mktap.py
+# --- The bank phase -------------------------------------------------
+# BASIC cannot page safely, so the tape carries a 58-byte stub that does
+# it (src/bankcopy.asm, .claude/skills/zx-loader).  BANK_BLOB is what goes
+# into the bank; it is a sentinel while the route is being proven.
+#
+# These arguments belong HERE and not in a hand-typed command line.  Five
+# test taps in a row failed because the LOGIC address was typed as 0x6800
+# when the build computes 0x6600 -- the section loaded above where it was
+# linked and the game returned to BASIC instantly, with nothing at all
+# wrong with the banking under test.
+BANKCOPY_BIN = $(APP)_bankcopy.bin
+BANK_NUMBER  = 1
+# Offset WITHIN the bank.  Not zero: 0xC000 is contested -- hw_detect()
+# writes bank 1 at 0xC000 to prove the machine is a 128K, and a sentinel
+# left there was reliably gone by the time anything looked for it.  The
+# copier has always taken a destination; using it costs nothing and makes
+# the payload's survival independent of who else scribbles on offset 0.
+BANK_DEST    = 0x0100
+BANK_BLOB    = $(APP)_cutscene.zx0
+
+$(BANKCOPY_BIN): src/bankcopy.asm
+	PATH=$(Z88DK)/bin:$$PATH $(Z88DK)/bin/z88dk-z80asm -b -O. -o$@ src/bankcopy.asm
+
+# The cutscene screen, ZX0'd.  6912 -> ~2500 bytes, which fits nowhere in
+# addressable memory -- hence the bank.  It is read once, decompressed
+# straight to 0x4000 and never touched again: a SWAP, which is what banks
+# are good for (.claude/skills/zx-loader).
+$(BANK_BLOB): assets/action-force.scr
+	$(ZX0) -f $< $@
+
+$(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE) $(ASSETS_LOW_BIN) $(BANKCOPY_BIN) $(BANK_BLOB) src/assets_low_syms.asm src/logic_org.asm logic_org.addr tools/mktap.py
 	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o $(APP) $(SRCS) $(MUSIC_LINKABLE) $(LDFLAGS)
 	$(PYTHON) tools/mktap.py $(APP).tap --name $(APP) --clear $(CLEAR_ADDR) --usr $(USR_ADDR) \
+	    --bankcopy $(BANKCOPY_BIN) \
+	    --bank $(BANK_NUMBER) $(BANK_BLOB) --bank-dest $(BANK_DEST) \
 	    --code 0x6000 $(ASSETS_LOW_BIN) \
 	    --code $$(cat logic_org.addr) $(APP)_LOGIC.bin \
 	    --code $(USR_ADDR) $(APP)

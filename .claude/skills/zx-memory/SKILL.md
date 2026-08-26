@@ -1,7 +1,7 @@
 ---
 name: zx-memory
 description: Place code, graphics and buffers correctly on the ZX Spectrum — the 48K/128K/+3 memory map, contended vs uncontended RAM, bank switching and the ROM-select trap, and the linking rules that stop generated asset headers being duplicated into every translation unit.
-when_to_use: "out of memory" or "checkmem failed" or "where should this buffer go" or "add a graphic" or "new asset" or "banking" or "paging" or "contended memory" or "0x7FFD" or "duplicate symbol" or "undefined symbol" or "it works on 48K but not 128K" or "crashes on the +3"
+when_to_use: "out of memory" or "checkmem failed" or "where should this buffer go" or "add a graphic" or "new asset" or "banking" or "paging" or "contended memory" or "0x7FFD" or "duplicate symbol" or "undefined symbol" or "it works on 48K but not 128K" or "crashes on the +3" (for building the .tap itself, see zx-loader)
 allowed-tools: Bash Read Write Edit
 effort: medium
 ---
@@ -359,65 +359,25 @@ border green): stack lands at 0x5FA4, below the new code base, and
 0xDB00-0xFFFF round-trips every byte.  Worth confirming rather than
 assuming, because a +3 had crashed on that region before.
 
-## `org` in a user module places the section but DROPS the data
+## Getting data to an address is a separate problem
 
-Tempting idea: put the ZX0 asset blobs in a hand-written `.asm` at a fixed
-address in contended RAM, freeing RODATA from the 16 KB code budget at no
-speed cost — the blobs are read once, at boot.
+Placing something correctly and it ARRIVING there are different things,
+and the gap between them has cost this project three investigations. A
+section can link perfectly and ship nothing; a bank block can reach the
+tap with no header and never be loaded; a boot can render perfectly with
+the data absent.
 
-```asm
-    SECTION ORGPROBE
-    org     0x7D00
-    PUBLIC  _org_probe_blob
-_org_probe_blob:
-    defb    0xA5, 0x5A, 0xC3, 0x3C
-```
+**See `.claude/skills/zx-loader`** for the whole of it: emitting a block,
+the appmake behaviours that drop one silently, loading into a bank at all,
+and how to prove the bytes arrived.
 
-z80asm honours it perfectly:
-
-```
-__ORGPROBE_head = $7D00
-__ORGPROBE_size = $0004
-_org_probe_blob = $7D00
-```
-
-**And `-create-app` then throws the data away.** The tap came out
-16 471 bytes — byte-for-byte the size it was without the section — and
-0x7D00 read `00 00 00 00` on a real load. No warning, no error. C code
-reading that array would get zeros, so every graphic would decompress
-from nothing.
-
-`-create-app` emits ONE contiguous block from CRT_ORG_CODE. A section
-placed outside that range is addressed but never packaged.
-
-To actually do this you need a **multi-block tap**: `-split-bin` to get the
-section as its own binary, `appmake +zx` to wrap it as a second CODE
-block, and a BASIC loader with two LOADs. That is a real piece of work,
-not a pragma — budget for it accordingly.
-
-**The general lesson: a correct link map does not mean the bytes ship.**
-Check the tap size and read the address back on a real load. This one
-would have failed silently and looked like a decompressor bug.
-
-### The bank route gets further, but still needs a loader
-
-`SECTION CODE_1` in a user module *does* reach the tap, unlike `org`:
-
-```
-_bank_probe_blob = $1C000       bank 1, offset 0xC000
-tap 16471 -> 17499 bytes
-```
-
-But it arrives as a **headerless data block**, and the generated 30-byte
-BASIC loader does a single `LOAD ""CODE`. Nothing loads it. appmake emits
-banked blocks for a program that loads its own banks at runtime.
-
-`LOAD ""CODE` cannot read a headerless block — it wants a header. A custom
-loader has to either make appmake emit headers for the extra blocks, or
-call the ROM's LD-BYTES with the headerless flag.
-
-**Parse the tap, do not trust the size.** `16471 -> 17499` said the bytes
-shipped; only dumping the block headers showed nothing would load them.
+The one rule worth repeating here, because it is a memory-map decision
+rather than a loader one: **bank things you SWAP, keep things you
+ALTERNATE.** A bank is storage, not addressable memory -- reading one
+evicts every buffer at 0xC000 -- so it suits data needed one at a time
+(a level, a tune, an alternate tileset, decompressed into a buffer that
+already exists) and not data needed alongside other data (a second
+animation frame, which must be live at the same time as the first).
 
 ## 0x6000-0x7FFF is not free: MEM_VBUF lives there (or did)
 
@@ -545,6 +505,7 @@ bug is model-specific, reproduce it on that model before theorising.
 
 ## Related
 
+- `.claude/skills/zx-loader` — building the .tap, code blocks, banks, proof
 - `.claude/skills/zx-tiles` — the converters and the .zxp format
 - `.claude/skills/floating-bus-vsync` — why code must be uncontended
 - `.claude/skills/zesarux-test` — driving each model headlessly

@@ -251,6 +251,7 @@ void render_tick(void);         /* one frame's worth of owed repaints   */
 void render_title(void);
 void render_play(void);
 void render_map(void);
+void render_cutscene(void);   /* the banked screen, onto the display */
 void render_over(void);
 void render_won(void);
 
