@@ -645,6 +645,24 @@ void draw_status(const char *label, uint8_t x, uint8_t y)
    clamping to the board: that is the whole point of the sea, and without
    it the cursor could never reach a corner — which is where both bases
    are. */
+/* Bring the window to a world cell and repaint, before something there
+   starts moving.
+ *
+ * The enemy turn used to centre the view AFTER enemy_step() returned --
+ * which was fine when a move was instant, and wrong the moment moves
+ * became animated: the unit walked while the camera was still on the
+ * previous one, often off-screen entirely, and the view then jumped to
+ * where it had finished.  The walk is the only evidence the player gets
+ * of what the enemy did, so it has to be watched, not inferred. */
+void render_view_to(uint8_t wx, uint8_t wy)
+{
+    cursor_x = wx;
+    cursor_y = wy;
+    set_page();
+    render_play();
+    render_hint("      ENEMY TURN");
+}
+
 void set_page(void)
 {
     page_x = (int8_t)(cursor_x - CURSOR_VX);

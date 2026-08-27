@@ -963,6 +963,13 @@ static void walk_to(uint8_t u, uint8_t to)
     walking = 1;
     render_clear_highlights();
 
+    /* An ENEMY walking off-screen is a move the player never sees, and
+       the walk exists precisely so they do.  Bring the window to it
+       first; the player's own units are already in view because the
+       cursor is on them. */
+    if (u_flags[u] & U_SIDE)
+        render_view_to(col_of[u_cell[u]], (uint8_t)(u_cell[u] / GRID_COLS));
+
     for (i = 0; i < n; i++) {
         uint8_t next = path[i];
         uint8_t vertical = col_of[next] == col_of[at];

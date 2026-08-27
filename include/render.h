@@ -205,6 +205,7 @@ void draw_status(const char *label, uint8_t x, uint8_t y);
 
 /* --- The play view ---------------------------------------------------- */
 void set_page(void);            /* page the view onto the cursor        */
+void render_view_to(uint8_t wx, uint8_t wy);  /* centre, then repaint   */
 void draw_view(void);           /* every cell, pixels and colour        */
 void scroll_view(int8_t dx, int8_t dy);  /* push the window one cell    */
 void render_boom(uint8_t wx, uint8_t wy); /* a unit died here          */
