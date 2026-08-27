@@ -1917,10 +1917,14 @@ void render_title(void)
 
     set_attr_rect(0, 3, 32, 4, ATTR_TEXT);
 
-    print_at(1, 10, "SPACE / FIRE   START");
+    print_at(1, 10, "SPACE / FIRE 1   START");
     set_attr_rect(0, 10, 32, 1, ATTR_HINT);
 
-    print_at(1, 20, "QAOP / KEMPSTON TO MOVE");
+    /* The whole control scheme, in the two lines it takes.  Every screen
+       obeys it, so this is the only place it needs saying. */
+    print_at(1, 19, "QAOP / KEMPSTON  MOVE");
+    print_at(1, 20, "SPACE / FIRE 1   DO");
+    print_at(1, 21, "ENTER / FIRE 2   BACK");
     set_attr_rect(0, 20, 32, 1, ATTR_TEXT);
 
     /* The hint row is where the tune's banner goes, and where it is
@@ -1952,7 +1956,7 @@ void render_map(void)
     solid_map_cell(cursor_x, cursor_y, ATTR_HINT);  /* the play cursor */
     solid_map_cell(cur_x, cur_y, ATTR_CURSOR);
     draw_status("CURSOR :", cur_x, cur_y);
-    render_hint("QAOP LOOK AROUND  SPACE CLOSE");
+    render_hint("QAOP LOOK AROUND  ENTER BACK");
     render_show();
 }
 
@@ -1999,6 +2003,6 @@ void render_won(void)
               (uint8_t)(campaign_score > 999 ? 999 : campaign_score), 3);
     set_attr_rect(0, 9, 32, 4, ATTR_TEXT);
 
-    render_hint("PRESS A KEY");
+    render_hint("SPACE / FIRE 1");
     render_show();
 }

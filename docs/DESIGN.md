@@ -13,6 +13,7 @@ Most of it describes a game that runs today. These parts do not yet:
 | § Actions — the attack half | **Built**, including move-into-contact-and-strike as one action. |
 | § Adjacency, counter-attack and wounded damage | **Built.** All three rules, the resolution order, and the AI's exchange scoring. Balance untested in a full campaign. |
 | § Selection and highlighting | **Built**, including enemy-selection mode, best-cover approach, and magenta for enemy reach. `O`/`P` cycling is gone. |
+| § Action and Cancel | **Built.** SPACE/fire 1 acts, ENTER/fire 2 cancels, on every screen. |
 | § Walking a unit to its destination | **Not built.** Needs a path and a beat of its own; two-character vertical and four-character horizontal steps keep the sprite inside one cell throughout. |
 | § Sprite masks and animation | **Not built.** Masks and a 128K-only second frame. The dirty-cell budget is the open problem, not the data. |
 | § Stalemate | **Not built** as such — `X` already quits to the title, which is the whole mechanism, but nothing detects the stalemate. |
@@ -45,6 +46,82 @@ Because the bases sit in opposite corners, every map has to keep those corners p
 The initial local view will be centered on the player's base.
 
 Each subsequent odd-numbered level will have an additional unit of each type.
+
+### Action and Cancel
+
+**Two keys run the whole game, and every screen obeys them.**
+
+| | keyboard | Kempston |
+|---|---|---|
+| **ACTION** — yes, pick up, confirm, advance | `SPACE` | fire 1 |
+| **CANCEL** — no, put down, back out | `ENTER` | fire 2 *if present* |
+
+**A standard Kempston has ONE button.** Bits 0-4 of port 0x1F are
+right/left/down/up/fire; bit 5 is a non-standard extension that most
+hardware does not provide and ZEsarUX's emulated Kempston does not either.
+src/input.c reads it, so a two-button stick gets Cancel for free -- but
+**nothing may depend on it**, and `ENTER` is the Cancel a joystick player
+is actually guaranteed.
+
+tests/p0_state_walk.py found this: the joystick pass could pick a unit up
+and never put it down, because Cancel was unreachable. A one-button stick
+can move, select and confirm, and needs the keyboard to say no.
+
+Nothing else is a general control. `QAOP` or the stick moves the cursor,
+`M` opens the overview from the board, `X` leaves a level -- and that is
+the entire scheme. It fits in three lines on the title screen, which is
+the test it has to pass: a control that will not fit there is a control
+the player has to be told about somewhere else.
+
+#### The Ladder
+
+Cancel is not a single action, it is a **ladder**. It backs out of the
+innermost open context and only reaches the next rung when there is
+nothing left to back out of:
+
+```
+enemy-selection open   ->  close it, keep the unit held
+unit held              ->  put it down
+nothing held           ->  end the turn
+```
+
+This ordering matters more than it looks. Reaching for "end turn" while
+looking at a unit's movement range should not throw the turn away --
+ending a turn cannot be undone, whereas putting a unit down costs
+nothing. The safe rung comes first, always.
+
+**`X` is deliberately NOT on the ladder.** Leaving a level and backing
+out of an order are different intentions, and one should never be
+reachable by repeating the other. (A confirmation for `X`, and for ending
+a turn, is still to come.)
+
+#### There is no "press any key"
+
+Every prompt takes ACTION, including the campaign-complete screen, which
+used to accept any key at all with a two-sample debounce to distinguish
+the press that won from a fresh one. `enter_state()` flushes the keyboard
+on every transition, so the edge detector already does that work -- and
+"press any key" was the single place the game asked for something it
+never asked for anywhere else.
+
+#### What this replaced, and why
+
+Three habits had accumulated, each defensible alone:
+
+- **`ENTER` ended the turn outright.** The most destructive action in the
+  game sat on a bare keypress, one rung from where a player's hand
+  already was.
+- **`ENTER` and `X` ran SEPARATE ladders** ending in different places --
+  end turn for `ENTER`, quit for `X`. The same gesture meant two
+  different things depending on which device you were holding, and the
+  joystick could not end a turn at all.
+- **`Z` and `X` shadowed fire 1 and fire 2** on the keyboard. Harmless
+  until `X` needed to mean something else, at which point one key was
+  Cancel and Quit at the same time.
+
+The rule is worth more than any of them: **one gesture, one meaning,
+everywhere.** A player who learns two keys on the title screen has
+learned the whole game.
 
 ### Cursor and movement
 

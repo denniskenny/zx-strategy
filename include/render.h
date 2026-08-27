@@ -166,9 +166,9 @@
    it overwrites whatever the banner left.  ST_TITLE keeps its key list
    up at rows 10-11 and leaves this row blank. */
 #if DEBUG_STATE_WALK
-#define PLAY_HINT   "SPC MOVE ENTER TURN MAP W/L END"
+#define PLAY_HINT   "FIRE ORDER  ENTER BACK  M MAP"
 #else
-#define PLAY_HINT   "SPACE MOVE  ENTER END TURN  MAP"
+#define PLAY_HINT   "SPACE ORDER  ENTER BACK  M MAP"
 #endif
 #define TITLE_HINT  ""      /* render_hint() pads; see it */
 

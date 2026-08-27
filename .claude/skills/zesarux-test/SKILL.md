@@ -34,9 +34,16 @@ On macOS it configures for cocoa + coreaudio with ZRCP and contended memory enab
 ```bash
 zesarux --vo null --ao null --enable-remoteprotocol --machine 48k \
   --noconfigfile --quickexit \
+  --joystickemulated Kempston \
   --romfile ~/projects/zesarux/src/48.rom \
   /Users/Kennyd/projects/zx-strategy/zxstrategy.tap &
 ```
+
+**`--joystickemulated Kempston` if the test drives the joystick.** The
+ninth byte of `set-ui-io-ports` is the Kempston port, but the game only
+reads it when `hw_detect()` found a joystick -- and headless ZEsarUX has
+none by default. Without the flag a joystick test passes while pressing
+nothing.
 
 Use **absolute paths**. Wait **6 seconds** before connecting. Add `--realvideo` for accurate per-scanline ULA emulation. Clean up with `pkill -f zesarux`.
 

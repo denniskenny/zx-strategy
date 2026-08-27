@@ -11,9 +11,16 @@ would bank page 7 over its tail.  This is a 48K test, so that is fine —
 but do not hand that tap to a 128K.  See the Makefile.
     zesarux --vo null --ao null --enable-remoteprotocol --machine 48k \
         --noconfigfile --quickexit --accelerate-loading \
+        --joystickemulated Kempston \
         --romfile ~/projects/zesarux/src/48.rom \
         $PWD/zxstrategy.tap &
     python3 tests/p0_state_walk.py
+
+--joystickemulated Kempston IS REQUIRED.  The walk runs twice, once on
+the keyboard and once on the joystick, and without it hw_detect() finds
+no Kempston -- so scan_input() never reads the port and the joystick pass
+silently tests nothing at all.  It does not fail; it just never presses
+anything.
 
 `--accelerate-loading` is worth the flag: the tape is most of the wall
 clock otherwise.  No sleep is needed before starting — the script waits
@@ -123,19 +130,36 @@ def rd(s, a, n):
     return bytes.fromhex(x[:n * 2])
 
 
-KEY = {'W': (2, 1), 'L': (6, 1), 'SPACE': (7, 0)}
+# Keyboard: (half-row index, bit), active LOW.
+KEY = {'W': (2, 1), 'L': (6, 1), 'SPACE': (7, 0),
+       'ENTER': (6, 0), 'X': (0, 2)}
+
+# Kempston: the ninth byte of set-ui-io-ports, active HIGH.
+KEMP = {'FIRE1': 0x10, 'FIRE2': 0x20}
+
 NONE = 'ffffffffffffffff00'
 
 
 def io(s, k=None):
-    """Assert one key, or release everything when k is None."""
+    """Assert one key or one joystick button, or release everything.
+
+       Both paths go through the same call because the game folds them
+       into one action byte -- so the test can drive ACTION as SPACE or
+       as fire 1 and the code under test cannot tell which it was.  That
+       is the property worth testing: docs/DESIGN.md § Action and Cancel
+       promises a joystick can play the whole game."""
     if k is None:
         cmd(s, 'set-ui-io-ports ' + NONE)
         return
-    i, b = KEY[k]
     rows = [0xFF] * 8
-    rows[i] &= ~(1 << b) & 0xFF
-    cmd(s, 'set-ui-io-ports ' + ''.join(f'{x:02x}' for x in rows) + '00')
+    kemp = 0
+    if k in KEMP:
+        kemp = KEMP[k]
+    else:
+        i, b = KEY[k]
+        rows[i] &= ~(1 << b) & 0xFF
+    cmd(s, 'set-ui-io-ports '
+        + ''.join(f'{x:02x}' for x in rows) + f'{kemp:02x}')
 
 
 def frames(s):
@@ -166,6 +190,16 @@ def wait(cond, timeout):
 
 HINT_ROW = 0x5800 + 21 * 32     # the row a long operation borrows
 ATTR_BUSY = 0x42                # ...and the colour it borrows it in
+
+
+def confirming(s):
+    """game.c's `confirm`: 0 none, 1 end turn, 2 quit.
+
+       Read from the symbol rather than by matching pixels on the hint
+       row -- the row holds a bitmap, not text, and a test that decodes
+       the font would break every time the font moved.  What matters is
+       that the game is ASKING; the wording is a rendering detail."""
+    return rd(s, CONFIRM, 1)[0]
 
 
 def tune_playing(s):
@@ -248,10 +282,26 @@ print(f"booted in {time.time() - t0:.1f}s")
 
 GS, TER = sym('game_state'), sym('terrain')
 LVL, WON = sym('level'), sym('player_won')
+CONFIRM = sym('confirm')     # 0 none, 1 end turn, 2 quit
+SELECTED = sym('selected')   # NO_UNIT when nothing is held
 
 # level / turn / player_won are contiguous, so one read covers all three.
 BLK = min(LVL, WON)
 BLK_LEN = max(LVL, WON) - BLK + 1
+
+# The device this pass is using.  docs/DESIGN.md § Action and Cancel says
+# SPACE/fire 1 ACT and ENTER/fire 2 CANCEL on every screen, so the entire
+# walk has to pass on either -- not merely "the joystick is wired up".
+# CANCEL is ENTER on both, and that is not laziness.  A standard Kempston
+# has ONE button: bits 0-4 are right/left/down/up/fire, and bit 5 is a
+# non-standard extension that most hardware -- and ZEsarUX's emulated
+# Kempston -- does not provide.  src/input.c reads it, so a two-button
+# stick works, but nothing may DEPEND on it.
+#
+# Discovered by this test: the joystick pass could select a unit and never
+# put it down, because Cancel was unreachable.  See docs/DESIGN.md
+# § Action and Cancel.
+DEVICES = {'keyboard': ('SPACE', 'ENTER'), 'kempston': ('FIRE1', 'ENTER')}
 
 fails = []
 
@@ -262,38 +312,112 @@ def check(cond, msg):
         fails.append(msg)
 
 
+# One pass, ALTERNATING device per level.
+#
+# Running the whole walk twice doubled the wall clock to prove a property
+# that does not depend on which level it is tested on: the game folds
+# keyboard and joystick into one action byte long before any state sees
+# them, so if a level advances on fire 1 it would have advanced on SPACE.
+# Alternating covers both paths across the ten levels for the price of one
+# pass, and if one device breaks, every level using it fails -- five loud
+# failures, not a silent gap.
+def device(lvl):
+    return DEVICES['keyboard' if lvl % 2 else 'kempston']
+
+
+ACTION, CANCEL = device(1)
+
 check(st(s) == TITLE, f"boots to TITLE (got {ST.get(st(s))})")
 stop_tune(s)
-press_until(s, 'SPACE', lambda: st(s) == PLAY)
+press_until(s, ACTION, lambda: st(s) == PLAY)
 for lvl in range(1, 11):
+    ACTION, CANCEL = device(lvl)
+    dev = 'keyboard' if lvl % 2 else 'kempston'
     level, _ = blk(s)
     check(st(s) == PLAY and level == lvl,
-          f"level {lvl}: PLAY, level counter = {level}")
+          f"level {lvl}: PLAY, level counter = {level}  [{dev}]")
     if lvl in (1, 5, 10):
         check(list(rd(s, TER, 98)) == expected(lvl),
               f"level {lvl}: terrain[] matches assets/maps/level_{lvl}.tmx")
+
+    # The Ladder on this level's device: CANCEL with nothing held ASKS,
+    # and the answer is the ordinary ACTION/CANCEL pair.  Both answers are
+    # exercised: NO first, so a bug that ends the turn regardless shows up
+    # as the level advancing when it should not have.
+    # CANCEL is a LADDER: it may have a unit to put down before it
+    # reaches the turn, so press until the question appears rather than
+    # assuming one press gets there.  Three is the ladder's full depth.
+    #
+    # ANSWERED NO, every level.  Saying yes would hand over to the enemy
+    # and the rest of this level's checks would race its turn -- so the
+    # destructive answer is tested once, below, where there is nothing
+    # left to disturb.
+    for _ in range(3):
+        if confirming(s) == 1:
+            break
+        io(s, CANCEL)
+        wait_frames(s, 3)
+        io(s, None)
+        wait_frames(s, 3)
+    check(confirming(s) == 1,
+          f"level {lvl}: CANCEL reaches the end-turn question  [{dev}]"
+          f" (confirm={confirming(s)} sel={rd(s, SELECTED, 1)[0]})")
+
+    io(s, CANCEL)                       # ...NO
+    wait_frames(s, 3)
+    io(s, None)
+    wait_frames(s, 3)
+    check(confirming(s) == 0 and st(s) == PLAY and blk(s)[0] == lvl,
+          f"level {lvl}: NO leaves the turn alone  [{dev}]")
+
     press_until(s, 'W', lambda: st(s) == OVER)
     check(st(s) == OVER and blk(s)[1] == 1,
           f"level {lvl}: W -> ST_OVER, player_won=1")
     want = WON_ST if lvl == 10 else PLAY
-    press_until(s, 'SPACE', lambda: st(s) == want)
+    press_until(s, ACTION, lambda: st(s) == want)
 check(st(s) == WON_ST, f"winning level 10 -> ST_WON (got {ST.get(st(s))})")
+press_until(s, ACTION, lambda: st(s) == TITLE)
+check(st(s) == TITLE, "ACTION from ST_WON -> ST_TITLE")
+
+# X leaves a level, and is NOT a rung on the ladder.  It asks too, so a
+# stray X cannot throw a game away.
+stop_tune(s)
+press_until(s, 'SPACE', lambda: st(s) == PLAY)
+io(s, 'X')
+wait_frames(s, 3)
+io(s, None)
+wait_frames(s, 3)
+check(confirming(s) == 2 and st(s) == PLAY, "X asks before quitting")
 press_until(s, 'SPACE', lambda: st(s) == TITLE)
-check(st(s) == TITLE, "any key from ST_WON -> ST_TITLE")
+check(st(s) == TITLE, "YES to the quit question leaves the level")
 
 stop_tune(s)
 press_until(s, 'SPACE', lambda: st(s) == PLAY)
 press_until(s, 'W', lambda: st(s) == OVER)
 stop_tune(s)
-press_until(s, 'SPACE', lambda: st(s) == PLAY)
+press_until(s, 'FIRE1', lambda: st(s) == PLAY)
 check(st(s) == PLAY and blk(s)[0] == 2, f"restart, win once -> level {blk(s)[0]}")
 press_until(s, 'L', lambda: st(s) == OVER)
 check(st(s) == OVER and blk(s)[1] == 0, "L -> ST_OVER with player_won=0")
-press_until(s, 'SPACE', lambda: st(s) == TITLE)
+press_until(s, 'FIRE1', lambda: st(s) == TITLE)
 check(st(s) == TITLE, "a loss returns to ST_TITLE")
 stop_tune(s)
 press_until(s, 'SPACE', lambda: st(s) == PLAY)
 check(st(s) == PLAY and blk(s)[0] == 1, f"a new game restarts at level {blk(s)[0]}")
+
+# YES to the end-turn question, once: it is the destructive answer, so it
+# is tested where there is nothing after it to disturb.
+for _ in range(3):
+    if confirming(s) == 1:
+        break
+    io(s, 'ENTER')
+    wait_frames(s, 3)
+    io(s, None)
+    wait_frames(s, 3)
+check(confirming(s) == 1, "the end-turn question comes up")
+press_until(s, 'SPACE', lambda: confirming(s) == 0)
+check(confirming(s) == 0 and st(s) == PLAY,
+      "YES ends the turn and hands over to the enemy")
 
 print(f"\nP0 ACCEPTANCE: {'PASS' if not fails else f'FAIL ({len(fails)})'}"
       f"   [{time.time() - t0:.1f}s]")

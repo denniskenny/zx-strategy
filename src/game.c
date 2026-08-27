@@ -73,22 +73,26 @@
 #define ACT_DOWN    0x02
 #define ACT_LEFT    0x04
 #define ACT_RIGHT   0x08
-#define ACT_SELECT  0x10
-#define ACT_BACK    0x20
+#define ACT_CANCEL  0x20
 #define ACT_SPACE   0x40
 #define ACT_M       0x80    /* the campaign overview, in ST_PLAY only */
+#define ACT_QUIT    0x10    /* X: leave the level.  Its own key, not a
+                               rung on the Cancel ladder -- backing out
+                               of an order and abandoning the level are
+                               different intentions. */
 
 #define ACT_DIRS    (ACT_UP | ACT_DOWN | ACT_LEFT | ACT_RIGHT)
 
-/* Moving between screens is SPACE, and fire 1 arrives as ACT_SPACE too,
-   so a joystick can start a game and take the level-end screen on.
-   ENTER is accepted here as well — it is only on the board that the two
-   part company, where SPACE gives orders and ENTER ends the turn. */
-#define ACT_GO      (ACT_SPACE | ACT_SELECT)
+/* ACTION, everywhere.  SPACE and fire 1 and nothing else: one key means
+   yes on every screen, so a joystick can play the whole game and the
+   hint line never has to list alternatives.  See docs/DESIGN.md
+   § Action and Cancel. */
+#define ACT_GO      ACT_SPACE
 
 /* Keyboard half-rows not covered by input.h. */
 #define KEY_ENTER_ROW 0xBFFE    /* ENTER = bit 0            */
 #define KEY_SPACE_ROW 0x7FFE    /* SPACE = bit 0, M = bit 2 */
+#define KEY_ZX_ROW    0xFEFE    /* CAPS Z X C V: X = bit 2  */
 
 /* Frames between cursor steps while a direction is held. */
 #define NAV_DELAY   5
@@ -100,6 +104,17 @@ static uint8_t acts, last_acts, prev_stable, edge;
 static uint8_t nav_delay;
 static uint8_t redraw_status;
 static uint8_t key_idle, key_down;
+
+/* An irreversible action waiting on a yes.  Both of these throw work
+   away and neither can be undone, which is the whole test for whether
+   something needs asking about (docs/DESIGN.md § Action and Cancel). */
+#define CONFIRM_NONE 0
+#define CONFIRM_TURN 1
+#define CONFIRM_QUIT 2
+static uint8_t confirm;
+
+#define HINT_TURN "END TURN? YES=SPACE NO=ENTER"
+#define HINT_QUIT "QUIT GAME? YES=SPACE NO=ENTER"
 
 /* The eight keyboard half-rows, in the usual port order. */
 static const uint16_t key_rows[8] = {
@@ -123,12 +138,13 @@ static uint8_t scan_actions(void)
        setup that maps fire onto the space bar selected a unit and ended
        the turn in the same frame.  ENTER is now the only thing that
        ends a turn. */
-    if (k & INPUT_FIRE1) a |= ACT_SPACE;    /* Z / Kempston fire 1 */
-    if (k & INPUT_FIRE2) a |= ACT_BACK;     /* X / Kempston fire 2 */
+    if (k & INPUT_FIRE1) a |= ACT_SPACE;    /* fire 1 = Action */
+    if (k & INPUT_FIRE2) a |= ACT_CANCEL;   /* fire 2 = Cancel */
 
-    if (!(read_keys(KEY_ENTER_ROW) & 0x01)) a |= ACT_SELECT;
-    if (!(read_keys(KEY_SPACE_ROW) & 0x01)) a |= ACT_SPACE;
+    if (!(read_keys(KEY_SPACE_ROW) & 0x01)) a |= ACT_SPACE;   /* Action */
+    if (!(read_keys(KEY_ENTER_ROW) & 0x01)) a |= ACT_CANCEL;  /* Cancel */
     if (!(read_keys(KEY_SPACE_ROW) & 0x04)) a |= ACT_M;
+    if (!(read_keys(KEY_ZX_ROW) & 0x04))    a |= ACT_QUIT;    /* X */
 
     return a;
 }
@@ -244,6 +260,7 @@ static void play_music(void)
 static void enter_state(uint8_t s)
 {
     game_state = s;
+    confirm = CONFIRM_NONE;     /* no question survives a state change */
 
     switch (s) {
         case ST_TITLE:
@@ -491,6 +508,37 @@ static void handle_input(void)
             break;
 
         case ST_PLAY:
+            /* A question is on the hint line: answer it and nothing
+               else.  ACTION is yes and CANCEL is no, the same two keys
+               as everywhere -- a confirmation is not a special mode, it
+               is the ordinary pair asked a narrower question.
+               
+               Short-circuits the rest of ST_PLAY so a yes cannot also
+               pick a unit up in the same frame. */
+            if (confirm) {
+                if (edge & ACT_GO) {
+                    uint8_t what = confirm;
+
+                    confirm = CONFIRM_NONE;
+                    if (what == CONFIRM_QUIT) {
+                        set_state(ST_TITLE);
+                    } else {
+                        end_turn();
+                        /* Hand straight over: the turn counter has
+                           already moved on, so what follows is theirs. */
+                        enemy_begin();
+                        enemy_active = 1;
+                        enemy_beat = ENEMY_BEAT;
+                        render_hint("      ENEMY TURN");
+                        redraw_status = 1;
+                    }
+                } else if (edge & ACT_CANCEL) {
+                    confirm = CONFIRM_NONE;
+                    render_hint(PLAY_HINT);
+                }
+                break;
+            }
+
             /* SPACE is the one order key: with nothing held it picks
                the unit under the cursor up, and with a unit held it
                either sends it to the highlighted cell the cursor is on
@@ -555,7 +603,7 @@ static void handle_input(void)
                            for a unit that does not move -- a Cannon -- the
                            first press changed nothing visible and looked
                            like a shot that did no damage. */
-                        render_hint(" O/P TARGET  FIRE=ATTACK");
+                        render_hint("QAOP PICK  SPACE FIRE  ENTER BACK");
                     } else {
                         uint8_t step = best_adjacent(cell);
 
@@ -565,7 +613,7 @@ static void handle_input(void)
                             move_selected_to(step);
                             targeting_open(selected, cell);
                             cursor_to(target_now());
-                            render_hint(" O/P TARGET  FIRE=ATTACK");
+                            render_hint("QAOP PICK  SPACE FIRE  ENTER BACK");
                         }
                     }
                 } else if (u == NO_UNIT && cost[cell] != NO_COST &&
@@ -588,33 +636,36 @@ static void handle_input(void)
                SPACE looked like it did nothing but advance the turn.
                Fire 1 is ACT_SPACE now and the collision is gone at
                source, but one keypress should still mean one action. */
-            /* ENTER follows § The Ladder: it backs out of the innermost
-               open context first and only ends the turn when there is
-               nothing to back out of.  With a unit held it deselects --
-               otherwise reaching for "end turn" while looking at a unit's
-               reach throws the turn away, and that cannot be undone,
-               whereas deselecting costs nothing. */
-            if ((edge & ACT_SELECT) && !(edge & ACT_SPACE)
-                && (targeting || selected != NO_UNIT)) {
-                if (targeting) targeting_cancel();
-                else           deselect();
-            } else if ((edge & ACT_SELECT) && !(edge & ACT_SPACE)) {
-                end_turn();
-                /* Hand straight over to the enemy.  The turn counter has
-                   already moved on, so what follows belongs to them. */
-                enemy_begin();
-                enemy_active = 1;
-                enemy_beat = ENEMY_BEAT;
-                render_hint("      ENEMY TURN");
-                redraw_status = 1;
-            }
-            /* X drops the held unit first and only quits on a second
-               press, so the exit cannot be hit while giving an order. */
-            if (edge & ACT_BACK) {
-                if (targeting)           targeting_cancel();
+            /* THE LADDER (docs/DESIGN.md § Action and Cancel).
+             *
+             * Cancel backs out of the INNERMOST open context and only
+             * reaches the turn when there is nothing left to back out
+             * of.  With a unit held it deselects -- otherwise reaching
+             * for "end turn" while looking at a unit's reach throws the
+             * turn away, whereas putting the unit down costs nothing.
+             * The safe rung comes first, always.
+             *
+             * The last rung ASKS.  Ending a turn cannot be undone, and
+             * the ladder means a player can arrive at it by pressing
+             * Cancel twice without meaning to. */
+            if ((edge & ACT_CANCEL) && !(edge & ACT_SPACE)) {
+                if (targeting)                targeting_cancel();
                 else if (selected != NO_UNIT) deselect();
-                else                     set_state(ST_TITLE);
+                else {
+                    confirm = CONFIRM_TURN;
+                    render_hint(HINT_TURN);
+                }
             }
+
+            /* X leaves the level, and is NOT a rung on the ladder:
+               backing out of an order and abandoning a level are
+               different intentions, and one should never be reachable by
+               repeating the other.  It asks too. */
+            if (edge & ACT_QUIT) {
+                confirm = CONFIRM_QUIT;
+                render_hint(HINT_QUIT);
+            }
+
             /* Something died: play it before anything else changes, so
                the explosion lands where the unit was rather than where
                the board has since moved on to. */
@@ -645,7 +696,7 @@ static void handle_input(void)
 
         case ST_MAP:
             /* Read-only overview: SPACE (or back) dismisses it. */
-            if (edge & (ACT_GO | ACT_BACK))
+            if (edge & (ACT_GO | ACT_CANCEL))
                 set_state(ST_PLAY);
             break;
 
@@ -668,16 +719,13 @@ static void handle_input(void)
             break;
 
         case ST_WON:
-            /* Wait for the key that won the level to be released, then
-               for a fresh press: two consecutive samples in each state
-               debounce both.  Sampling once per frame rather than in a
-               tight loop keeps ULA bus noise out of the reads. */
-            if (key_idle < 2) {
-                key_idle = any_key() ? 0 : (uint8_t)(key_idle + 1);
-            } else {
-                key_down = any_key() ? (uint8_t)(key_down + 1) : 0;
-                if (key_down >= 2) set_state(ST_TITLE);
-            }
+            /* ACTION, like every other screen.  This used to take ANY
+               key, with a two-sample debounce to tell the press that won
+               the campaign from a fresh one.  enter_state() flushes the
+               keyboard, so the edge detector does that on its own -- and
+               "press any key" was the one place the game asked for
+               something it never asked for anywhere else. */
+            if (edge & ACT_GO) set_state(ST_TITLE);
             break;
 
         case ST_CUTSCENE:
@@ -685,7 +733,7 @@ static void handle_input(void)
                loaded and waiting.  enter_state() flushed the keyboard,
                so the press that started the level cannot carry through
                and skip this immediately. */
-            if (edge & (ACT_GO | ACT_BACK)) set_state(ST_PLAY);
+            if (edge & (ACT_GO | ACT_CANCEL)) set_state(ST_PLAY);
             break;
     }
 

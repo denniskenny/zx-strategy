@@ -52,17 +52,13 @@ _si_no_p:
     set 2, d
 _si_no_o:
 
-    ;; KEY_SHZXCV (0xFEFE) — Z is bit 1 → FIRE1, X is bit 2 → FIRE2
-    ld  b, #0xFE
-    in  a, (c)
-    bit 1, a
-    jr  nz, _si_no_z
-    set 4, d
-_si_no_z:
-    bit 2, a
-    jr  nz, _si_no_x
-    set 5, d
-_si_no_x:
+    ;; Z and X are NOT folded in here any more.
+    ;;
+    ;; They used to be Z→FIRE1 and X→FIRE2, giving the joystick layout a
+    ;; keyboard twin.  X now QUITS (game.c reads it from this row
+    ;; directly), so it cannot also be Cancel, and Z went with it to keep
+    ;; the story short: the keyboard is SPACE and ENTER, the joystick is
+    ;; fire 1 and fire 2, and nothing is both.
 
     ;; Kempston (0x001F) — R=0 L=1 D=2 U=3 Fire=4 Fire2=5
     ld  a, (_has_kempston)
