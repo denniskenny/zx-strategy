@@ -21,6 +21,11 @@
  * See .claude/skills/tritone-music. */
 void lowlands_play(void);
 
+/* The British Grenadiers -- traditional, public domain.  Two-part melody
+   with a drum tattoo; the title screen's tune.  Blocks until a key, like
+   every Tritone tune: it owns the speaker. */
+void grenadiers_play(void);
+
 /* Rows played by the last tune — shared entropy counter, valid right
  * after any *_play() returns.  Handy as a PRNG seed. */
 extern uint16_t tritone_ticks;

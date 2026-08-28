@@ -103,7 +103,6 @@ static uint8_t next_state;
 static uint8_t acts, last_acts, prev_stable, edge;
 static uint8_t nav_delay;
 static uint8_t redraw_status;
-static uint8_t key_idle, key_down;
 
 /* An irreversible action waiting on a yes.  Both of these throw work
    away and neither can be undone, which is the whole test for whether
@@ -113,8 +112,11 @@ static uint8_t key_idle, key_down;
 #define CONFIRM_QUIT 2
 static uint8_t confirm;
 
-#define HINT_TURN "END TURN? YES=SPACE NO=ENTER"
-#define HINT_QUIT "QUIT GAME? YES=SPACE NO=ENTER"
+/* Y= and N= rather than YES= and NO=: eleven bytes, which is what the
+   title tune needed to fit under the 0xC000 ceiling.  The keys are named
+   in full, which is the part a player cannot guess. */
+#define HINT_TURN "END TURN? Y=SPACE N=ENTER"
+#define HINT_QUIT "QUIT? Y=SPACE N=ENTER"
 
 /* The eight keyboard half-rows, in the usual port order. */
 static const uint16_t key_rows[8] = {
@@ -202,16 +204,6 @@ static void flush_input(void)
 /* True if any key on the whole keyboard, or the joystick, is down.
    Each row is masked to its 5 key bits — the upper bits carry EAR and
    the floating bus, not keyboard state. */
-static uint8_t any_key(void)
-{
-    uint8_t i;
-
-    if (scan_input()) return 1;
-    for (i = 0; i < 8; i++)
-        if ((read_keys(key_rows[i]) & 0x1F) != 0x1F) return 1;
-    return 0;
-}
-
 /* --- Long operations -------------------------------------------------
    The game is turn-based, so nothing animates and nothing waits on a
    clock: work that overruns a frame costs a pause and nothing else, and
@@ -248,7 +240,13 @@ static void busy_off(const char *hint)
 static void play_music(void)
 {
     busy_on("PLAYING - PRESS A KEY");
+#if DEBUG_STATE_WALK
+    /* The debug build does not link the title tune -- see the Makefile. */
     lowlands_play();
+#else
+    /* The title marches; the level summary mourns. */
+    grenadiers_play();
+#endif
     busy_off(TITLE_HINT);
 }
 
@@ -277,7 +275,7 @@ static void enter_state(uint8_t s)
             render_over();
             break;
         case ST_CUTSCENE:
-            render_cutscene();
+            render_cutscene((uint8_t)(level - 1));
             /* lowlands_play() directly, NOT play_music().
              *
              * play_music() brackets the tune with busy_on()/busy_off(),
@@ -292,8 +290,6 @@ static void enter_state(uint8_t s)
             break;
         case ST_WON:
             render_won();
-            key_idle = 0;       /* wait for a release, then a press */
-            key_down = 0;
             break;
     }
     flush_input();

@@ -1,0 +1,122 @@
+================================================================================
+ The British Grenadiers — Tritone arrangement (Title screen)
+================================================================================
+Traditional English march, 17th/18th century, PUBLIC DOMAIN.  No known author;
+the setting below is transcribed from the Bacon (CJS MSS) collection,
+Longborough, via abcnotation.com:
+
+  X:391  T:39. MORRIS SET#3 (32 bar marches) / The British Grenadiers
+  M:4/4  K:G  S:Bacon (CJS MSS)  A:Longborough  O:English
+  P:A  D2 | G2 D2 G2 A2 | B4 A2 Bc | d2 G2 BAGF | (G4 G2) D2 | ... ::
+  P:B  Bc | d3 e d2 c2 | B2 c2 d2 d2 | e2 e2 dcBA | G4 F2 D2 |
+       G2FG A2GA | B2AB c2Bc | d2 G2 BAGF | (G4 G2) :|
+
+Chosen because it is unambiguously out of copyright -- a traditional tune with
+no author to have died recently -- and because a strategy game wants a march
+that sounds like an army rather than a fanfare.
+
+ARRANGEMENT
+  * The A strain is written ONCE, not twice.  The ABC repeats it (::) and
+    the repeat cost 279 bytes we did not have -- checkmem put _anim_beat at
+    0xC117, over the ceiling.  A tune that loops forever on a title screen
+    does not need its own internal repeat; the loop supplies it.
+  * Key: G major => every F is F#.  Watch bars 4, 8, 13, 14, 16.
+  * Meter: 4/4 with L=1/8, so 8 eighths per bar -> 8 rows, one row per eighth.
+  * TWO parts, as asked: CH1 carries the tune, CH2 harmonises a third below
+    and drops to sixths where a third would cross under the bass line's
+    register.  CH3 IS DELIBERATELY SILENT -- a two-part melody plus drums is
+    the brief, and a bass would make it three.
+  * CH4 is the drum tattoo (Tritone's percussion channel; "third channel" in
+    the brief means the third VOICE, since CH1-3 are all tone channels and a
+    drum cannot be placed on one).
+
+THE TATTOO, AND ITS DELAY
+  A military tattoo is a rhythm played on the side drum.  Tritone gives one
+  hit per row and NO volume control, so a delay cannot be done by echoing the
+  same drum quieter -- it has to be echoed on a LIGHTER INSTRUMENT.  The
+  pattern is therefore:
+
+      row 0  snare   the beat
+      row 1  snare   the double-tap that makes it a tattoo
+      row 3  tick    <- delay, two rows after the double-tap
+      row 4  kick    the half-bar
+      row 6  tick    <- delay, two rows after the kick
+
+  Two rows at speed 13 is about 0.26 s, which reads as an echo across a
+  parade ground rather than as a separate note.
+
+  Bar 1 is drums ALONE: the tune's own pickup does not arrive until row 6, and
+  opening on the tattoo says "march" before a single pitch is heard.
+
+TEMPO
+  A brisk quick march.  Quarter = 115 BPM, so one eighth = 0.26 s = 13 frames.
+rows  = 8
+speed = 13
+
+================================================================================
+ PER-BAR ATTACK TABLES        (row : note[@pulse-width][(duration in rows)])
+================================================================================
+
+BAR 1   drums alone, then the D pickup
+  CH1 Lead :  6:D4(2)
+  CH4 Drum :  0:snare 1:snare 3:tick 4:kick 6:tick
+
+BAR 2   G2 D2 G2 A2
+  CH1 Lead :  0:G4(2)  2:D4(2)  4:G4(2)  6:A4(2)
+  CH2 Harm :  0:B3(2)  2:B3(2)  4:B3(2)  6:C4(2)
+  CH4 Drum :  0:snare 1:snare 3:tick 4:kick 6:tick
+
+BAR 3   B4 A2 Bc
+  CH1 Lead :  0:B4(4)  4:A4(2)  6:B4  7:C5
+  CH2 Harm :  0:G4(4)  4:F#4(2) 6:G4  7:A4
+  CH4 Drum :  0:snare 1:snare 3:tick 4:kick 6:tick
+
+BAR 4   d2 G2 BAGF        (F is F#)
+  CH1 Lead :  0:D5(2)  2:G4(2)  4:B4  5:A4  6:G4  7:F#4
+  CH2 Harm :  0:B4(2)  2:B3(2)  4:G4  5:F#4 6:D4  7:D4
+  CH4 Drum :  0:snare 1:snare 3:tick 4:kick 6:tick
+
+BAR 5   (G4 G2) + the B-section pickup Bc
+  CH1 Lead :  0:G4(6)  6:B4  7:C5
+  CH2 Harm :  0:B3(6)  6:G4  7:A4
+  CH4 Drum :  0:snare 1:snare 3:tick 4:kick 6:snare 7:snare
+
+BAR 6  d3 e d2 c2        -- the B strain opens up
+  CH1 Lead :  0:D5(3)  3:E5  4:D5(2)  6:C5(2)
+  CH2 Harm :  0:B4(3)  3:C5  4:B4(2)  6:A4(2)
+  CH4 Drum :  0:snare 1:snare 3:tick 4:kick 6:tick
+
+BAR 7  B2 c2 d2 d2
+  CH1 Lead :  0:B4(2)  2:C5(2)  4:D5(2)  6:D5(2)
+  CH2 Harm :  0:G4(2)  2:A4(2)  4:B4(2)  6:B4(2)
+  CH4 Drum :  0:snare 1:snare 3:tick 4:kick 6:tick
+
+BAR 8  e2 e2 dcBA
+  CH1 Lead :  0:E5(2)  2:E5(2)  4:D5  5:C5  6:B4  7:A4
+  CH2 Harm :  0:C5(2)  2:C5(2)  4:B4  5:A4  6:G4  7:F#4
+  CH4 Drum :  0:snare 1:snare 3:tick 4:kick 6:tick
+
+BAR 9  G4 F2 D2
+  CH1 Lead :  0:G4(4)  4:F#4(2) 6:D4(2)
+  CH2 Harm :  0:B3(4)  4:D4(2)  6:B3(2)
+  CH4 Drum :  0:snare 1:snare 3:tick 4:kick 6:tick
+
+BAR 10  G2FG A2GA
+  CH1 Lead :  0:G4(2)  2:F#4  3:G4  4:A4(2)  6:G4  7:A4
+  CH2 Harm :  0:B3(2)  2:D4   3:B3  4:C4(2)  6:B3  7:C4
+  CH4 Drum :  0:snare 1:snare 3:tick 4:kick 6:tick
+
+BAR 11  B2AB c2Bc
+  CH1 Lead :  0:B4(2)  2:A4  3:B4  4:C5(2)  6:B4  7:C5
+  CH2 Harm :  0:G4(2)  2:F#4 3:G4  4:A4(2)  6:G4  7:A4
+  CH4 Drum :  0:snare 1:snare 3:tick 4:kick 6:tick
+
+BAR 12  d2 G2 BAGF
+  CH1 Lead :  0:D5(2)  2:G4(2)  4:B4  5:A4  6:G4  7:F#4
+  CH2 Harm :  0:B4(2)  2:B3(2)  4:G4  5:F#4 6:D4  7:D4
+  CH4 Drum :  0:snare 1:snare 3:tick 4:kick 6:tick
+
+BAR 13  (G4 G2) then the D pickup, looping back to BAR 2
+  CH1 Lead :  0:G4(6)  6:D4(2)
+  CH2 Harm :  0:B3(6)  6:F#4(2)
+  CH4 Drum :  0:snare 1:snare 3:tick 4:kick 6:snare 7:snare

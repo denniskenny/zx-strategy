@@ -34,6 +34,7 @@
 #include "../include/gfx.h"
 #include "../include/hw.h"
 #include "../include/prng.h"
+#include "../include/cutscenes.h"
 #include "../include/level_1.h"
 #include "../include/memmap.h"
 #include "../include/render.h"
@@ -155,26 +156,27 @@ static uint8_t row_off_of(uint8_t cell)
 
 static void hint_row(const char *s, uint8_t attr);
 
-static uint8_t page_reg;    /* 0x7FFD is write-only; remember it       */
+/* Public because render_screens.c's cutscene pages a bank and has to put
+   this back exactly as the renderer expects it.  0x7FFD is write-only, so
+   this copy IS the truth about what is mapped. */
+uint8_t page_reg;           /* 0x7FFD is write-only; remember it       */
 static uint8_t back;        /* 1 = the back buffer is SCREEN_1         */
-/* HAZARD, currently benign, do not make it worse.
-
-   This is written only from the inline asm in screens_init(), which SDCC
-   cannot see, so it reasons from the `shadow_ok = 0` there and folds
-   `if (!shadow_ok)` to always-true: that is SDCC's "warning 126:
-   unreachable code", and the line it discards is the one arming the
-   vsync marker.  It is harmless ONLY because render_show() sets
-   vsync_marker_addr again before anything waits on it, which the 128K
-   render_paths run confirms.  Add a second thing that depends on
-   shadow_ok inside screens_init() and it will silently not happen.
-
-   `volatile` is the correct fix and costs 18 bytes; the tap has 5.  The
-   free fix is to move the sentinel test into its own __naked helper that
-   RETURNS the result, so `shadow_ok = paging_works();` is an assignment
-   SDCC can see.  Do that when there is room, or as part of the banked
-   data work.  is_128k needs neither: it is read from other translation
-   units, so SDCC cannot fold it. */
-static uint8_t shadow_ok;   /* 0 = the 128K path is not usable yet     */
+/* HAZARD, now fixed, and fixed for free.
+ *
+ * This is written only from the inline asm in screens_init(), which SDCC
+ * cannot see -- so while it was `static` it reasoned from the
+ * `shadow_ok = 0` there and folded `if (!shadow_ok)` to always-true.
+ * That is SDCC's "warning 126: unreachable code", and the line it
+ * discarded was the one arming the vsync marker.  It was harmless only
+ * because render_show() sets vsync_marker_addr again before anything
+ * waits on it.
+ *
+ * The old note here said `volatile` was the correct fix at 18 bytes, and
+ * that is_128k needed nothing because it is read from other translation
+ * units so SDCC cannot fold it.  render_screens.c now reads shadow_ok, so
+ * the same protection applies here, at no cost: it is no longer static
+ * and no longer foldable.  Splitting the file paid for itself twice. */
+uint8_t shadow_ok;          /* 0 = the 128K path is not usable yet     */
 
 /* --- Why the 128K path is currently disarmed --------------------------
    It works, and it is verified: page 7 banks in, a whole screen composes
@@ -1485,65 +1487,6 @@ void render_discard(void)
    Moving the cursor is NOT in here.  The window follows the cursor, so
    a step changes every cell and there is nothing to spread — it is
    repainted in one go and accepts the tear (docs/PLAN.md § P7). */
-/* The cutscene screen, out of its bank and onto the display.
- *
- * The blob lives at BANK_DEST in a RAM bank, so it has to be paged in to
- * be read -- and paging evicts everything at 0xC000, the shadow screen
- * and every buffer with it.  That is survivable here and nowhere else:
- * no board is being drawn, the decompressor's code is at 0x8000 and its
- * workspace is on the stack below 0x8000, and the destination is the
- * screen at 0x4000.  Nothing in the paged-out window is touched between
- * the two OUTs.
- *
- * 128K only.  A 48K has no bank and the tape block simply lands in spare
- * RAM there; game.c skips the state entirely.
- *
- * Interrupts off across the window: the ROM's handler would read from
- * 0xC000-space and it is not the shadow screen for the duration. */
-void render_cutscene(void)
-{
-    /* Into SCREEN_0 first, from the bank. */
-    __asm
-        di
-        ld  a, (_page_reg)
-        and #0xF8
-        or  #0x01               ; bank 1: ROM select and the lock kept
-        ld  bc, #0x7FFD
-        out (c), a
-        ld  (0x5B5C), a
-    __endasm;
-
-    dzx0_decompress((const uint8_t *)0xC100, (uint8_t *)0x4000);
-
-    __asm
-        ld  bc, #0x7FFD
-        ld  a, (_page_reg)      ; page 7 back, as the renderer expects
-        out (c), a
-        ld  (0x5B5C), a
-    __endasm;
-
-    /* ...then into SCREEN_1 as well, where there is one.
-     *
-     * Both screens, and that is the point.  A 128K flips between them,
-     * and ANYTHING that presents afterwards -- render_show(), a busy
-     * banner, the first frame of ST_PLAY -- swaps the display to the
-     * other one.  Drawing the picture into only one meant the first flip
-     * revealed a screen the cutscene had never touched, and neither
-     * forcing `back` nor forcing `page_reg` fixed that, because the flip
-     * happens after this function has returned.
-     *
-     * Copying it twice costs 6912 bytes of memcpy once per cutscene and
-     * makes the picture independent of who flips what afterwards. */
-    if (shadow_ok) {
-        memcpy(SCREEN_1, SCREEN_0, 6912);
-        gfx_target(SCREEN_0);
-    }
-
-    __asm
-        ei
-    __endasm;
-}
-
 /* --- Destruction --------------------------------------------------- */
 
 /* One speaker cycle: up for `noise_hold` counts, down for the same.
@@ -1884,58 +1827,6 @@ void render_hint(const char *hint)
     hint_row(hint, ATTR_HINT);
 }
 
-void render_title(void)
-{
-    render_compose();
-    draw_header("ZX STRATEGY");
-
-    print_at(1, 3, "MACHINE :");
-    print_at(11, 3, is_128k ? "128K" : "48K");
-
-    print_at(1, 4, "KEMPSTON:");
-    print_at(11, 4, has_kempston ? "YES" : "NO");
-
-    print_at(1, 5, "VSYNC   :");
-    switch (vsync_mode) {
-        /* The two bus lines differ by four characters, so they share a
-           prefix rather than carrying it twice. */
-        case VSYNC_MODE_48K:
-        case VSYNC_MODE_128K:
-            print_at(11, 5, "FLOATING BUS 0X");
-            print_at(26, 5, vsync_mode == VSYNC_MODE_48K ? "40FF" : "0FFD");
-            break;
-        default:
-            print_at(11, 5, "HALT FALLBACK  ");
-            break;
-    }
-    /* Whether the shadow screen is actually in use.  On the title
-       screen because it is the only place a tester without a debugger
-       can see it, and because "is the 128K path live?" has been the
-       hardest question to answer all the way through this. */
-    print_at(1, 6, "SCREEN  :");
-    print_at(11, 6, shadow_ok ? "DOUBLE" : "SINGLE");
-
-    set_attr_rect(0, 3, 32, 4, ATTR_TEXT);
-
-    print_at(1, 10, "SPACE / FIRE 1   START");
-    set_attr_rect(0, 10, 32, 1, ATTR_HINT);
-
-    /* The whole control scheme, in the two lines it takes.  Every screen
-       obeys it, so this is the only place it needs saying. */
-    print_at(1, 19, "QAOP / KEMPSTON  MOVE");
-    print_at(1, 20, "SPACE / FIRE 1   DO");
-    print_at(1, 21, "ENTER / FIRE 2   BACK");
-    set_attr_rect(0, 20, 32, 1, ATTR_TEXT);
-
-    /* The hint row is where the tune's banner goes, and where it is
-       cleared back to. */
-    render_hint(TITLE_HINT);
-
-    /* Row 22 is left blank on purpose — it holds the floating bus sync
-       marker written by vsync_wait(). */
-    render_show();
-}
-
 void render_play(void)
 {
     render_compose();
@@ -1960,36 +1851,6 @@ void render_map(void)
     render_show();
 }
 
-/* A level ended.  player_won says which message to show; the exit is
-   handled in handle_input(), which is where the level advances. */
-void render_over(void)
-{
-    render_compose();
-    draw_header(player_won ? "VICTORY" : "DEFEAT");
-
-    print_at(1, 10, player_won ? "LEVEL TAKEN    :" : "LEVEL LOST     :");
-    print_num(18, 10, level, 2);
-    print_at(1, 11, "TURNS TAKEN    :");
-    print_num(18, 11, (uint8_t)(turn > 99 ? 99 : turn), 2);
-
-    /* Score is SCORE_PAR less the turns it took, so a quick win scores
-       high and a long one scores nothing -- never negative, because a
-       level that took longer than par is worth zero rather than a debt.
-       Only on a win: there is no score for losing. */
-    if (player_won) {
-        print_at(1, 12, "LEVEL SCORE    :");
-        print_num(18, 12, level_score(), 2);
-        print_at(1, 13, "TOTAL SCORE    :");
-        print_num(17, 13,
-                  (uint8_t)(campaign_score > 999 ? 999 : campaign_score), 3);
-    }
-    set_attr_rect(0, 10, 32, 4, ATTR_TEXT);
-
-    render_hint(player_won ? "SPACE FOR THE NEXT LEVEL"
-                           : "SPACE TO RETURN TO THE TITLE");
-    render_show();
-}
-
 void render_won(void)
 {
     render_compose();
@@ -2006,3 +1867,13 @@ void render_won(void)
     render_hint("SPACE / FIRE 1");
     render_show();
 }
+
+/* render_title(), render_over() and render_cutscene() live in
+   src/render_screens.c, in the contended window: they paint once per state
+   change and never inside a frame budget.
+
+   The other three stayed, for three different reasons.  render_play() is
+   not once-per-state -- the walk and the enemy turn call it mid-sequence.
+   render_map()'s helpers all live here.  And render_won() simply did not
+   fit: the contended window is full, which is the real limit on this
+   technique. */

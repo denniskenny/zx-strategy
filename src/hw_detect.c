@@ -10,6 +10,15 @@
  * Must run before paging is locked.
  */
 
+/* NOT contended, despite running exactly once.
+ *
+ * It was moved to SECTION LOGIC and then moved back: the contended window
+ * is full, and the three screen painters in render_screens.c are worth
+ * more per byte down there than this is.  Moving this gained ~103 bytes of
+ * ceiling; leaving room for the painters gained ~800.
+ *
+ * Put it back if the contended window ever grows. */
+
 #include "../include/hw.h"
 
 uint8_t is_128k = 0;

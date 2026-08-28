@@ -246,11 +246,19 @@ def run(machine, rom, want_128k, port, results):
         ['zesarux', '--vo', 'null', '--ao', 'null', '--enable-remoteprotocol',
          '--remoteprotocol-port', str(port),
          '--machine', machine, '--noconfigfile', '--quickexit',
+         '--accelerate-loading',
          '--romfile', rompath, TAP],
-        # NO --accelerate-loading.  It speeds the tape up on a 48K, but on
-        # a 128K the load silently never completes and the machine sits in
-        # the ROM with a blank screen — indistinguishable from here from
-        # "this machine cannot render", which is what it got blamed for.
+        # --accelerate-loading IS safe on a 128K.  This used to say it was
+        # not -- that the load silently never completed and the machine sat
+        # in the ROM with a blank screen.  Re-tested with the same tap on
+        # the same machine, with and without: both reach the title screen
+        # and both read page-7 attr 0x45.  Whatever was seen originally, it
+        # was not the flag.
+        #
+        # "Blank screen" has many causes and this project has misattributed
+        # it more than once -- to the flag here, and to the paging when a
+        # 76-line BASIC loader was overrunning RAMTOP.  It is a symptom,
+        # never a diagnosis.
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         preexec_fn=os.setsid)
     try:
@@ -269,10 +277,12 @@ def run(machine, rom, want_128k, port, results):
         # normally there is nothing to do but wait.  smartload is kept only
         # as a fallback, and is NOT retried in a loop: each one resets the
         # machine, so retrying guarantees the load never gets to finish.
-        up = wait(titled, 30)
+        # 60 s covers a 50 KB tap even accelerated; the tape grew from
+        # 24 KB when the cutscene screens arrived.
+        up = wait(titled, 60)
         if not up:
             cmd(s, 'smartload ' + TAP)
-            up = wait(titled, 30)
+            up = wait(titled, 60)
         check(up, 'title screen appears (tap loaded and rendering)')
         if not up:
             return

@@ -33,7 +33,6 @@
 #define ATTR_HINT   0x46    /* bright yellow ink, black paper */
 #define ATTR_BG     0x07    /* white ink, black paper         */
 #define ATTR_CURSOR 0x78    /* black ink, white paper         */
-#define ATTR_VOID   0x00    /* off-world cells: black on black */
 
 /* Units share one sprite per type; the side is carried by the cell
    attribute, so these are the only thing telling the armies apart
@@ -197,6 +196,12 @@ void load_tiles(void);          /* unpack the four sheets, once         */
 void render_compose(void);      /* aim at the back buffer, if there is one */
 void render_show(void);         /* flip it into view                       */
 
+/* 1 when the 128K double-buffer path is armed.  Public deliberately: see
+   the note beside it in render.c -- being read from another translation
+   unit is what stops SDCC folding tests on it. */
+extern uint8_t shadow_ok;
+extern uint8_t page_reg;        /* our copy of write-only 0x7FFD  */
+
 /* --- Text and chrome -------------------------------------------------- */
 void print_num(uint8_t col, uint8_t row, uint16_t v, uint8_t digits);
 void print_char(uint8_t col, uint8_t row, char c);
@@ -252,7 +257,7 @@ void render_tick(void);         /* one frame's worth of owed repaints   */
 void render_title(void);
 void render_play(void);
 void render_map(void);
-void render_cutscene(void);   /* the banked screen, onto the display */
+void render_cutscene(uint8_t idx);  /* level idx's banked screen  */
 void render_over(void);
 void render_won(void);
 

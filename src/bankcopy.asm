@@ -36,52 +36,67 @@
 ; Parameters are POKEd in by the loader rather than passed, because BASIC
 ; can POKE and cannot pass arguments to USR.
 ;
-;   0x5F00  bank number (byte)
-;   0x5F01  length      (word)
-;   0x5F03  destination offset within the bank (word, usually 0)
-;   0x5F05  entry
+;   0x5F00  pointer to the next table entry (word)
+;   0x5F05  entry -- call once per block; it advances itself
+;   0x5F80  the table: 5 bytes per block, bank / dest / length
+;
+; SELF-ADVANCING, so BASIC can drive it from a FOR loop:
+;
+;     FOR I=1 TO N: LOAD ""CODE: RANDOMIZE USR 24325: NEXT I
+;
+; The alternative was a LOAD, five POKEs and a USR per block, and at ten
+; cutscene screens that BASIC program reached 1472 bytes -- past RAMTOP at
+; 0x5EFF, over this stub at 0x5F00 and into the assets at 0x6000.  The tap
+; loaded every block and then never reached the game.
+;
+; A loader whose SIZE GROWS WITH THE CONTENT is the bug; one line does not
+; care how many blocks there are.  mktap.py appends the table to this
+; stub's own block, so the two always agree.
 
     org     0x5F00
 
-_bc_bank:   defb    1           ; 0x5F00
-_bc_len:    defw    0           ; 0x5F01
-_bc_dest:   defw    0           ; 0x5F03
+_bc_ptr:    defw    0x5F80      ; next table entry
+            defs    3           ; keeps the entry point at 0x5F05
 
     ; --- entry at 0x5F05 -------------------------------------------
-    ;
-    ; PRESERVE BANKM, do not force it.  The first version wrote 0x10 on
-    ; the way out, which assumes the machine arrived here with bank 0 and
-    ; the 48K ROM and nothing else set.  Two things go wrong if it did
-    ; not:
-    ;
-    ;   * bit 5 is the PAGING DISABLE lock.  If the ROM had set it, the
-    ;     OUT below is IGNORED -- the copy lands in bank 0 and reports
-    ;     success -- and clearing it afterwards leaves the ROM in a state
-    ;     it never chose.
-    ;   * bit 4 is the ROM select.  Forcing it swaps a ROM under a
-    ;     running interpreter, which is what broke the earlier attempts.
-    ;
-    ; Reading BANKM and putting it back makes the stub safe wherever it
-    ; is called from, which is the only way to be sure when the caller is
-    ; a ROM you did not write.
     di
-    ld      a, (0x5B5C)
-    ld      (_bc_save), a       ; whatever the ROM had
+    ld      hl, (_bc_ptr)
+    ld      a, (hl)             ; bank
+    ld      (_bc_bank), a
+    inc     hl
+    ld      e, (hl)
+    inc     hl
+    ld      d, (hl)             ; DE = offset within the bank
+    inc     hl
+    ld      c, (hl)
+    inc     hl
+    ld      b, (hl)             ; BC = length
+    inc     hl
+    ld      (_bc_ptr), hl       ; ...ready for the next block
 
+    push    bc
+    push    de
+
+    ; PRESERVE BANKM, do not force it.  Bit 5 is the paging lock -- if the
+    ; ROM set it the OUT is ignored and the copy lands in bank 0 looking
+    ; successful -- and bit 4 is the ROM select, which swaps a ROM under a
+    ; running interpreter.  Change only the bank bits.
+    ld      a, (0x5B5C)
+    ld      (_bc_save), a
+    and     0xF8
     ld      hl, _bc_bank
-    ld      b, (hl)
-    and     0xF8                ; keep ROM select, screen and the lock
-    or      b                   ; only the bank bits change
+    or      (hl)
     ld      bc, 0x7FFD
     out     (c), a
     ld      (0x5B5C), a
 
-    ld      hl, 0x4000          ; from the screen
-    ld      de, (_bc_dest)
+    pop     de
+    pop     bc
+
     ld      a, d
-    add     a, 0xC0             ; into the bank window
+    add     a, 0xC0             ; DE = 0xC000 + offset
     ld      d, a
-    ld      bc, (_bc_len)
+    ld      hl, 0x4000          ; from the screen, where BASIC staged it
     ldir
 
     ld      a, (_bc_save)       ; exactly as we found it
@@ -91,4 +106,5 @@ _bc_dest:   defw    0           ; 0x5F03
     ei
     ret
 
+_bc_bank:   defb    0
 _bc_save:   defb    0

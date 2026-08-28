@@ -168,7 +168,7 @@ include/units_view.h: assets/units_view_short.zxp tools/zxp_tiles_zx0.py
 	    --frames 2 --mask --attr-mode bright --zx0 $(ZX0)
 
 # List generated headers here so `make assets` and `make clean` know them.
-GENERATED_HEADERS = $(LEVEL_HEADERS) \
+GENERATED_HEADERS = include/cutscenes.h $(LEVEL_HEADERS) \
                     include/tiles_map.h include/tiles_view.h \
                     include/units_map.h include/units_view.h
 
@@ -184,8 +184,19 @@ assets: $(GENERATED_HEADERS) $(MUSIC_LINKABLE)
 # assets/music/NAME_linkable.asm to MUSIC_LINKABLE, and call NAME_play().
 # (See .claude/skills/tritone-music.)
 MUSIC_ENGINE = assets/music/tritone_engine.asm
+# The debug build carries the W/L state-walk keys and CANNOT afford both
+# tunes: the shipping build has 3 bytes clear of 0xC000, and the debug
+# keys need more than that.  A debug tap that overruns is 48K-only, page 7
+# banks over its tail on a 128K, and the symptom is "the W key does not
+# work" -- which sends you looking at the keyboard, not the ceiling.
+#
+# So the debug build gets the level-summary tune only.  Same code paths,
+# one fewer song.
 MUSIC_LINKABLE = $(MUSIC_ENGINE) \
                  assets/music/lowlands_linkable.asm
+ifneq ($(DEBUG_KEYS),1)
+MUSIC_LINKABLE += assets/music/grenadiers_linkable.asm
+endif
 
 # Shared engine, extracted once from the Beepola export template.
 MUSIC_TEMPLATE = assets/music/tritone_template.asm
@@ -205,7 +216,7 @@ assets/music/%_linkable.asm: assets/music/%.asm tools/gen_tritone_module.py
 .SECONDARY:
 
 # --- Source files ---
-SRCS = src/main.c src/game.c src/logic.c src/render.c src/gfx.c src/input.c src/hw_detect.c \
+SRCS = src/main.c src/game.c src/logic.c src/render.c src/render_screens.c src/gfx.c src/input.c src/hw_detect.c \
        src/vsync.c src/prng.c src/dzx0.c src/no_font64.asm src/assets_low_syms.asm src/logic_org.asm
 
 HEADERS = config/app_config.h config/game_config.h include/gfx.h include/input.h include/hw.h \
@@ -275,30 +286,24 @@ $(ASSETS_LOW_BIN): src/assets_low.asm
 # linked and the game returned to BASIC instantly, with nothing at all
 # wrong with the banking under test.
 BANKCOPY_BIN = $(APP)_bankcopy.bin
-BANK_NUMBER  = 1
-# Offset WITHIN the bank.  Not zero: 0xC000 is contested -- hw_detect()
-# writes bank 1 at 0xC000 to prove the machine is a 128K, and a sentinel
-# left there was reliably gone by the time anything looked for it.  The
-# copier has always taken a destination; using it costs nothing and makes
-# the payload's survival independent of who else scribbles on offset 0.
-BANK_DEST    = 0x0100
-BANK_BLOB    = $(APP)_cutscene.zx0
+# One cutscene screen per level, packed into banks by
+# tools/mkcutscenes.py.  It computes bank and offset from the ACTUAL
+# compressed sizes and writes both include/cutscenes.h (for render.c) and
+# cutscenes.args (for mktap), so the art can be redrawn at any size and
+# nothing needs recomputing by hand.
+CUTSCENE_SCRS = $(wildcard assets/cutscenes/level_*.scr)
 
 $(BANKCOPY_BIN): src/bankcopy.asm
 	PATH=$(Z88DK)/bin:$$PATH $(Z88DK)/bin/z88dk-z80asm -b -O. -o$@ src/bankcopy.asm
 
-# The cutscene screen, ZX0'd.  6912 -> ~2500 bytes, which fits nowhere in
-# addressable memory -- hence the bank.  It is read once, decompressed
-# straight to 0x4000 and never touched again: a SWAP, which is what banks
-# are good for (.claude/skills/zx-loader).
-$(BANK_BLOB): assets/action-force.scr
-	$(ZX0) -f $< $@
+include/cutscenes.h cutscenes.args: $(CUTSCENE_SCRS) tools/mkcutscenes.py
+	$(PYTHON) tools/mkcutscenes.py $(ZX0) $(CUTSCENE_SCRS)
 
-$(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE) $(ASSETS_LOW_BIN) $(BANKCOPY_BIN) $(BANK_BLOB) src/assets_low_syms.asm src/logic_org.asm logic_org.addr tools/mktap.py
+$(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE) $(ASSETS_LOW_BIN) $(BANKCOPY_BIN) cutscenes.args src/assets_low_syms.asm src/logic_org.asm logic_org.addr tools/mktap.py
 	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o $(APP) $(SRCS) $(MUSIC_LINKABLE) $(LDFLAGS)
 	$(PYTHON) tools/mktap.py $(APP).tap --name $(APP) --clear $(CLEAR_ADDR) --usr $(USR_ADDR) \
 	    --bankcopy $(BANKCOPY_BIN) \
-	    --bank $(BANK_NUMBER) $(BANK_BLOB) --bank-dest $(BANK_DEST) \
+	    $$(cat cutscenes.args) \
 	    --code 0x6000 $(ASSETS_LOW_BIN) \
 	    --code $$(cat logic_org.addr) $(APP)_LOGIC.bin \
 	    --code $(USR_ADDR) $(APP)
@@ -323,4 +328,6 @@ clean:
 	rm -f tests/dzx0check tests/dzx0check.tap tests/dzx0check_CODE.bin tests/dzx0check_data_user.bin tests/dzx0check_code.tap
 	rm -f *.o src/*.o tests/*.o *.map
 	rm -f $(GENERATED_HEADERS)
-	rm -f assets/music/*_linkable.asm assets/music/*.o assets/music/lowlands.asm
+	rm -f $(APP)_banksentinel.bin $(APP)_cutscene.zx0 cutscenes.args
+	rm -rf build/cutscenes
+	rm -f assets/music/*_linkable.asm assets/music/*.o assets/music/lowlands.asm assets/music/grenadiers.asm

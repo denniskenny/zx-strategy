@@ -16,6 +16,13 @@
  * must supply a v2 decoder here too.
  */
 
+/* Contended: decompression happens at boot, at level load and when a
+ * cutscene opens -- never inside the frame budget.  It is the longest
+ * cold operation in the program, so it pays the contention penalty more
+ * than most, but "slightly slower loading" is the right thing to spend
+ * when the 0x8000-0xC000 ceiling has three bytes left. */
+#pragma codeseg LOGIC
+
 #include <compress/zx0.h>
 
 #include "../include/dzx0.h"
