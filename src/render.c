@@ -161,22 +161,44 @@ static void hint_row(const char *s, uint8_t attr);
    this copy IS the truth about what is mapped. */
 uint8_t page_reg;           /* 0x7FFD is write-only; remember it       */
 static uint8_t back;        /* 1 = the back buffer is SCREEN_1         */
-/* HAZARD, now fixed, and fixed for free.
+/* HAZARD, fixed properly this time.
  *
- * This is written only from the inline asm in screens_init(), which SDCC
- * cannot see -- so while it was `static` it reasoned from the
- * `shadow_ok = 0` there and folded `if (!shadow_ok)` to always-true.
- * That is SDCC's "warning 126: unreachable code", and the line it
- * discarded was the one arming the vsync marker.  It was harmless only
- * because render_show() sets vsync_marker_addr again before anything
- * waits on it.
+ * This is written ONLY from the inline asm in screens_init(), which SDCC
+ * cannot see -- so it reasoned from the zero initialiser and folded
+ * `if (!shadow_ok)` to always-true.  That is "warning 126: unreachable
+ * code", and the line it discarded was the one arming the vsync marker.
+ * It was harmless only because render_show() sets vsync_marker_addr again
+ * before anything waits on it.
  *
- * The old note here said `volatile` was the correct fix at 18 bytes, and
- * that is_128k needed nothing because it is read from other translation
- * units so SDCC cannot fold it.  render_screens.c now reads shadow_ok, so
- * the same protection applies here, at no cost: it is no longer static
- * and no longer foldable.  Splitting the file paid for itself twice. */
-uint8_t shadow_ok;          /* 0 = the 128K path is not usable yet     */
+ * Two earlier attempts, and why they were not enough:
+ *
+ *   * Making it non-static.  The old note here reasoned that is_128k
+ *     needs no protection because other translation units read it, so
+ *     SDCC cannot fold it -- and that exposing this would do the same.
+ *     It did not: the warning survived the split.  Being externally
+ *     VISIBLE is not the same as being externally WRITTEN, and SDCC still
+ *     saw no writer it could believe in.
+ *
+ *   * Leaving it alone because the damage was benign.  It was benign by
+ *     accident, and the note admitted the next thing to depend on
+ *     shadow_ok inside screens_init() would silently not happen.
+ *
+ * `volatile` is what the note said was correct all along, at a cost of
+ * about 18 bytes.  The tap had 5 then and has 1,193 now -- the split and
+ * --opt-code-size paid for it.  Correctness over eighteen bytes.
+ *
+ * WHICH SDCC WARNINGS MATTER, since the build prints several:
+ *
+ *   warning 126, "unreachable code"  -- SDCC DELETED something.  Always
+ *       investigate.  This was the only one, and it was deleting the
+ *       vsync marker setup.
+ *
+ *   warning 110, "conditional flow changed by optimizer"  -- SDCC
+ *       REWROTE a jump, usually rotating a loop.  Benign.  Every
+ *       remaining instance is on a plain `for` or an early `return`
+ *       (logic.c:772, 1075, 1233; render.c:1124, 1687, 1717) and none of
+ *       them loses code.  Do not chase these looking for the next bug. */
+volatile uint8_t shadow_ok; /* 0 = the 128K path is not usable yet     */
 
 /* --- Why the 128K path is currently disarmed --------------------------
    It works, and it is verified: page 7 banks in, a whole screen composes
@@ -677,19 +699,52 @@ void set_page(void)
    offset, which is the whole reason this is faster than drawing
    directly. */
 
-/* One 4x4-character tile's pixels.  Unrolled to four byte moves per
-   row: the width is a compile-time 4, so a loop would spend more on the
-   counter than on the copy. */
+/* One 4x4-character tile's pixels: 32 rows of 4 bytes, source packed and
+   destination on a 32-byte stride.
+ *
+ * The loop is assembly and the address arithmetic is not.  SDCC compiles
+ * `d[0] = src[0]` and friends into index arithmetic it recomputes each
+ * time; LDIR is the instruction this loop is made of.  Working out WHERE
+ * the tile goes stays in C, because that part is written once per call and
+ * getting pointer maths wrong in asm is how this project has lost time
+ * before.
+ *
+ * Parameters in file-scope statics, NOT on the stack.  A __naked function
+ * has to dig arguments out by hand and this session already got those
+ * offsets subtly wrong once -- in noise_step(), which worked at the wrong
+ * pitch.  present_pixels() and noise_cycle() use statics for the same
+ * reason. */
+static uint8_t *ct_dst;
+static const uint8_t *ct_src;
+
+#if (VIEW_CH * 8) != 32
+#error "compose_tile_rows() has 32 rows baked into its assembly"
+#endif
+
+static void compose_tile_rows(void) __naked
+{
+    __asm
+        ld  hl, (_ct_src)
+        ld  de, (_ct_dst)
+        ld  a, #32              ; rows; NOT in BC, which LDIR consumes
+    ct_row:
+        ld  bc, #4              ; VIEW_CW
+        ldir                    ; 4 bytes; HL and DE both advance by 4
+        ex  de, hl              ; ...DE needs 28 more for the 32 stride
+        ld  bc, #28
+        add hl, bc
+        ex  de, hl
+        dec a
+        jr  nz, ct_row
+        ret
+    __endasm;
+}
+
 static void compose_tile(uint8_t vx, uint8_t vy, const uint8_t *src)
 {
-    uint8_t *d = VBUF + (uint16_t)vy * (VIEW_CH * 8) * 32 + vx * VIEW_CW;
-    uint8_t r = VIEW_CH * 8;
-
-    while (r--) {
-        d[0] = src[0]; d[1] = src[1]; d[2] = src[2]; d[3] = src[3];
-        src += VIEW_CW;
-        d += 32;
-    }
+    ct_dst = VBUF + (uint16_t)vy * (VIEW_CH * 8) * 32 + vx * VIEW_CW;
+    ct_src = src;
+    compose_tile_rows();
 }
 
 /* A sprite over what is already in the buffer.

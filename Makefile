@@ -71,7 +71,22 @@ include $(CONFIG_MK)
 # -- that part of the old comment here was wrong -- but the speed does not.
 # See docs/PLAN.md P9.  Compressed assets go down there instead: read once
 # at boot, so contention costs them nothing.
-CFLAGS=+zx -vn -SO3 $(ORG_DEF) -startup=31 --opt-code-speed -compiler=sdcc -mz80 -pragma-define:CRT_ENABLE_STDIO=0 $(TARGET_DEF) \
+# --opt-code-size, NOT --opt-code-speed.  Measured, both ways:
+#
+#     --opt-code-speed    628 bytes clear of 0xC000
+#     --opt-code-size   1,193 bytes clear    (+565)
+#     (neither flag)      does not link -- LOGIC overruns its window
+#
+# The 565 bytes are real and the difference is not perceptible: both taps
+# were played side by side, scrolling by hand, and felt the same.  That is
+# the only test that was available -- headless ZEsarUX does not run at
+# 50 Hz, so frames-per-second measures the emulator, and the scroll
+# sub-steps are vsync-locked so they do not reveal an overrun either.
+#
+# If scrolling ever starts to tear or drag, put --opt-code-speed back
+# before looking anywhere else: this flag touches compose_masked() and the
+# present path, which are the code that has to fit the vblank window.
+CFLAGS=+zx -vn -SO3 $(ORG_DEF) -startup=31 --opt-code-size -compiler=sdcc -mz80 -pragma-define:CRT_ENABLE_STDIO=0 $(TARGET_DEF) \
        --reserve-regs-iy --allow-unsafe-read -Cc--max-allocs-per-node=50000
 USER_CFLAGS ?=
 LDFLAGS=-lm -create-app

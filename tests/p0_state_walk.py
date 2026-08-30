@@ -344,29 +344,33 @@ for lvl in range(1, 11):
     # and the answer is the ordinary ACTION/CANCEL pair.  Both answers are
     # exercised: NO first, so a bug that ends the turn regardless shows up
     # as the level advancing when it should not have.
-    # CANCEL is a LADDER: it may have a unit to put down before it
-    # reaches the turn, so press until the question appears rather than
-    # assuming one press gets there.  Three is the ladder's full depth.
+    # CANCEL is a LADDER: it may have a unit to put down before it reaches
+    # the turn, so press until the question appears rather than assuming
+    # one press gets there.
+    #
+    # press_until(), NOT io() plus wait_frames().  A fixed wait is wrong
+    # here for two reasons, and both bit: the input layer needs a key held
+    # across two consecutive polls to count as stable, and wait_frames()
+    # reads the ROM's FRAMES counter, which STOPS during every blocking
+    # operation the game has -- the tune, a walk, an explosion, a level
+    # load.  So "wait 3 frames" is sometimes three frames and sometimes
+    # however long a walk takes, and a press could be missed entirely.
+    #
+    # press_until() polls for the outcome and re-presses if nothing
+    # happened, which is the only shape that works against a target whose
+    # clock stops.  The failures moved between levels run to run -- level
+    # 3, then 8, then 1 -- which is exactly what a lost press looks like.
     #
     # ANSWERED NO, every level.  Saying yes would hand over to the enemy
-    # and the rest of this level's checks would race its turn -- so the
-    # destructive answer is tested once, below, where there is nothing
-    # left to disturb.
-    for _ in range(3):
-        if confirming(s) == 1:
-            break
-        io(s, CANCEL)
-        wait_frames(s, 3)
-        io(s, None)
-        wait_frames(s, 3)
-    check(confirming(s) == 1,
+    # and the rest of this level's checks would race its turn, so the
+    # destructive answer is tested once, at the end, where there is
+    # nothing left to disturb.
+    asked = press_until(s, CANCEL, lambda: confirming(s) == 1)
+    check(asked and confirming(s) == 1,
           f"level {lvl}: CANCEL reaches the end-turn question  [{dev}]"
           f" (confirm={confirming(s)} sel={rd(s, SELECTED, 1)[0]})")
 
-    io(s, CANCEL)                       # ...NO
-    wait_frames(s, 3)
-    io(s, None)
-    wait_frames(s, 3)
+    press_until(s, CANCEL, lambda: confirming(s) == 0)      # ...NO
     check(confirming(s) == 0 and st(s) == PLAY and blk(s)[0] == lvl,
           f"level {lvl}: NO leaves the turn alone  [{dev}]")
 
@@ -383,10 +387,7 @@ check(st(s) == TITLE, "ACTION from ST_WON -> ST_TITLE")
 # stray X cannot throw a game away.
 stop_tune(s)
 press_until(s, 'SPACE', lambda: st(s) == PLAY)
-io(s, 'X')
-wait_frames(s, 3)
-io(s, None)
-wait_frames(s, 3)
+press_until(s, 'X', lambda: confirming(s) == 2)
 check(confirming(s) == 2 and st(s) == PLAY, "X asks before quitting")
 press_until(s, 'SPACE', lambda: st(s) == TITLE)
 check(st(s) == TITLE, "YES to the quit question leaves the level")
@@ -407,13 +408,7 @@ check(st(s) == PLAY and blk(s)[0] == 1, f"a new game restarts at level {blk(s)[0
 
 # YES to the end-turn question, once: it is the destructive answer, so it
 # is tested where there is nothing after it to disturb.
-for _ in range(3):
-    if confirming(s) == 1:
-        break
-    io(s, 'ENTER')
-    wait_frames(s, 3)
-    io(s, None)
-    wait_frames(s, 3)
+press_until(s, 'ENTER', lambda: confirming(s) == 1)
 check(confirming(s) == 1, "the end-turn question comes up")
 press_until(s, 'SPACE', lambda: confirming(s) == 0)
 check(confirming(s) == 0 and st(s) == PLAY,

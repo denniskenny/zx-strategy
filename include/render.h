@@ -199,7 +199,7 @@ void render_show(void);         /* flip it into view                       */
 /* 1 when the 128K double-buffer path is armed.  Public deliberately: see
    the note beside it in render.c -- being read from another translation
    unit is what stops SDCC folding tests on it. */
-extern uint8_t shadow_ok;
+extern volatile uint8_t shadow_ok;
 extern uint8_t page_reg;        /* our copy of write-only 0x7FFD  */
 
 /* --- Text and chrome -------------------------------------------------- */
