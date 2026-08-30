@@ -187,6 +187,16 @@ include/units_map.h: assets/units_map.zxp tools/zxp_tiles_zx0.py
 # stream would have buried those runs in sprite detail and lost most of
 # that.  mkassets.py picks it up from the header automatically, so it
 # lands in the contended block at 0x6000 with the other blobs.
+# The boot logo, RAW and straight into the display file.  It is shown once
+# while the game loads and then thrown away, so it is neither compressed
+# nor present in memory: no header, no C, no decompression.  See
+# tools/mklogo.py for where in the screen it lands and why.
+LOGO_PIX = $(APP)_logo_pix.bin
+LOGO_ATT = $(APP)_logo_att.bin
+
+$(LOGO_PIX) $(LOGO_ATT): assets/logo.zxp tools/mklogo.py
+	$(PYTHON) tools/mklogo.py assets/logo.zxp $(LOGO_PIX) $(LOGO_ATT)
+
 include/units_view.h: assets/units_view_short.zxp tools/zxp_tiles_zx0.py
 	$(ZXP_TILES_ZX0) $< $@ --name units_view --tiles $(VIEW_SPRITES) \
 	    --frames 2 --mask --attr-mode bright --zx0 $(ZX0)
@@ -323,9 +333,10 @@ $(BANKCOPY_BIN): src/bankcopy.asm
 include/cutscenes.h cutscenes.args: $(CUTSCENE_SCRS) tools/mkcutscenes.py
 	$(PYTHON) tools/mkcutscenes.py $(ZX0) $(CUTSCENE_SCRS)
 
-$(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE) $(ASSETS_LOW_BIN) $(BANKCOPY_BIN) cutscenes.args src/assets_low_syms.asm src/logic_org.asm logic_org.addr tools/mktap.py
+$(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE) $(ASSETS_LOW_BIN) $(BANKCOPY_BIN) $(LOGO_PIX) $(LOGO_ATT) cutscenes.args src/assets_low_syms.asm src/logic_org.asm logic_org.addr tools/mktap.py
 	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o $(APP) $(SRCS) $(MUSIC_LINKABLE) $(LDFLAGS)
-	$(PYTHON) tools/mktap.py $(APP).tap --name $(APP) --clear $(CLEAR_ADDR) --usr $(USR_ADDR) \
+	$(PYTHON) tools/mktap.py $(APP).tap --name ' ' --clear $(CLEAR_ADDR) --usr $(USR_ADDR) \
+	    --splash 0x5000 $(LOGO_PIX) --splash 0x5A00 $(LOGO_ATT) \
 	    --bankcopy $(BANKCOPY_BIN) \
 	    $$(cat cutscenes.args) \
 	    --code 0x6000 $(ASSETS_LOW_BIN) \

@@ -1,7 +1,7 @@
 ---
 name: zx-loader
 description: Build a multi-block ZX Spectrum .tap by hand — one CODE block per region, laid out across contended RAM, the program, and RAM banks. Covers the zcc/z80asm directives that emit a block, the appmake behaviour that silently drops one, how to load into a bank at all, and how to prove every byte arrived where it was addressed.
-when_to_use: "tap loader" or "multi-block tap" or "code block" or "load into a bank" or "banked data" or "mktap" or "-create-app" or "appmake" or "constseg" or "codeseg" or "SECTION CODE_1" or "BANK_1" or "the data is zeros" or "blob did not load" or "where do assets go"
+when_to_use: "tap loader" or "multi-block tap" or "code block" or "load into a bank" or "banked data" or "mktap" or "-create-app" or "appmake" or "constseg" or "codeseg" or "SECTION CODE_1" or "BANK_1" or "the data is zeros" or "blob did not load" or "where do assets go" or "loading screen" or "loading picture" or "splash screen" or "hide the loading messages" or "Bytes: message" or "the screen scrolls while loading" or "POKE 23739" or "logo disappears"
 allowed-tools: Bash Read Write Edit
 effort: medium
 ---
@@ -109,6 +109,97 @@ Blocks load in the order given. Addresses are written by hand while their
 SIZES come from the build, so one growing into the next is a matter of
 when, not whether: mktap refuses overlaps, blocks at or below `CLEAR`, and
 anything that runs into the stack.
+
+## The loading screen
+
+A loading screen is **not an asset**. It is shown once while the tape runs
+and then thrown away, so it wants none of the machinery the game's graphics
+need:
+
+| | |
+|---|---|
+| **not compressed** | the ROM's `LOAD` writes it; there is nobody to decompress it |
+| **not in the program** | it costs zero bytes of `0x8000-0xBFFF`, the scarce region |
+| **not referenced by any code** | no header, no `extern`, no blit |
+| **first block on the tape** | so the screen stops being blank seconds in |
+| **overwritten freely** | the game paints over it whenever it likes |
+
+Aim raw blocks straight at the display file and the ROM paints it for you:
+
+```
+--splash 0x5000 logo_pix.bin      # 2048 bytes: bitmap, character rows 16-23
+--splash 0x5A00 logo_att.bin      #  256 bytes: their attributes
+```
+
+This project first did the opposite — a ZX0 blob compiled in and a
+`render_logo()` that decompressed and blitted it. **530 bytes of the
+tightest region in the machine** for a picture overwritten seconds later.
+Moving it to the tape gave all of it back.
+
+### Silencing the loader — POKE 23739,111
+
+**The ROM announces every block, and once the print position runs out of
+screen it SCROLLS. That takes the loading screen with it.**
+
+```
+POKE 23739,111
+```
+
+`23739` is the low byte of the **output routine address for channel "S"**
+(the main screen) in the channel block at `CHANS` (23734). It normally
+points at `PRINT-OUT`; `111` points it at a `RET`, so everything the ROM
+prints is discarded. Verified on 48K and 128K.
+
+Do this **before the first `LOAD`**, and understand what it is not:
+
+* `PAPER 0: INK 0: CLS` **hides** the messages. It cannot stop them
+  scrolling. Black on black still moves the picture up the screen.
+* Counting lines is not enough either. Fourteen messages "fit" in the
+  22 available — and the screen still scrolled, because the print position
+  starts wherever the ROM left it, not at the top.
+
+The symptom is a loading screen that appears and then silently vanishes
+before the program starts. It reads as "something clears the display", and
+the bank staging is the obvious suspect and the wrong one.
+
+**The cost: a tape error is silent too.** If loading fails mysteriously on
+real hardware, comment the poke out first.
+
+### Where in the screen it can live
+
+If blobs stage through the display file (see *Loading into a bank*), the
+loading screen has to sit where they do not land:
+
+* A 2519-byte blob at `0x4000` covers `0x4000-0x49D7`: the whole top third
+  plus the first two pixel lines of the middle one.
+* **The bottom third, `0x5000-0x57FF`, is never touched** — character rows
+  16-23, attributes at `0x5A00`.
+
+A third's pixel lines are 256 bytes apart, so three character rows are
+**not contiguous**: ship the whole 2048-byte third with the picture placed
+inside it rather than trying to address rows individually.
+
+### The display file is exempt from the CLEAR check
+
+`mktap` refuses blocks at or below `CLEAR` because BASIC would overwrite
+them. `0x4000-0x5AFF` is the exception: BASIC keeps no variables in the
+screen, so a block aimed there is a picture, not a mistake.
+
+### It doubles as the splash screen, for free
+
+If the music player blocks until a key — Tritone's does — then playing a
+tune after the load *is* the "press any key" wait, with the loading screen
+still on display. No new state, no input loop:
+
+```c
+load_tiles();
+load_map();
+splash();               /* the tune blocks until a key, logo still up */
+enter_state(ST_TITLE);
+```
+
+The tune then starts the moment loading finishes instead of when the title
+appears, and covers the asset decompression too.
 
 ## What appmake will not do
 
@@ -240,18 +331,87 @@ not been shown to work. Ours never had. Prefer a test whose success is
 visible -- a picture that draws -- over one byte that has to survive the
 whole boot to be believed.
 
+**A test must never press a key while the tape loads.** The ROM's loader
+watches for BREAK, so a harness that presses SPACE in a loop to get past a
+splash screen aborts the load — every run "fails to reach the title" with a
+perfectly good tap. Wait passively for the load, and only then press
+anything.
+
+## The loader is a program, and its SIZE matters
+
+The BASIC loader grows upward from `PROG` (~23755) into `CLEAR`, which
+leaves it only a few hundred bytes. **A loader whose size grows with the
+content is the bug.**
+
+At one `LOAD` / five `POKE`s / one `USR` per bank block, ten cutscene
+screens made a **1472-byte** BASIC program — past RAMTOP at `0x5EFF`, over
+the bank copier at `0x5F00` and into the assets at `0x6000`. Every block
+loaded and the game never started.
+
+The fix is a self-advancing copier walking a table appended to its own
+block, driven by one line:
+
+```
+FOR I=1 TO n: LOAD ""CODE: RANDOMIZE USR e: NEXT I
+```
+
+**117 bytes, and it does not grow when screens are added.** Check the BASIC
+size whenever a block is added:
+
+```python
+d = open('out.tap','rb').read()
+ln = int.from_bytes(d[0:2],'little')            # skip the BASIC header
+ln = int.from_bytes(d[2+ln:4+ln],'little')
+print('BASIC %d bytes, ends 0x%04X' % (ln-2, 23755+ln-2))
+```
+
+## The tape is a cost too
+
+Blocks are raw on tape: ten 2519-byte cutscene screens plus a 2304-byte
+loading screen took the tap from 24 KB to **51 KB**, about 33 seconds of
+loading. Two consequences worth planning for:
+
+* Test harnesses time out. `render_paths` needed 30s -> 60s, and
+  `pixel_hash` was outgrown twice.
+* **`--accelerate-loading` IS safe on a 128K.** A comment in this project
+  claimed it was not — that the load silently never completed. Re-tested
+  with the same tap on the same machine, with and without: both reach the
+  title and both read page-7 attr `0x45`. It cut `render_paths` from 121s
+  to 22s. Whatever was originally seen, it was not the flag.
+
 ## Checklist for a new block
 
 1. Emit it — standalone `.asm`, `#pragma codeseg`, or `--constsegBANK_n`.
 2. Add it to `mktap.py` with an explicit address.
 3. **Parse the tap** and confirm a HEADER, not a bare data block.
 4. Check `mktap`'s free-space line and `checkmem`'s ceiling.
-5. Read the bytes back on a real load — 48K, 128K **and +3**.
-6. Only then write code that depends on it.
+5. **Check the BASIC loader still fits under `CLEAR`.**
+6. Read the bytes back on a real load — 48K, 128K **and +3**.
+7. Bump any test timeout that waits for the title; the tape just got longer.
+8. Only then write code that depends on it.
+
+## Before reaching for a custom loader
+
+A machine-code tape loader is the usual answer to "no messages, logo
+throughout" — and it is a rewrite of the one path whose failures are all
+silent. **Try the cheap things first:**
+
+| want | cost |
+|---|---|
+| no messages, no scrolling | `POKE 23739,111` — one BASIC line |
+| picture up early | make it the first block |
+| picture costs no memory | aim it at the display file |
+| blank name in the messages | `--name ' '`; `LOAD ""` matches anything |
+| nothing visible while staging | `BORDER 0: PAPER 0: INK 0: CLS` |
+
+All five together give what a custom loader is normally written for, and
+none of them touches the loading path's structure.
 
 ## Related
 
 - `.claude/skills/zx-memory` — what belongs at which address, and the ROM trap
 - `.claude/skills/zesarux-test` — driving each model headlessly
 - `tools/mktap.py`, `tools/mkassets.py` — the loader and the asset sweep
+- `tools/mklogo.py` — a .zxp to raw display-file blocks, for the loading screen
+- `src/bankcopy.asm` — the self-advancing copier the `FOR` loop drives
 - `docs/PLAN.md` P10, P11 — the full record of what failed and why

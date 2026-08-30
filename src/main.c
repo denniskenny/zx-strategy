@@ -6,6 +6,7 @@
  */
 
 #include "../include/hw.h"
+#include "../include/render.h"
 #include "../include/vsync.h"
 #include "../include/game.h"
 

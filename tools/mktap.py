@@ -29,6 +29,7 @@ STACK_FLOOR = 0x7FA0
 CLEAR, LOAD, CODE, RANDOMIZE, USR, OUT, POKE = \
     0xFD, 0xEF, 0xAF, 0xF9, 0xC0, 0xDF, 0xF4
 FOR, TO, NEXT = 0xEB, 0xCC, 0xF3
+BORDER, PAPER, INK, CLS = 0xE7, 0xDA, 0xD9, 0xFB
 
 
 def number(n):
@@ -59,7 +60,7 @@ BC_ENTRY_LEN = 5            # bank, dest word, length word
 STAGE     = 0x4000          # the screen: the only free 6912 bytes there is
 
 
-def loader(clear_addr, usr_addr, n_blocks, banks):
+def loader(clear_addr, usr_addr, n_blocks, banks, n_splash=0):
     """CLEAR, the bank phase, then the program.
 
        The bank phase is ONE LINE however many blocks it carries:
@@ -81,6 +82,54 @@ def loader(clear_addr, usr_addr, n_blocks, banks):
        first means there is nothing else in memory to land on."""
     line = 10
     prog = basic_line(line, bytes([CLEAR]) + number(clear_addr))
+
+    # BLACK ON BLACK, before a single byte is loaded.
+    #
+    # The bank blocks are staged THROUGH THE DISPLAY FILE -- it is the only
+    # free 6912 bytes on the machine -- so ten cutscene screens land in the
+    # top two thirds of the screen in turn, as noise.  The ROM's own
+    # "Bytes:" messages print over them.  With INK 0 PAPER 0 and a CLS,
+    # every attribute cell is 0x00 and none of it can be seen: the bitmap
+    # still changes, but black on black shows nothing.
+    #
+    # BORDER 0 too, so the tape's edge flicker is the only motion.
+    line += 10
+    prog += basic_line(line,
+                       bytes([BORDER]) + number(0) + b':'
+                       + bytes([PAPER]) + number(0) + b':'
+                       + bytes([INK]) + number(0) + b':'
+                       + bytes([CLS]))
+
+    # SILENCE THE LOADER'S MESSAGES, and this one is load-bearing.
+    #
+    # 23739 is the low byte of the OUTPUT ROUTINE ADDRESS for channel "S"
+    # (the main screen) in the channel information block at CHANS, 23734.
+    # It normally points at PRINT-OUT; 111 points it at a RET, so anything
+    # the ROM prints to the screen is thrown away instead.
+    #
+    # Without it the ROM announces every block -- "Bytes: " x 14 -- and once
+    # the print position passes the bottom of the screen it SCROLLS.  That
+    # is what was taking the boot logo away: not the bank staging, which
+    # never touches the bottom third, but the ROM tidily scrolling the
+    # picture off the top.  Black on black hid the messages; it could not
+    # stop them scrolling.
+    #
+    # The cost: a tape ERROR is now silent too.  If loading ever fails
+    # mysteriously on real hardware, comment this line out first.
+    line += 10
+    prog += basic_line(line,
+                       bytes([POKE]) + number(23739) + b',' + number(111))
+
+    # SPLASH FIRST, before anything else on the tape.
+    #
+    # The logo is the first thing loaded so the screen stops being blank as
+    # early as possible -- everything after it (14 blocks, ~50 KB) loads
+    # with the picture already up.  Safe because the bank blobs stage
+    # through 0x4000-0x49D7 and the logo lives in the bottom third at
+    # 0x5000, which nothing else touches.
+    for _ in range(n_splash):
+        line += 10
+        prog += basic_line(line, bytes([LOAD, ord('"'), ord('"'), CODE]))
 
     if banks:
         line += 10                          # the copier, and its table
@@ -124,6 +173,11 @@ def main():
     ap.add_argument('--name', default='zxstrategy')
     ap.add_argument('--code', nargs=2, action='append', metavar=('ADDR', 'FILE'),
                     required=True, help='load address and binary, repeatable')
+    ap.add_argument('--splash', nargs=2, action='append', default=[],
+                    metavar=('ADDR', 'FILE'),
+                    help='loaded FIRST, before the bank phase and the '
+                         'program; for a picture the user looks at while '
+                         'the rest of the tape runs')
     ap.add_argument('--bankcopy', metavar='FILE',
                     help='src/bankcopy.asm assembled; required with --bank')
     ap.add_argument('--bank', nargs=3, action='append', default=[],
@@ -134,6 +188,7 @@ def main():
     a = ap.parse_args()
 
     codes = [(int(addr, 0), open(f, 'rb').read()) for addr, f in a.code]
+    splash = [(int(addr, 0), open(f, 'rb').read()) for addr, f in a.splash]
     # (bank, offset-within-bank, bytes).  The offset is per-entry because
     # several blobs share a bank -- tools/mkcutscenes.py computes the
     # layout and passes it here.
@@ -158,7 +213,12 @@ def main():
         end = addr + len(data)
         if end > 0x10000:
             sys.exit('mktap: %d bytes at 0x%04X runs off the top of RAM' % (len(data), addr))
-        if addr <= a.clear:
+        # The DISPLAY FILE is exempt.  It is below CLEAR, but BASIC does not
+        # keep variables there -- it is the screen -- so a block aimed at it
+        # is a picture, not a mistake.  That is how the boot logo gets on
+        # screen without costing the program a byte: the ROM's own LOAD puts
+        # it there and nothing ever refers to it again.
+        if addr <= a.clear and not (0x4000 <= addr and end <= 0x5B00):
             sys.exit('mktap: block at 0x%04X is at or below CLEAR %d -- BASIC '
                      'would overwrite it' % (addr, a.clear))
         # A block below the program grows UP towards the stack, which grows
@@ -186,10 +246,15 @@ def main():
                          'of the earlier one'
                          % (addr, end, other, other + len(odata)))
 
-    prog = loader(a.clear, a.usr, len(codes), banks)
+    prog = loader(a.clear, a.usr, len(codes), banks, len(splash))
     tap = header(0, a.name[:10], len(prog), 10, len(prog))   # p1=autostart line
     tap += block(bytes([0xFF]) + prog)
-    # Bank phase first: the copier, then each blob staged through the
+    # The splash comes before everything, matching the loader.
+    for addr, data in splash:
+        tap += header(3, a.name[:10], len(data), addr, 0x8000)
+        tap += block(bytes([0xFF]) + data)
+
+    # Bank phase next: the copier, then each blob staged through the
     # screen.  The loader above expects exactly this order.
     if banks:
         # The copier and its table ship as ONE block: pad the code out to

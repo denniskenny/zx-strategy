@@ -50,6 +50,15 @@
    has no such problem, which is very likely why the sides were the other
    way round to begin with. */
 #define ATTR_UNIT_P 0x42    /* bright red ink, black paper; BRIGHT forced */
+
+/* The player's ink ALONE, for the border -- which has no paper and no
+   bright bit, just a colour 0-7.
+ *
+ * Derived rather than written out so the input flash cannot drift away
+ * from the team it stands for.  The sides have already been swapped once
+ * (see the note above: green went to the player and came back), and a
+ * hard-coded border colour would have silently stayed green. */
+#define INK_PLAYER  (ATTR_UNIT_P & 0x07)
 /* Dark yellow is non-bright yellow, which is legal (only 0x02 and 0x03
    are reserved) -- so the enemy gets its per-cell SHADING back: the
    sheet's BRIGHT bit comes through where the artist set it, and is off

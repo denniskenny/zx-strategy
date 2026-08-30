@@ -279,10 +279,53 @@ def run(machine, rom, want_128k, port, results):
         # machine, so retrying guarantees the load never gets to finish.
         # 60 s covers a 50 KB tap even accelerated; the tape grew from
         # 24 KB when the cutscene screens arrived.
-        up = wait(titled, 60)
+        # Two phases, and the ORDER MATTERS.
+        #
+        # 1. Wait passively for the tape.  NEVER press during a load: the
+        #    ROM's loader watches for BREAK, so a harness that presses
+        #    SPACE in a loop aborts the load, and every run then "fails to
+        #    reach the title" with a perfectly good tap.  vsync_mode is
+        #    zero until vsync_detect() runs, so it going non-zero means the
+        #    program has control and the tape is done.
+        #
+        # 2. Then press, to get past the splash.  The boot logo is up with
+        #    the title march over it, blocking until a key -- ST_TITLE does
+        #    not paint on its own.
+        # "Has the program started?" asked of the PROGRAM COUNTER, not of
+        # memory.
+        #
+        # The first version read vsync_mode and waited for it to go
+        # non-zero.  That address is inside the program's own BSS, so until
+        # the last block loads it holds UNINITIALISED RAM -- which on the
+        # 48K read as non-zero, so the test decided the game had booted and
+        # started pressing SPACE in the middle of the tape.  The ROM's
+        # loader treats that as BREAK and aborts, and the failure looks
+        # exactly like "this machine cannot render".
+        #
+        # PC cannot lie the same way: while the tape runs it is in the ROM,
+        # below 0x4000.  Once it is in 0x8000-0xBFFF the program has
+        # control and pressing is safe.
+        def booted():
+            m = re.search(r'PC=([0-9a-fA-F]{4})', cmd(s, 'get-registers'))
+            return bool(m) and 0x8000 <= int(m.group(1), 16) < 0xC000
+
+        def to_title(budget):
+            if not wait(booted, budget):
+                return False
+            end = time.time() + 45
+            while time.time() < end:
+                if titled():
+                    return True
+                io(s, 'SPACE')
+                time.sleep(0.4)
+                io(s, None)
+                time.sleep(0.4)
+            return titled()
+
+        up = to_title(90)
         if not up:
             cmd(s, 'smartload ' + TAP)
-            up = wait(titled, 60)
+            up = to_title(90)
         check(up, 'title screen appears (tap loaded and rendering)')
         if not up:
             return

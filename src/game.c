@@ -203,7 +203,21 @@ static void flush_input(void)
 
 /* True if any key on the whole keyboard, or the joystick, is down.
    Each row is masked to its 5 key bits — the upper bits carry EAR and
-   the floating bus, not keyboard state. */
+   the floating bus, not keyboard state.
+
+   Port 0x00FE selects EVERY half-row at once, so one read answers for the
+   whole keyboard rather than eight.
+
+   This exists for ONE job: waiting for a press to be let go of before
+   something else starts listening. edge/prev_stable cannot do it — they
+   describe what the input layer has decided, not what the player's finger
+   is doing, and a Tritone tune reads the hardware directly. */
+static uint8_t any_key(void)
+{
+    if ((read_keys(0x00FE) & 0x1F) != 0x1F) return 1;
+    return (uint8_t)(scan_input() != 0);
+}
+
 /* --- Long operations -------------------------------------------------
    The game is turn-based, so nothing animates and nothing waits on a
    clock: work that overruns a frame costs a pause and nothing else, and
@@ -237,18 +251,10 @@ static void busy_off(const char *hint)
    is a long operation like any other, so it borrows the hint row to say
    so and flushes the key that stopped it.  Nothing else on the title
    screen is disturbed, so nothing has to be repainted afterwards. */
-static void play_music(void)
-{
-    busy_on("PLAYING - PRESS A KEY");
-#if DEBUG_STATE_WALK
-    /* The debug build does not link the title tune -- see the Makefile. */
-    lowlands_play();
-#else
-    /* The title marches; the level summary mourns. */
-    grenadiers_play();
-#endif
-    busy_off(TITLE_HINT);
-}
+/* play_music() is gone.  The tune was a thing you ASKED FOR on the title
+   screen, bracketed by a busy banner; it now plays over the boot logo as
+   soon as loading finishes (splash()), so there is nothing to bracket and
+   nowhere to call it from. */
 
 /* ------------------------------------------------------------- states */
 
@@ -263,7 +269,10 @@ static void enter_state(uint8_t s)
     switch (s) {
         case ST_TITLE:
             render_title();
-            play_music();       /* blocks; the screen is already up */
+            /* No tune here.  It plays over the boot logo the moment
+               loading finishes -- see splash() -- so the march starts
+               ~30 seconds earlier and covers the tape instead of being
+               something the player goes and asks for. */
             break;
         case ST_PLAY:
             render_play();
@@ -285,8 +294,24 @@ static void enter_state(uint8_t s)
              * nothing on it, which reads as a lock.
              *
              * The tune blocks either way; the picture just has to survive
-             * it. */
+             * it.
+             *
+             * WAIT FOR THE RELEASE FIRST.  The press that chose the level
+             * is still physically down at this point, and lowlands_play()
+             * reads the hardware -- so without this it returns instantly
+             * and the cutscene flashes past unseen.  flush_input() cannot
+             * help: it runs at the end of enter_state(), and it clears the
+             * input layer's idea of the keyboard, not the keyboard. */
+            while (any_key()) { }
             lowlands_play();
+
+            /* The tune's RETURN is the dismissal.  It only returns on a
+               key or fire, so that press has happened and been spent;
+               asking the input loop for another made the player press
+               twice to get past one picture.  Same shape as splash():
+               where a tune blocks until input, the tune IS the wait, and
+               nothing after it may wait again. */
+            next_state = ST_PLAY;
             break;
         case ST_WON:
             render_won();
@@ -725,11 +750,10 @@ static void handle_input(void)
             break;
 
         case ST_CUTSCENE:
-            /* Any key moves on: the level behind the picture is already
-               loaded and waiting.  enter_state() flushed the keyboard,
-               so the press that started the level cannot carry through
-               and skip this immediately. */
-            if (edge & (ACT_GO | ACT_CANCEL)) set_state(ST_PLAY);
+            /* Nothing to do.  The cutscene is dismissed by the tune in
+               enter_state() returning, which happens on the press the
+               player has already made; see the note there.  A second test
+               here is what made it take two presses. */
             break;
     }
 
@@ -742,6 +766,39 @@ static void handle_input(void)
     }
 }
 
+/* The boot logo, with the title march over it, until the player says go.
+ *
+ * Nothing here draws the logo.  It is the FIRST block on the tape, loaded
+ * straight into the bottom third of the display file by the ROM, so it has
+ * been on screen since a couple of seconds into loading -- and it is still
+ * there now (tools/mklogo.py, tools/mktap.py --splash).
+ *
+ * The tune is also the wait.  Every Tritone tune blocks until a key or
+ * fire and then returns, which is exactly what a splash screen wants, so
+ * "wait for input" is not separate code -- it is the player call.
+ *
+ * THIS ONLY WORKS BECAUSE THE LOADER IS SILENT.  A first attempt found the
+ * logo already gone by this point and the tune playing over a blank
+ * screen.  The cause was not the bank staging, which never touches the
+ * bottom third: it was the ROM announcing all fourteen blocks and
+ * SCROLLING the picture off the top once the print position ran out of
+ * screen.  POKE 23739,111 in the loader throws that output away, and the
+ * logo now survives -- verified by reading rows 17-19 back as 0x07 after
+ * the program has control.
+ *
+ * Runs after load_tiles() and load_map() so the logo covers the asset
+ * decompression too, and before ST_TITLE so the first thing heard is the
+ * march rather than silence. */
+static void splash(void)
+{
+#if DEBUG_STATE_WALK
+    /* The debug build cannot afford both tunes -- see the Makefile. */
+    lowlands_play();
+#else
+    grenadiers_play();
+#endif
+}
+
 void game_run(void)
 {
     uint8_t act;
@@ -750,6 +807,8 @@ void game_run(void)
     level = 1;
     load_tiles();
     load_map();
+
+    splash();
 
     next_state = ST_TITLE;
     enter_state(ST_TITLE);
@@ -779,7 +838,7 @@ void game_run(void)
            unit up is not a state change, so the flash vanished from the
            one place it is most useful. */
         act = (uint8_t)(edge & ~ACT_DIRS);
-        if (act) border(4);
+        if (act) border(INK_PLAYER);    /* the player's own colour */
 
         handle_input();
 

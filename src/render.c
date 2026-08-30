@@ -1603,6 +1603,18 @@ void render_discard(void)
    Moving the cursor is NOT in here.  The window follows the cursor, so
    a step changes every cell and there is nothing to spread — it is
    repainted in one go and accepts the tear (docs/PLAN.md § P7). */
+/* The boot logo is NOT here, and that is the point.
+ *
+ * It used to be: a ZX0 blob compiled into this file and a render_logo()
+ * that decompressed and blitted it -- about 530 bytes of the scarce
+ * 0x8000-0xC000 region for a picture shown once and then overwritten.
+ *
+ * The tape does it instead.  tools/mklogo.py emits the raw bottom third of
+ * the display file and its attributes, and mktap.py ships them as two
+ * ordinary CODE blocks aimed straight at 0x5000 and 0x5A00.  The ROM's own
+ * LOAD paints it, nothing in the program refers to it, and it costs zero
+ * bytes of code and zero of RAM. */
+
 /* --- Destruction --------------------------------------------------- */
 
 /* One speaker cycle: up for `noise_hold` counts, down for the same.

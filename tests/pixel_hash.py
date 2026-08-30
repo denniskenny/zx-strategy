@@ -116,17 +116,23 @@ def main():
         # ROM's frame counter stops during the title tune and every other
         # blocking operation, so "wait N frames" is unbounded.  Same lesson
         # as tests/p0_state_walk.py.
-        for _ in range(90):
+        # 60 s for the title, not 36.  The tap is over 50 KB now -- ten
+        # cutscene screens and the raw logo -- and this wait has already
+        # been outgrown once by the tape getting longer.
+        for _ in range(150):
             if rd(GS, 1)[0] == 0:
                 break
             time.sleep(0.4)
-        for _ in range(60):
+        # The title plays a tune, blocking with interrupts off, and the
+        # first press only stops it.  Press until the state actually moves;
+        # 90 tries covers a long tune and a 50 KB tape.
+        for _ in range(90):
             if rd(GS, 1)[0] == 1:
                 break
             io((7, 0))          # SPACE
-            time.sleep(0.6)
+            time.sleep(0.7)
             io(None)
-            time.sleep(0.6)
+            time.sleep(0.7)
         if rd(GS, 1)[0] != 1:
             sys.exit('pixel_hash: never reached ST_PLAY')
 
