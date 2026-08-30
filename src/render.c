@@ -616,7 +616,12 @@ static void draw_unit_line(uint8_t cell)
     print_at(1, ROW_UNIT, "UNIT   :");
 
     if (u == NO_UNIT) {
-        print_at(10, ROW_UNIT, "-");
+        /* Blank the WHOLE field, columns 10..31, not just the first
+           character.  A bare "-" left the tail of the previous unit
+           behind: stepping the cursor off a TANK showed "-ANK", and off
+           INFANTRY "-NFANTRY".  The comment above this function already
+           promised it blanked the field; only now does it. */
+        print_at(10, ROW_UNIT, "-                     ");
         set_attr_rect(0, ROW_UNIT, 32, 1, ATTR_TEXT);
         return;
     }
@@ -756,6 +761,18 @@ static void compose_tile(uint8_t vx, uint8_t vy, const uint8_t *src)
    Three memory accesses and two ALU ops per byte where compose_tile()
    manages one store, which is why only the view unit sprites get it:
    terrain is the background and has nothing to show through to. */
+/* Stayed in C, deliberately.
+ *
+ * An assembly version was written and reverted: two passes per row (AND
+ * the mask in, then OR the sprite over) to avoid needing a third pointer,
+ * because IX is SDCC's frame pointer under --reserve-regs-iy.  It saved
+ * SEVEN bytes -- each row reloaded three pointers from statics and stored
+ * two back, which cost about what the tighter inner ops saved.
+ *
+ * Seven bytes is not worth sixty lines of assembly in the routine that
+ * draws every unit over every tile, in a codebase where neither test
+ * suite reads pixels.  compose_tile() was worth it (26 bytes, and a
+ * straight LDIR translation anyone can check by eye); this was not. */
 static void compose_masked(uint8_t vx, uint8_t vy,
                            const uint8_t *src, const uint8_t *mask)
 {
@@ -942,22 +959,66 @@ static void present_all(void)
     stamp_cursor();
 }
 
+/* The 32 pixel rows of one cell, in assembly.
+ *
+ * Per row: read the next screen-row offset out of VIEW_OFF (the display
+ * file is interleaved, so consecutive rows are nowhere near each other),
+ * add it to gfx_pix + col, and move four bytes.
+ *
+ * The row counter lives in A, not a static.  Nothing in the loop touches
+ * A -- LDIR does not, ADD HL,BC does not, LD E,(HL) does not -- so it
+ * costs no memory traffic.  That matters: an assembly compose_masked()
+ * was written and thrown away because reloading three pointers from
+ * statics every row cost as much as the tighter inner ops saved.
+ *
+ * The ATTRIBUTE rows stay in C.  There are four of them against
+ * thirty-two, and they are contiguous, so there is nothing to win. */
+static const uint16_t *pc_off;
+static const uint8_t *pc_src;
+static uint8_t *pc_dbase;
+
+static void present_cell_pixels(void) __naked
+{
+    __asm
+        ld  a, #32              ; rows, kept in A for free
+    pc_row:
+        ld  hl, (_pc_off)       ; the next screen-row offset
+        ld  e, (hl)
+        inc hl
+        ld  d, (hl)
+        inc hl
+        ld  (_pc_off), hl
+
+        ld  hl, (_pc_dbase)     ; gfx_pix + col
+        add hl, de
+        ex  de, hl              ; DE = where this row lands
+
+        ld  hl, (_pc_src)
+        ld  bc, #4              ; VIEW_CW
+        ldir                    ; HL advances 4...
+        ld  bc, #28
+        add hl, bc              ; ...and 28 more makes the 32 stride
+        ld  (_pc_src), hl
+
+        dec a
+        jr  nz, pc_row
+        ret
+    __endasm;
+}
+
 /* Just one cell, for the two ends of a move.  Four bytes a row rather
    than thirty-two: a dirty cell must not cost a whole view. */
 static void present_cell(uint8_t vx, uint8_t vy)
 {
     uint8_t col = (uint8_t)(vx * VIEW_CW);
     uint16_t r = (uint16_t)vy * (VIEW_CH * 8);
-    uint8_t n = VIEW_CH * 8;
     uint8_t ar;
 
-    while (n--) {
-        uint8_t *d = gfx_pix + VIEW_OFF[r] + col;
-        const uint8_t *sp = VBUF + r * 32 + col;
+    pc_off = VIEW_OFF + r;
+    pc_src = VBUF + r * 32 + col;
+    pc_dbase = gfx_pix + col;
+    present_cell_pixels();
 
-        d[0] = sp[0]; d[1] = sp[1]; d[2] = sp[2]; d[3] = sp[3];
-        r++;
-    }
     for (ar = 0; ar < VIEW_CH; ar++) {
         uint8_t *d = gfx_attr + (uint16_t)(VIEW_ROW + vy * VIEW_CH + ar) * 32
                      + col;
@@ -1849,10 +1910,12 @@ void render_tick(void)
     }
 
     /* At rest: nothing else wanted this frame, so the board may breathe. */
+#if !FREEZE_ANIM
     if (++anim_beat >= ANIM_BEAT) {
         anim_beat = 0;
         animate();
     }
+#endif
 }
 
 /* ------------------------------------------------------- whole screens */

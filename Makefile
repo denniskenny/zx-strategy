@@ -32,7 +32,16 @@ ORG_DEF    = -zorg=32768
 USR_ADDR   = 32768
 
 DEBUG_KEYS ?= 0
-TARGET_DEF = -DDEBUG_STATE_WALK=$(DEBUG_KEYS)
+
+# FREEZE_ANIM=1 stops the at-rest sprite animation.  For tests/pixel_hash.py
+# only: the animation flips every sprite every ~18 frames, so a screen
+# captured from a running game hashes differently every time and cannot be
+# compared against anything.  With it frozen the board is deterministic and
+# a blit change can be verified BYTE FOR BYTE -- which matters because
+# neither test suite reads pixels, and a blit that writes the wrong pixels
+# with the right attributes passes both of them.
+FREEZE_ANIM ?= 0
+TARGET_DEF = -DDEBUG_STATE_WALK=$(DEBUG_KEYS) -DFREEZE_ANIM=$(FREEZE_ANIM)
 
 # The state-walk debug keys cost 99 bytes and the shipping tap has 5
 # spare, so they are off by default and tests/p0_state_walk.py asks for
