@@ -368,6 +368,9 @@ uint8_t anim_frame;             /* 0 or 1: which sprite frame is showing */
    attack, not every frame. */
 #define DIRTY_MAX   4
 static uint8_t dirty_x[DIRTY_MAX], dirty_y[DIRTY_MAX];
+/* Set when mark_dirty() has more cells than it can name.  See the note
+   there: the fallback is a full repaint, not a bigger list. */
+static uint8_t dirty_all;
 
 /* Tile pixels AND their attribute blocks, decompressed once from the
    ZX0 blobs in the headers.  Each blob is pixels for every tile
@@ -705,22 +708,30 @@ void set_page(void)
    directly. */
 
 /* One 4x4-character tile's pixels: 32 rows of 4 bytes, source packed and
-   destination on a 32-byte stride.
+ * destination on a 32-byte stride.
  *
  * The loop is assembly and the address arithmetic is not.  SDCC compiles
- * `d[0] = src[0]` and friends into index arithmetic it recomputes each
+ * `d[0] = src[0]` and friends into index arithmetic it recomputes every
  * time; LDIR is the instruction this loop is made of.  Working out WHERE
- * the tile goes stays in C, because that part is written once per call and
- * getting pointer maths wrong in asm is how this project has lost time
- * before.
+ * the tile goes stays in C, because that is done once per call.
  *
- * Parameters in file-scope statics, NOT on the stack.  A __naked function
- * has to dig arguments out by hand and this session already got those
- * offsets subtly wrong once -- in noise_step(), which worked at the wrong
- * pitch.  present_pixels() and noise_cycle() use statics for the same
- * reason. */
-static uint8_t *ct_dst;
-static const uint8_t *ct_src;
+ * REINSTATED after being reverted on suspicion.  It was innocent: the
+ * ghost cells were scroll_view() dropping one axis of a diagonal, and
+ * putting this back into C changed nothing.  Recorded because "revert the
+ * most recent change" is a reasonable first move that was wrong here, and
+ * the 26 bytes are real.
+ *
+ * VOLATILE parameters, which the reverted version did not have.  SDCC
+ * cannot see inside an __asm block, so a plain static may be kept in a
+ * register or stored after the call -- .claude/skills/zx-loader records
+ * that costing the bank probe seven rounds.  It was not the cause here
+ * and it was still a latent bug.
+ *
+ * Statics rather than the stack: a __naked function has to dig arguments
+ * out by hand, and this project already got those offsets subtly wrong in
+ * noise_step(), which worked at the wrong pitch. */
+static volatile uint8_t *ct_dst;
+static const volatile uint8_t *ct_src;
 
 #if (VIEW_CH * 8) != 32
 #error "compose_tile_rows() has 32 rows baked into its assembly"
@@ -752,15 +763,6 @@ static void compose_tile(uint8_t vx, uint8_t vy, const uint8_t *src)
     compose_tile_rows();
 }
 
-/* A sprite over what is already in the buffer.
-
-   The mask is stored INVERTED by tools/zxp_tiles_zx0.py -- set where the
-   background should survive, clear over the sprite and its one-pixel
-   outline -- so this is AND then OR with no complement per byte.
-
-   Three memory accesses and two ALU ops per byte where compose_tile()
-   manages one store, which is why only the view unit sprites get it:
-   terrain is the background and has nothing to show through to. */
 /* Stayed in C, deliberately.
  *
  * An assembly version was written and reverted: two passes per row (AND
@@ -873,8 +875,12 @@ static void stamp_cursor(void)
 #error "present_pixels() has no baked constants for this MEM_VBUF"
 #endif
 
-static uint8_t ppx_rows;
-static const uint8_t *ppx_src;
+/* VOLATILE because present_pixels() is __asm and reads them.  SDCC
+   cannot see inside an asm block, so a plain static may be left in a
+   register or stored after the call -- .claude/skills/zx-loader records
+   this as costing the bank probe seven rounds. */
+static volatile uint8_t ppx_rows;
+static const volatile uint8_t *ppx_src;
 
 static void present_pixels(void) __naked
 {
@@ -971,11 +977,12 @@ static void present_all(void)
  * was written and thrown away because reloading three pointers from
  * statics every row cost as much as the tighter inner ops saved.
  *
- * The ATTRIBUTE rows stay in C.  There are four of them against
- * thirty-two, and they are contiguous, so there is nothing to win. */
-static const uint16_t *pc_off;
-static const uint8_t *pc_src;
-static uint8_t *pc_dbase;
+ * Reinstated with compose_tile(), and volatile for the same reason.  The
+ * ATTRIBUTE rows below stay in C: four of them against thirty-two, and
+ * contiguous, so there is nothing to win. */
+static const volatile uint16_t *pc_off;
+static const volatile uint8_t *pc_src;
+static volatile uint8_t *pc_dbase;
 
 static void present_cell_pixels(void) __naked
 {
@@ -1008,7 +1015,7 @@ static void present_cell_pixels(void) __naked
 
 /* Just one cell, for the two ends of a move.  Four bytes a row rather
    than thirty-two: a dirty cell must not cost a whole view. */
-static void present_cell(uint8_t vx, uint8_t vy)
+static void present_cell_to(uint8_t vx, uint8_t vy)
 {
     uint8_t col = (uint8_t)(vx * VIEW_CW);
     uint16_t r = (uint16_t)vy * (VIEW_CH * 8);
@@ -1027,6 +1034,35 @@ static void present_cell(uint8_t vx, uint8_t vy)
         d[0] = sa[0]; d[1] = sa[1]; d[2] = sa[2]; d[3] = sa[3];
     }
     if (vx == CURSOR_VX && vy == CURSOR_VY) stamp_cursor();
+}
+
+/* ...into BOTH screens, where there are two.
+ *
+ * present_cell_to() writes whichever screen is the current target.  With a
+ * shadow screen that leaves the other one holding the cell's OLD picture,
+ * and the next flip shows it: a unit frozen where it used to be, or a
+ * cell whose colour belongs to a previous position of the window.
+ *
+ * That is the ghosting, and it is why it only ever appeared on a 128K --
+ * a 48K has one screen and cannot show it.  render_move() already names
+ * this trap and avoids it with present_all(); scroll_view() now leaves
+ * both screens final for the same reason.  This is the third and last
+ * partial-present path: the per-frame dirty cell and the range recolour
+ * both come through here.
+ *
+ * Two cell presents, ~288 bytes, against a 4 KB present_all() -- which is
+ * the whole reason present_cell() exists. */
+static void present_cell(uint8_t vx, uint8_t vy)
+{
+    present_cell_to(vx, vy);
+
+    if (shadow_ok) {
+        uint8_t *save = gfx_pix;
+
+        gfx_target(save == SCREEN_0 ? SCREEN_1 : SCREEN_0);
+        present_cell_to(vx, vy);
+        gfx_target(save);
+    }
 }
 
 /* --- What a cell looks like ------------------------------------------ */
@@ -1368,6 +1404,10 @@ static void slice_attr_col(uint8_t vx, uint8_t sub, uint8_t dcol)
     for (vy = 0; vy < VIEW_ROWS; vy++) {
         uint8_t flat = 0, mask = 0;
         const uint8_t *blk = cell_attr(vx, vy, &flat, &mask);
+        /* Captured the instant cell_attr() returns: it is a side effect on
+           a static, set for the SELECTED unit's cell and for a target, and
+           anything else calling cell_attr() would reset it. */
+        uint8_t whole = attr_whole;
         const uint8_t *bg, *sp, *m;
         const uint8_t *ter = tile_attr_of(vx, vy);
         uint8_t *d = VATTR + (uint16_t)vy * VIEW_CH * 32 + dcol;
@@ -1382,14 +1422,22 @@ static void slice_attr_col(uint8_t vx, uint8_t sub, uint8_t dcol)
         uint8_t off = cell_row_off(vx, vy);
 
         cell_layers(vx, vy, &bg, &sp, &m);
+
+        /* `whole` is the third case, and it was MISSING.
+           compose_view_attr() washes the entire cell when cell_attr() says
+           so -- the selected unit and a firing target both do -- and this
+           split it into terrain-above/unit-below instead.  So a selected
+           unit scrolling in at the edge was coloured differently from the
+           same unit after any full repaint, and the wash stopped at the
+           sprite's shoulders. */
         for (r = 0; r < VIEW_CH; r++) {
-            if (sp && r >= off && r < (uint8_t)(off + UNITS_VIEW_TILE_ROWS)) {
+            if (!sp || whole) {
+                *d = blk ? (uint8_t)(blk[r * VIEW_CW + sub] | mask) : flat;
+            } else if (r >= off && r < (uint8_t)(off + UNITS_VIEW_TILE_ROWS)) {
                 *d = (uint8_t)(blk ? (blk[(r - off) * VIEW_CW + sub] | mask)
                                    : flat);
-            } else if (sp) {
-                *d = ter[r * VIEW_CW + sub];
             } else {
-                *d = blk ? (uint8_t)(blk[r * VIEW_CW + sub] | mask) : flat;
+                *d = ter[r * VIEW_CW + sub];
             }
             d += 32;
         }
@@ -1405,6 +1453,7 @@ static void slice_attr_row(uint8_t vy, uint8_t sub, uint8_t drow)
     for (vx = 0; vx < VIEW_COLS; vx++) {
         uint8_t flat = 0, mask = 0;
         const uint8_t *blk = cell_attr(vx, vy, &flat, &mask);
+        uint8_t whole = attr_whole;      /* as slice_attr_col(): capture it */
         const uint8_t *bg, *sp, *m;
         uint8_t *d = VATTR + (uint16_t)drow * 32 + vx * VIEW_CW;
         uint8_t c;
@@ -1415,14 +1464,16 @@ static void slice_attr_row(uint8_t vy, uint8_t sub, uint8_t drow)
         uint8_t off = cell_row_off(vx, vy);
 
         cell_layers(vx, vy, &bg, &sp, &m);
-        if (sp && (sub < off
-                   || sub >= (uint8_t)(off + UNITS_VIEW_TILE_ROWS))) {
+        if (sp && !whole && (sub < off
+                             || sub >= (uint8_t)(off + UNITS_VIEW_TILE_ROWS))) {
             const uint8_t *ter = tile_attr_of(vx, vy);
 
             for (c = 0; c < VIEW_CW; c++)
                 d[c] = ter[sub * VIEW_CW + c];
         } else {
-            uint8_t br = (uint8_t)(sp ? sub - off : sub);
+            /* A whole-cell wash indexes the block by the CELL's row, not
+               the sprite's -- same fix as slice_attr_col(). */
+            uint8_t br = (uint8_t)((sp && !whole) ? sub - off : sub);
 
             for (c = 0; c < VIEW_CW; c++)
                 d[c] = blk ? (uint8_t)(blk[br * VIEW_CW + c] | mask) : flat;
@@ -1471,6 +1522,36 @@ void scroll_view(int8_t dx, int8_t dy)
 {
     uint8_t sub;
 
+    /* DIAGONAL: one axis at a time, or the other one is silently lost.
+     *
+     * The sub-step loop below is `if (dx) { horizontal } else { vertical
+     * }` -- it shifts ONE axis per call.  nav_step() applies every held
+     * direction in the same frame, so two keys at once arrive here with
+     * both non-zero, and the vertical component was simply dropped: the
+     * page had moved diagonally while the buffer had only moved sideways,
+     * leaving every cell one row out.
+     *
+     * That is the ghosting.  It shows on UNITS and not on terrain because
+     * a sprite duplicated one cell away is unmistakable while two
+     * adjacent grass tiles are not; it survives every later scroll
+     * because it is in VBUF, not on the screen; it never animates because
+     * animate() repaints the cells units ARE in, and the copy is not one
+     * of them; and M-then-back clears it because that recomposes
+     * everything.  Every symptom, from one dropped axis.
+     *
+     * page_x/page_y already hold the FINAL position -- game.c calls
+     * set_page() before this -- so the horizontal pass has to run with
+     * page_y rolled back to where the buffer still is, and the vertical
+     * pass with it restored.  Each pass then slices its incoming edge
+     * from the page that pass is actually moving to. */
+    if (dx && dy) {
+        page_y = (int8_t)(page_y - dy);
+        scroll_view(dx, 0);
+        page_y = (int8_t)(page_y + dy);
+        scroll_view(0, dy);
+        return;
+    }
+
     /* Pay off the dirty list BEFORE pushing the buffer.
 
        A scroll shifts what is already in VBUF and composes only the
@@ -1487,14 +1568,36 @@ void scroll_view(int8_t dx, int8_t dy)
 
        Draining here rather than gating input: the marks are world
        coordinates and survive the scroll perfectly well, they simply have
-       to be applied before the pixels move. */
-    while (dirty_n) {
-        uint8_t i = --dirty_n;
-        int8_t vx = (int8_t)(dirty_x[i] - page_x);
-        int8_t vy = (int8_t)(dirty_y[i] - page_y);
+       to be applied before the pixels move.
 
-        if (vx >= 0 && vx < VIEW_COLS && vy >= 0 && vy < VIEW_ROWS)
-            compose_view_cell((uint8_t)vx, (uint8_t)vy);
+       Converted with the PRE-SCROLL origin, which is the whole subtlety.
+       game.c updates the cursor, calls set_page() and only then calls
+       this, so page_x/page_y already describe where the window is GOING.
+       The buffer, at this moment, still holds where it CAME FROM -- so a
+       mark converted with the new origin is composed one cell along from
+       where it belongs, and then push_h() moves it again.
+
+       That put the sprite on screen TWICE: a correct copy where the push
+       carried it, and a ghost at the stale position that nothing had
+       repainted.  Visible whenever the dirty list is non-empty and the
+       cursor moves, which is exactly what selecting a unit and then
+       navigating does.
+
+       Subtracting dx/dy recovers the origin the buffer is actually in.
+       After the push, world (wx,wy) lands at wx - (page_x - dx) - dx,
+       which is wx - page_x: the new view position, as intended. */
+    {
+        int8_t ox = (int8_t)(page_x - dx);   /* where the buffer still is */
+        int8_t oy = (int8_t)(page_y - dy);
+
+        while (dirty_n) {
+            uint8_t i = --dirty_n;
+            int8_t vx = (int8_t)(dirty_x[i] - ox);
+            int8_t vy = (int8_t)(dirty_y[i] - oy);
+
+            if (vx >= 0 && vx < VIEW_COLS && vy >= 0 && vy < VIEW_ROWS)
+                compose_view_cell((uint8_t)vx, (uint8_t)vy);
+        }
     }
 
     /* Tear-free where there are two screens to swap between: each
@@ -1529,6 +1632,29 @@ void scroll_view(int8_t dx, int8_t dy)
         } else {
             present_all();
         }
+    }
+
+    /* LEAVE BOTH SCREENS FINAL.
+     *
+     * Each sub-step above composes into whichever screen is not being
+     * shown and then flips, so after four sub-steps the DISPLAYED screen
+     * is correct and the other one is whatever it was given a sub-step
+     * earlier.  Everything that presents afterwards without a full
+     * present_all() -- present_cell() for a dirty cell, most obviously --
+     * writes one screen and flips, and the flip reveals the stale one.
+     *
+     * That is the ghost: units and terrain from an older position of the
+     * window, appearing in the middle of the board. Measured on a 128K
+     * after a scroll: the displayed screen was byte-perfect against VBUF
+     * and the other was wrong in 2403 bytes.
+     *
+     * One more compose/present/show brings the stale screen up to date.
+     * The flip is invisible because both screens now hold the same
+     * picture, and it costs one present per scroll -- not per sub-step. */
+    if (shadow_ok) {
+        render_compose();
+        present_all();
+        render_show();
     }
 }
 
@@ -1573,6 +1699,26 @@ void mark_dirty(uint8_t x, uint8_t y)
         dirty_n++;
         return;
     }
+
+    /* OVERFLOW: repaint everything instead of losing a cell.
+     *
+     * A dropped mark leaves that cell's old PIXELS in VBUF while
+     * everything around it moves on, so the board shows a unit that is
+     * not there -- and because it is in the buffer rather than on the
+     * screen, it survives every scroll, travelling with the board until
+     * it is pushed off the edge.  A full repaint (M, then back) clears
+     * it, which is the giveaway that the buffer is what is wrong.
+     *
+     * Four marks is enough for a player's move -- the cell left and the
+     * cell arrived at -- but not for a turn in which several units act
+     * without render_tick() getting a frame in between, which is exactly
+     * what the enemy turn is.
+     *
+     * Raising DIRTY_MAX would move the cliff rather than remove it.  This
+     * cannot be right in the small and wrong in the large: if the list
+     * cannot say precisely what changed, the honest answer is that
+     * everything did. */
+    dirty_all = 1;
     dirty_dropped();
 }
 
@@ -1896,6 +2042,18 @@ static void animate(void)
 
 void render_tick(void)
 {
+    /* A list that overflowed cannot be paid off cell by cell -- it does
+       not know which cells they were.  Repaint the view whole, once, and
+       forget the marks: they are all covered by definition.  This is the
+       only path that heals a dropped mark, and without it the stale cell
+       lives in VBUF until it scrolls off the edge. */
+    if (dirty_all) {
+        dirty_all = 0;
+        dirty_n = 0;
+        draw_view();
+        return;
+    }
+
     if (dirty_n) {
         while (dirty_n) {
             uint8_t i = --dirty_n;

@@ -1,7 +1,7 @@
 ---
 name: zesarux-test
 description: Launch ZEsarUX headless, inspect screen and variables, and simulate input via ZRCP for the ZX Strategy project. Use when testing, profiling, debugging rendering, or checking screen output.
-when_to_use: "test in emulator" or "check the screen" or "inspect attributes" or "profile the frame" or "screenshot"
+when_to_use: "test in emulator" or "check the screen" or "inspect attributes" or "profile the frame" or "screenshot" or "read memory in the emulator" or "simulate a keypress" or "ZRCP"
 allowed-tools: Bash Read Write Edit
 effort: high
 ---
@@ -289,3 +289,10 @@ same = sum(pix[off(c, y)] == src[off(c, y)]
 - **Blank screen after smartload**: the tape hasn't finished loading; wait 10+ s and check `get-registers` (PC < 0x8000 means still in ROM).
 - **Screen looks right but the frame rate is bad**: verify in Fuse before optimising — ZEsarUX's floating bus emulation is sparser than real hardware, so `vsync_wait()` takes longer to lock (much improved in 13.1, but still not hardware-accurate).
 - **The app presses its own keys**: see the Kempston false positive above.
+- **The test hangs waiting for the title**: the boot logo and title tune
+  block until a key. Wait for the program to have control (PC in
+  `0x8000-0xBFFF`), THEN press — never during the load, which the ROM
+  reads as BREAK and aborts.
+- **The test passes but the bug is still there**: that is a test-design
+  problem, not a driving problem. See `.claude/skills/test-design`, which
+  is about instruments that cannot fail.

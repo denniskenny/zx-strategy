@@ -112,20 +112,32 @@ def main():
                 rows[i] &= ~(1 << b) & 0xFF
             cmd('set-ui-io-ports ' + ''.join('%02x' % x for x in rows) + '00')
 
-        # Press and release until the state moves, never a fixed wait: the
-        # ROM's frame counter stops during the title tune and every other
-        # blocking operation, so "wait N frames" is unbounded.  Same lesson
-        # as tests/p0_state_walk.py.
-        # 60 s for the title, not 36.  The tap is over 50 KB now -- ten
-        # cutscene screens and the raw logo -- and this wait has already
-        # been outgrown once by the tape getting longer.
-        for _ in range(150):
-            if rd(GS, 1)[0] == 0:
+        # WAIT FOR THE TAPE, asked of the PROGRAM COUNTER.
+        #
+        # Nothing in memory can answer this: every candidate lives in the
+        # program's own BSS, which holds uninitialised RAM until the last
+        # block lands -- and on a 48K that read as non-zero, so an earlier
+        # version decided the game had booted and started pressing SPACE
+        # mid-tape.  The ROM's loader treats that as BREAK and aborts, and
+        # the result is indistinguishable from a broken tap.
+        #
+        # PC cannot be stale: it is in the ROM below 0x4000 while the tape
+        # runs, and in 0x8000-0xBFFF once the program has control.
+        def booted():
+            m = re.search(r'PC=([0-9a-fA-F]{4})', cmd('get-registers'))
+            return bool(m) and 0x8000 <= int(m.group(1), 16) < 0xC000
+
+        for _ in range(180):
+            if booted():
                 break
-            time.sleep(0.4)
-        # The title plays a tune, blocking with interrupts off, and the
-        # first press only stops it.  Press until the state actually moves;
-        # 90 tries covers a long tune and a 50 KB tape.
+            time.sleep(0.5)
+        if not booted():
+            sys.exit('pixel_hash: the program never started')
+
+        # THEN press: once through the boot splash (logo + title march,
+        # blocking until a key), and again to start a game.  Press and
+        # release until the state actually moves -- the frame counter stops
+        # inside every blocking operation, so no fixed wait is safe.
         for _ in range(90):
             if rd(GS, 1)[0] == 1:
                 break

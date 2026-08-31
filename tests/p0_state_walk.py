@@ -190,6 +190,32 @@ def wait(cond, timeout):
 
 HINT_ROW = 0x5800 + 21 * 32     # the row a long operation borrows
 ATTR_BUSY = 0x42                # ...and the colour it borrows it in
+TITLE_ROW = 0x5800              # attribute row 0
+ATTR_TITLE = 0x45               # the title bar, and nothing else, is this
+
+
+def past_splash(s):
+    """Press through the boot splash, and only ever AFTER the tape.
+
+       The boot logo is the first block on the tape and the title march
+       plays over it, blocking until a key -- so ST_TITLE does not paint on
+       its own and everything after this would fail.
+
+       game_state is NOT a usable signal here: it lives in BSS, so it reads
+       0 (which is ST_TITLE) all through the splash.  The title BAR is,
+       because only render_title() paints ATTR_TITLE across row 0.
+
+       Never called before the `level` wait below: pressing while the ROM's
+       loader is running is BREAK, which aborts the load and produces a
+       flawless imitation of a tap that does not work."""
+    for _ in range(60):
+        if rd(s, TITLE_ROW, 1)[0] == ATTR_TITLE:
+            return True
+        io(s, 'SPACE')
+        time.sleep(0.4)
+        io(s, None)
+        time.sleep(0.4)
+    return rd(s, TITLE_ROW, 1)[0] == ATTR_TITLE
 
 
 def confirming(s):
@@ -279,6 +305,10 @@ LV = sym('level')
 if not wait(lambda: rd(s, LV, 1)[0] != 0, 60):
     sys.exit("timed out waiting for the program to start — did the tap load?")
 print(f"booted in {time.time() - t0:.1f}s")
+
+# The tape is done, so pressing is safe now and not one moment earlier.
+if not past_splash(s):
+    sys.exit("the title never painted — stuck on the boot splash?")
 
 GS, TER = sym('game_state'), sym('terrain')
 LVL, WON = sym('level'), sym('player_won')
