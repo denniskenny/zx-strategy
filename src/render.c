@@ -1026,14 +1026,37 @@ static void present_cell_to(uint8_t vx, uint8_t vy)
     pc_dbase = gfx_pix + col;
     present_cell_pixels();
 
-    for (ar = 0; ar < VIEW_CH; ar++) {
-        uint8_t *d = gfx_attr + (uint16_t)(VIEW_ROW + vy * VIEW_CH + ar) * 32
-                     + col;
-        const uint8_t *sa = VATTR + (uint16_t)(vy * VIEW_CH + ar) * 32 + col;
+    /* ONE write per attribute byte, never two.
+     *
+     * This used to copy the cell's own colours from VATTR and then call
+     * stamp_cursor() to paint ATTR_CURSOR over the same sixteen bytes.
+     * Between those two writes the ULA can scan the cell, so it is shown
+     * in its real colours for a frame -- a bright flash, once per repaint.
+     *
+     * That is why the flicker appeared on ONE tile and no other, and why
+     * an identically composed base and mountain elsewhere on the map was
+     * steady: only the cursor cell is written twice, and it is only
+     * written at all when the thing under it repaints.  The player's base
+     * starts under the cursor and animates; the enemy's does not.
+     *
+     * Writing the right value first time removes the window entirely. */
+    {
+        uint8_t on_cursor = (uint8_t)(vx == CURSOR_VX && vy == CURSOR_VY);
 
-        d[0] = sa[0]; d[1] = sa[1]; d[2] = sa[2]; d[3] = sa[3];
+        for (ar = 0; ar < VIEW_CH; ar++) {
+            uint8_t *d = gfx_attr
+                       + (uint16_t)(VIEW_ROW + vy * VIEW_CH + ar) * 32 + col;
+
+            if (on_cursor) {
+                d[0] = d[1] = d[2] = d[3] = ATTR_CURSOR;
+            } else {
+                const uint8_t *sa = VATTR
+                                  + (uint16_t)(vy * VIEW_CH + ar) * 32 + col;
+
+                d[0] = sa[0]; d[1] = sa[1]; d[2] = sa[2]; d[3] = sa[3];
+            }
+        }
     }
-    if (vx == CURSOR_VX && vy == CURSOR_VY) stamp_cursor();
 }
 
 /* ...into BOTH screens, where there are two.
@@ -1227,8 +1250,14 @@ static void cell_layers(uint8_t vx, uint8_t vy, const uint8_t **bg,
     u = occupancy[cell];
     if (u != NO_UNIT) {
         uint16_t off = (uint16_t)u_type[u] * UNITS_VIEW_TILE_SIZE;
+
         /* One frame index for the whole board, so every unit is in step.
-           The mask is shared, being the union of both frames. */
+           The mask is shared, being the union of both frames.
+
+           The BASE animates like everything else.  It was pinned to frame
+           1 for a while on the theory that a building flickering was the
+           bug; it was not -- see present_cell_to(), which was writing the
+           cursor cell's attributes twice. */
         *sp = (anim_frame ? unit_view_f2 : unit_view_tiles) + off;
         *mask = unit_view_mask + off;
     }
@@ -2125,6 +2154,31 @@ void render_play(void)
     draw_status("CURSOR :", cursor_x, cursor_y);
     render_hint(PLAY_HINT);
     render_show();
+
+    /* LEAVE BOTH SCREENS HOLDING THE BOARD.
+     *
+     * Everything above draws into the screen that is not being shown and
+     * then flips to it.  The OTHER screen still holds whatever was there
+     * -- the title, or a cutscene -- so the first thing that flips
+     * afterwards reveals it.  At rest nothing flips and it looks fine;
+     * the moment the animation beat presents a cell, the display starts
+     * alternating between the board and a stale picture.
+     *
+     * Measured on the cursor cell: 116 of its 128 pixel bytes differed
+     * between the two screens.  That is the "strong flicker" on the base,
+     * and it was nothing to do with the base -- the sprite was pinned to
+     * frame 1 by then and the cell was stable in VBUF and on the
+     * displayed screen.  Only comparing the two screens showed it.
+     *
+     * copy_chrome() carries the header, panel and attributes across;
+     * present_all() redraws the view area from VBUF.  Same ending as
+     * scroll_view(), for the same reason. */
+    if (shadow_ok) {
+        copy_chrome();
+        render_compose();
+        present_all();
+        render_show();
+    }
 }
 
 void render_map(void)

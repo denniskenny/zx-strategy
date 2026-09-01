@@ -2,7 +2,12 @@
 
 How to get from the scaffold to the game in `docs/DESIGN.md`.
 
-**Where we are: P0–P3 and P7 are done, and the +3 crash is fixed. P4 —
+**Where we are: P0–P5, P7, P8 and P11 are done, one tap serves both
+machines, and the three suites (render_paths, p0_state_walk, pixel_hash)
+are green.  Only P6 — balance — is substantially outstanding, plus
+Stalemate, which is the last thing in DESIGN.md that is not built.**
+
+*(historic)* **P0–P3 and P7 are done, and the +3 crash is fixed. P4 —
 combat and the real win condition — is next, with nothing blocking it.**
 
 The game today places two armies on any of the ten maps, scrolls a pinned-cursor
@@ -423,7 +428,7 @@ vblank window.
   buffer, not what is on screen. Read `0xC000` when bit 3 of `page_reg` is set.
   `.claude/skills/zesarux-test` has the details.
 
-### P7 — The scrolling view
+### P7 — The scrolling view  ✓ done
 
 *Numbered after P6 because it was asked for last, but it belongs here in the
 order: it should land before P5, for the reason under Knock-on.*
@@ -665,7 +670,12 @@ Two lessons worth more than the fix:
   `--machine P341` at all. That gap is still open and is the obvious next
   investment: a `.sna` snapshot bypasses the ROM menu on every model.
 
-### P5 — Enemy turn  ✓ **done in the 48k build**, blocked in the 128k one
+### P5 — Enemy turn  ✓ done, both machines
+
+*Was "done in the 48k build, blocked in the 128k one".  The blocker was
+285 bytes; the 128k build now has ~1 000 clear and ships as ONE tap for
+both machines.  The sub-plan below is kept because its analysis of where
+the bytes went is still the best record of it.*
 
 Threat map built once per turn, per-unit AI, unit-by-unit pacing with the view
 travelling to whoever is acting, input discarded until control returns.
@@ -901,7 +911,13 @@ being optional for animations and more tiles. A 48K gets 0xC000-0xDAFF as
 spare rather than code, which could later hold a second buffer for 48K tear
 reduction.
 
-### P11 — Animated sprites on a 128K  (plan only, not started)
+### P11 — Animated sprites  ✓ done, and on BOTH machines
+
+*Was "128K only, plan only, not started".  The second frame turned out to
+fit in MEM_TILES on a 48K too, so the machines were never split.  Frozen
+by FREEZE_ANIM=1 for tests/pixel_hash.py -- see
+.claude/skills/test-design, because freezing it also hid animate() from
+every test in the file.*
 
 Two frames per unit, the second one 128K-only, driven by the at-rest rule
 already settled in docs/DESIGN.md § Sprite masks and animation. Fix the
@@ -1118,6 +1134,31 @@ is what broke all three attempts.
 frame index — it already returns the sprite pointer, so animation is a
 different offset rather than a different path. That is the payoff for
 having consolidated the three draw paths into it.
+
+### Removing the stdio console driver  (~570 bytes, not started)
+
+`fputc_cons_generic` (438) + `generic_console_printc` (133) are linked into
+every build and never called: the game has `print_at()`.  They are pulled
+in by the zx target's own CRT, not by our code:
+
+```asm
+; lib/target/zx/classic/spec_crt0.asm:92
+    ; We use the generic driver by default
+    defc    TAR__fputc_cons_generic = 1
+```
+
+**Unconditional -- no IFNDEF, no CRT_* guard**, and `spec_crt0.asm` is the
+only file in the zx target that references the driver.  That is why
+`nostreams`, `nofileio`, `CLIB_STDIO_HEAP_SIZE=0`, `CRT_ENABLE_CLOSE=0`
+and `CLIB_EXIT_STACK_SIZE=0` between them bought EIGHT bytes: all of them
+are downstream of a decision already taken.  Line 96,
+`defc TAR__clib_exit_stack_size = 32`, is unconditional for the same
+reason.
+
+**The only route: copy `spec_crt0.asm`, delete line 92, and point zcc at
+the copy.**  The cost is owning a 300-line CRT file forever, including
+whatever z88dk changes in it upstream.  Worth it when the program region
+is genuinely full; not before.
 
 ### P6 — Balance and polish
 

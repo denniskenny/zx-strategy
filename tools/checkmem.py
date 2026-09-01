@@ -37,8 +37,21 @@ import sys
 
 DEFAULT_LIMIT = 0xC000
 LOAD_ADDR = 0x8000
-SECTIONS = ("code_compiler", "rodata_compiler",
-            "data_compiler", "bss_compiler")
+
+# EVERY section the linker places, not a list of four.
+#
+# This used to name code_compiler, rodata_compiler, data_compiler and
+# bss_compiler -- the sections SDCC emits -- and was therefore blind to
+# everything the LIBRARY contributes: bss_clib, rodata_clib, code_driver,
+# code_clib.  It reported the top symbol as _cs_bank at 0xBBFC while
+# __exit_atexit_funcs sat at 0xBC05, nine bytes higher, so the headroom
+# figure the whole project plans against was nine bytes optimistic and
+# would have grown wrong as more library code was pulled in.
+#
+# Matching on "; addr," instead catches anything with a real address,
+# whatever section it came from.  Absolute constants are "; const," and
+# are skipped, which is right: they are not placed anywhere.
+ADDR_LINE = re.compile(r"(\S+)\s+=\s+\$([0-9A-Fa-f]+)\s*;\s*addr,")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEMMAP_H = os.path.join(HERE, "..", "include", "memmap.h")
@@ -105,8 +118,64 @@ def report(top_addr, top_name, limit):
           % (4 * 16384))
 
 
+def free_report(top_addr, limit, mapfile):
+    """The four budgets, on four lines, in the units a feature is planned in.
+
+       `make memmap` prints the whole layout; this prints only what is
+       LEFT, because "can this feature fit?" was being answered by reading
+       a 30-line dump and picking the wrong number out of it.  The
+       contended figure in particular was read as the project's headroom
+       when it is the one region that is deliberately full."""
+    vals, _ = hand_placed()
+    mem_end = vals.get("MEM_END", 0)
+
+    # the contended window: whatever mktap reported, recomputed here so
+    # this does not depend on a build step having just run
+    logic_top = 0
+    for line in open(mapfile):
+        m = ADDR_LINE.match(line)
+        if m:
+            a = int(m.group(2), 16)
+            if 0x6000 <= a < LOAD_ADDR and a > logic_top:
+                logic_top = a
+    contended = (STACK_TOP - logic_top) if logic_top else 0
+
+    print()
+    print("  FREE MEMORY")
+    print("    %-30s %6d bytes   %s"
+          % ("uncontended  0x8000-0xC000", limit - top_addr,
+             "<-- NEW CODE goes here"))
+    print("    %-30s %6d bytes   %s"
+          % ("contended    0x6000-0x7FA0", contended,
+             "cold whole modules only"))
+    print("    %-30s %6d bytes   %s"
+          % ("data         above MEM_END", 0x10000 - mem_end,
+             "never code: a 128K pages it"))
+    # the banks, less whatever the cutscene blobs already occupy
+    used = 0
+    d = os.path.join(HERE, "..", "build", "cutscenes")
+    if os.path.isdir(d):
+        used = sum(os.path.getsize(os.path.join(d, f)) for f in os.listdir(d))
+    print("    %-30s %6d bytes   %s"
+          % ("banks        1,3,4,6", 4 * 16384 - used - 256,
+             "128K/+3 only, storage not code"))
+
+
 def main():
     args = sys.argv[1:]
+    # --addr NAME: print one MEM_* constant and stop.  The Makefile needs
+    # MEM_MUSIC as a number to assemble the song data at its destination,
+    # and memmap.h is the only place that knows it -- a second copy in the
+    # Makefile would be wrong within the hour.
+    if "--addr" in args:
+        i = args.index("--addr")
+        vals, _ = hand_placed()
+        name = args[i + 1]
+        if name not in vals:
+            print("checkmem: no %s in memmap.h" % name, file=sys.stderr)
+            return 1
+        print("0x%04X" % vals[name])
+        return 0
     limit = DEFAULT_LIMIT
     if "--limit" in args:
         i = args.index("--limit")
@@ -115,18 +184,22 @@ def main():
     layout = "--layout" in args
     if layout:
         args.remove("--layout")
+    freeonly = "--free" in args
+    if freeonly:
+        args.remove("--free")
     if not args:
         print(__doc__)
         return 1
 
-    pat = re.compile(r"(\S+)\s+=\s+\$([0-9A-Fa-f]+)\s*;.*?(" +
-                     "|".join(SECTIONS) + r")")
+    # Only symbols at or above LOAD_ADDR: the contended sections (LOGIC,
+    # MUSIC) are placed below 0x8000 and guarded by mktap's stack check,
+    # which knows about the stack and this does not.
     top_addr, top_name = 0, None
     for line in open(args[0]):
-        m = pat.match(line)
+        m = ADDR_LINE.match(line)
         if m:
             a = int(m.group(2), 16)
-            if a > top_addr:
+            if a >= LOAD_ADDR and a > top_addr:
                 top_addr, top_name = a, m.group(1)
 
     if top_addr == 0:
@@ -136,6 +209,8 @@ def main():
 
     if layout:
         report(top_addr, top_name, limit)
+    if layout or freeonly:
+        free_report(top_addr, limit, args[0])
 
     if top_addr >= limit:
         print("checkmem: FAIL — %s is at 0x%04X, at or above the 0x%04X "
@@ -149,7 +224,7 @@ def main():
               % (top_name, top_addr, limit), file=sys.stderr)
         return 1
 
-    if not layout:      # `make map` already said this; do not say it twice
+    if not layout and not freeonly:   # `make map` already said this
         print("checkmem: ok — top symbol %s at 0x%04X, %d bytes clear "
               "of 0x%04X" % (top_name, top_addr, limit - top_addr, limit))
     return 0

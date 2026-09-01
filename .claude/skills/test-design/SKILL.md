@@ -37,6 +37,17 @@ one-byte stride error was caught immediately), one proved a test was
 useless — the "fix" and the "bug" produced identical output, which is how
 the useless test was found.
 
+## A discrepancy in your own output is a result
+
+A tool reported "485 bytes of song data" for a song the linker sized at
+513. The 28 bytes were the order table, silently skipped by an extractor
+that matched hex literals and not `DEFW <label>`; the compressed result
+shipped, played the wrong notes and crashed.
+
+The number that would have caught it was **printed on screen and read
+past**, because 485 looked plausible and the compression ratio looked
+good. When a measurement nearly matches, find out where the rest went.
+
 ## Do not compare two paths that share the suspect code
 
 The most expensive mistake of the session. An invariant compared the
@@ -188,3 +199,5 @@ over. "Fixed" is not, if it is not.
 - `tests/render_paths.py` — both machines, attributes; the PC boot check
 - `tests/pixel_hash.py` — golden-master pixels; needs `FREEZE_ANIM=1`
 - `tests/p0_state_walk.py` — state walk, keyboard and Kempston
+- `.claude/skills/zx-memory` § Compressing music — three build checks for
+  a data transform, and why none of them can hear the tune

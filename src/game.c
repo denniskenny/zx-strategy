@@ -261,6 +261,28 @@ static void busy_off(const char *hint)
 /* Paint the state's screen, then do whatever entering it means beyond
    painting.  The split is deliberate: render.c knows how to draw each
    screen and nothing else, and this is where the consequences live. */
+/* How long a cutscene is guaranteed to stay on screen, in FRAMES, before
+   any press can dismiss it.  ONE SECOND: long enough that the picture
+   registers, short enough that a deliberate player is not held up.
+ *
+ * Past the hold, pressing DOES dismiss it -- five fast taps still get
+ * through, and should: mashing the key means "skip this".  What the hold
+ * guarantees is that the cutscene is never invisible, which is what the
+ * bug was.
+ *
+ * A MINIMUM TIME, not a demand for quiet.  The first attempt required the
+ * keyboard to be silent before the tune started, which fixed the skip and
+ * introduced something worse: every press restarted the count, so a
+ * player mashing the key -- exactly what someone impatient with a
+ * cutscene does -- could never get past it.  render_paths caught that
+ * immediately by hammering SPACE and hanging at the title.
+ *
+ * Also NOT counted in loop iterations, which is what the first version
+ * did: 200 of them sounded like a fifth of a second and was nearer six
+ * milliseconds.  A counter whose unit is "however fast this CPU spins"
+ * cannot express a human timescale. */
+#define CUTSCENE_HOLD   50
+
 static void enter_state(uint8_t s)
 {
     game_state = s;
@@ -302,7 +324,29 @@ static void enter_state(uint8_t s)
              * and the cutscene flashes past unseen.  flush_input() cannot
              * help: it runs at the end of enter_state(), and it clears the
              * input layer's idea of the keyboard, not the keyboard. */
-            while (any_key()) { }
+            /* Hold the picture on screen before anything can dismiss it.
+             *
+             * A release check alone is not enough.  render_cutscene()
+             * takes a visible moment -- a bank page, a decompress and two
+             * 6912-byte copies -- so a player whose keypress appears to
+             * do nothing taps again, which is the normal human response.
+             * The second tap lands after the release check has passed and
+             * stops the tune the instant it starts, so the picture is
+             * gone before it is seen.
+             *
+             * Reproduced by tapping twice 0.12 s apart; a single press,
+             * or a 1.2 s hold, never showed it, which is why this
+             * survived several rounds of "cannot reproduce".
+             *
+             * See CUTSCENE_HOLD for why this is a fixed time rather than
+             * a wait for the keyboard to fall quiet. */
+            {
+                uint8_t f;
+
+                for (f = 0; f < CUTSCENE_HOLD; f++)
+                    vsync_wait();       /* the picture, guaranteed seen */
+            }
+            while (any_key()) { }       /* ...then let go of the burst */
             lowlands_play();
 
             /* The tune's RETURN is the dismissal.  It only returns on a
@@ -791,12 +835,7 @@ static void handle_input(void)
  * march rather than silence. */
 static void splash(void)
 {
-#if DEBUG_STATE_WALK
-    /* The debug build cannot afford both tunes -- see the Makefile. */
-    lowlands_play();
-#else
     grenadiers_play();
-#endif
 }
 
 void game_run(void)

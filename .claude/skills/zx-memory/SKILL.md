@@ -1,7 +1,7 @@
 ---
 name: zx-memory
 description: Place code, graphics and buffers correctly on the ZX Spectrum — the 48K/128K/+3 memory map, contended vs uncontended RAM, bank switching and the ROM-select trap, and the linking rules that stop generated asset headers being duplicated into every translation unit.
-when_to_use: "out of memory" or "checkmem failed" or "where should this buffer go" or "add a graphic" or "new asset" or "banking" or "paging" or "contended memory" or "0x7FFD" or "duplicate symbol" or "undefined symbol" or "it works on 48K but not 128K" or "crashes on the +3" (for building the .tap itself, see zx-loader)
+when_to_use: "out of memory" or "checkmem failed" or "compress music" or "song data is too big" or "where should the tunes go" or "relocating data with pointers in it" or "how much memory is free" or "where should this buffer go" or "add a graphic" or "new asset" or "banking" or "paging" or "contended memory" or "0x7FFD" or "duplicate symbol" or "undefined symbol" or "it works on 48K but not 128K" or "crashes on the +3" (for building the .tap itself, see zx-loader)
 allowed-tools: Bash Read Write Edit
 effort: medium
 ---
@@ -207,6 +207,14 @@ sizes as their *value* — use those.
 
 ## zcc will not evaluate `#if` inside a function containing `__asm`
 
+**It also drops `#if` and `#define` that appear AFTER such a function, in
+the same file.** A guard written below an `__asm` function compiled to
+nothing, and the error was `undefined identifier` pointing at a line
+*inside* the guard — which reads as the preprocessor working and the
+symbol missing. Put every conditional above the first `__asm`, or use a
+`const` pointer instead of a `#define`.
+
+
 Preprocessor directives in the body of a function that has an inline asm
 block are **passed through to the back end verbatim, unevaluated**. This is
 not a warning; it is silent.
@@ -409,6 +417,87 @@ check what is hand-placed there — the linker map will not tell you, because
 it does not know about `memmap.h`. And an asset used *once at boot* can
 hide a placement bug that an asset used *per level* exposes; if graphics
 survive the title screen, that is not evidence they are safely placed.
+
+## Compressing music (or any large read-mostly data)
+
+**Song data is the most compressible thing in a game and it starts in the
+worst place.** Measured on this project's two Tritone tunes:
+
+| | assembled | ZX0 | |
+|---|---|---|---|
+| grenadiers (title) | 513 | **190** | 63% |
+| lowlands (summary) | 264 | **123** | 53% |
+| | 777 | 313 | **~430 bytes** |
+
+Patterns repeat and half of every row is a `$01` sustain byte. Those bytes
+come out of `0x8000-0xBFFF`, the only region that can hold code, which
+makes them the most valuable bytes in the machine.
+
+### The trap: the order table is ABSOLUTE POINTERS
+
+A Tritone song begins with `DEFW PAT0, DEFW PAT1, ...` — addresses the
+LINKER resolves. **Compress the module's bytes, unpack them anywhere else,
+and every pointer is wrong by the relocation distance.** The symptom is
+the right tempo, the wrong notes, and a crash a bar or two in when the
+engine follows a pointer into whatever follows.
+
+Any format with internal pointers behaves this way. Check for them before
+relocating data.
+
+### The fix: assemble at the destination
+
+Give the song data `org MEM_MUSIC`, assemble it, and compress **that
+image**. The labels then resolve to the buffer the game unpacks into, so
+the pointers are correct on arrival. Same idea as `SECTION LOGIC`.
+
+```
+compressed blob    0x8000-0xBFFF   DEFB in the tune's linkable .asm
+unpacked image     above MEM_END   one buffer, sized for the largest tune
+the engine         0x8000-0xBFFF   ONE copy, shared by every tune
+```
+
+* **The blob stays low**: small, and the tape can address it.
+* **The image goes above `MEM_END`** — uncontended, and the region code can
+  never use because a 128K pages it. Works on both machines: plain RAM on
+  a 48K, page 7 on a 128K, which is mapped throughout play.
+* **ONE buffer**, because tunes block: only one is ever live. A second
+  would cost bytes to state what the control flow guarantees.
+* **Not a bank**: 128K only, and a 48K needs the tune too.
+
+The destination must exist in exactly one place. Here `memmap.h` owns it
+and the Makefile reads it back, so moving it rebuilds the tunes:
+
+```make
+MUSIC_ORG = $(shell $(PYTHON) tools/checkmem.py --addr MEM_MUSIC)
+```
+
+### Verify it in the build, not by ear
+
+This shipped broken once because nothing checked. A first extractor
+scraped `$xx` literals out of the .asm and **silently skipped every
+`DEFW <label>`** — so the order table vanished. It recovered 485 bytes
+from a 513-byte song, and that 28-byte discrepancy was printed and read
+past.
+
+Three checks, all cheap, all in the build:
+
+1. **Round trip.** Decompress the blob with `z88dk-dzx0` and compare with
+   the assembled `.bin`. Fail the build if they differ.
+2. **Every pointer in range** — not just the first. A bad LOOP pointer at
+   the end is a crash rather than wrong notes.
+3. **Read it back on the machine.** After the tune has played, compare
+   `MEM_MUSIC` against the assembled reference over ZRCP. That is the only
+   check that proves the whole chain.
+
+None of these can hear the tune. They prove the engine reads what the
+arranger wrote; pitch and tempo still need a person.
+
+### It pays twice
+
+At 530 bytes of raw pattern the debug build could not afford both tunes
+and linked one, so it played different music from the shipping build —
+a debug build testing something else. Compressed, the divergence stopped
+being worth having and a conditional came out of three files.
 
 ## Adding a graphic
 

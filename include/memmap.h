@@ -107,7 +107,20 @@
    § Enemy decisions). */
 #define MEM_THREAT      (MEM_U_FLAGS + 40)
 
-#define MEM_END         (MEM_THREAT + 98)
+/* Song data, ZX0 below 0xC000 and unpacked to HERE on the way into a
+   tune (src/music.c).
+ *
+ * The order table holds ABSOLUTE pointers, so the data is assembled at
+ * this address by tools/gen_tritone_module.py --org and the compressed
+ * image is what ships.  The Makefile reads this constant, so moving it
+ * rebuilds the tunes; a hand-built .asm would go stale silently.
+ *
+ * Sized for the LARGEST tune, not the sum: tunes block, so only one is
+ * ever live.  gen_tritone_module.py prints each song's assembled size. */
+#define MEM_MUSIC       (MEM_THREAT + 98)
+#define MEM_MUSIC_SIZE  544         /* grenadiers assembles to 513 */
+
+#define MEM_END         (MEM_MUSIC + MEM_MUSIC_SIZE)
 
 /* The buffers now live ABOVE the program, at 0xDB00, so the old check
    against the stack no longer applies: with -zorg 0x6000 the stack is at

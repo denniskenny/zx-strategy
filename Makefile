@@ -218,19 +218,25 @@ assets: $(GENERATED_HEADERS) $(MUSIC_LINKABLE)
 # assets/music/NAME_linkable.asm to MUSIC_LINKABLE, and call NAME_play().
 # (See .claude/skills/tritone-music.)
 MUSIC_ENGINE = assets/music/tritone_engine.asm
-# The debug build carries the W/L state-walk keys and CANNOT afford both
-# tunes: the shipping build has 3 bytes clear of 0xC000, and the debug
-# keys need more than that.  A debug tap that overruns is 48K-only, page 7
-# banks over its tail on a 128K, and the symptom is "the W key does not
-# work" -- which sends you looking at the keyboard, not the ceiling.
+# BOTH tunes, in every build.
 #
-# So the debug build gets the level-summary tune only.  Same code paths,
-# one fewer song.
+# The debug build used to link only the summary tune, because when the
+# state-walk keys were added there was no room for two.  There is now, and
+# a debug build that plays different music from the shipping one is a
+# debug build testing something else.
+#
+# The song data is COMPRESSED and assembled at MEM_MUSIC: see the
+# %_linkable.asm rule below and src/music.c.  Worth ~430 bytes of the
+# program region.
+#
+# It was reverted twice on suspicion of breaking the first cutscene.  It
+# never did -- that was a double-tap racing render_cutscene(), fixed by
+# CUTSCENE_HOLD in game.c -- but the build now verifies the ZX0 round trip
+# and every order-table pointer, because the first attempt shipped a
+# silently truncated song and nothing caught it.
 MUSIC_LINKABLE = $(MUSIC_ENGINE) \
-                 assets/music/lowlands_linkable.asm
-ifneq ($(DEBUG_KEYS),1)
-MUSIC_LINKABLE += assets/music/grenadiers_linkable.asm
-endif
+                 assets/music/lowlands_linkable.asm \
+                 assets/music/grenadiers_linkable.asm
 
 # Shared engine, extracted once from the Beepola export template.
 MUSIC_TEMPLATE = assets/music/tritone_template.asm
@@ -243,14 +249,22 @@ assets/music/%.asm: assets/music/%.txt $(MUSIC_TEMPLATE) tools/txt2tritone.py
 	$(PYTHON) tools/txt2tritone.py $< -o $@ --template $(MUSIC_TEMPLATE)
 
 # Tritone assembly -> per-tune data module (symbol prefix = filename stem)
-assets/music/%_linkable.asm: assets/music/%.asm tools/gen_tritone_module.py
-	$(PYTHON) tools/gen_tritone_module.py $< -o $@ --name $*
+#
+# --org: the song data is ASSEMBLED AT MEM_MUSIC and shipped ZX0'd,
+# because its order table holds absolute pointers and would otherwise be
+# wrong wherever it was unpacked.  The address comes from memmap.h through
+# checkmem, so there is exactly one copy of it.
+MUSIC_ORG = $(shell $(PYTHON) tools/checkmem.py --addr MEM_MUSIC)
+
+assets/music/%_linkable.asm: assets/music/%.asm tools/gen_tritone_module.py include/memmap.h
+	$(PYTHON) tools/gen_tritone_module.py $< -o $@ --name $* \
+	    --org $(MUSIC_ORG) --zx0 $(ZX0)
 
 # keep generated .asm intermediates from being auto-deleted
 .SECONDARY:
 
 # --- Source files ---
-SRCS = src/main.c src/game.c src/logic.c src/render.c src/render_screens.c src/gfx.c src/input.c src/hw_detect.c \
+SRCS = src/main.c src/game.c src/logic.c src/render.c src/render_screens.c src/music.c src/gfx.c src/input.c src/hw_detect.c \
        src/vsync.c src/prng.c src/dzx0.c src/no_font64.asm src/assets_low_syms.asm src/logic_org.asm
 
 HEADERS = config/app_config.h config/game_config.h include/gfx.h include/input.h include/hw.h \
@@ -274,6 +288,7 @@ map:
 	$(MAKE) clean
 	$(MAKE) USER_CFLAGS="-m" DEBUG_KEYS=$(DEBUG_KEYS)
 	$(PYTHON) tools/checkmem.py $(APP).map --limit $(MEM_LIMIT)
+	@$(PYTHON) tools/checkmem.py $(APP).map --free --limit $(MEM_LIMIT)
 
 .PHONY: checkmem memmap
 checkmem: map
