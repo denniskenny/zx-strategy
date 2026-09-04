@@ -38,9 +38,32 @@
 #define SFX_BOOM        2       /* a death:       ~37-224 Hz, a crunch  */
 #define SFX_VOICES      3
 
-static const uint16_t sfx_base[SFX_VOICES] = {    120,     40,    300 };
+static const uint16_t sfx_base[SFX_VOICES] = {     88,     40,    172 };
 static const uint16_t sfx_mask[SFX_VOICES] = { 0x00FF, 0x007F, 0x05FF };
 static const uint8_t  sfx_len[SFX_VOICES]  = {      3,      8,     24 };
+
+/* HOW FAR THE PITCH WANDERS between one firing and the next.
+ *
+ * `mask` above already randomises the period cycle BY cycle, which is
+ * what makes each burst noise rather than a tone.  But every burst
+ * started from the same `base`, so every move sounded like exactly the
+ * same move -- and MOVE fires on every step of every unit, which is
+ * where a repeated sound is most obviously a repeated sound.
+ *
+ * This picks one offset per BURST, so successive footsteps differ from
+ * each other while each one still holds together.  A power-of-two mask,
+ * not a modulo: the Z80 has no divide.
+ *
+ * The bases above were LOWERED by half the spread, so the average pitch
+ * is what it was before tuning -- 120 and 300.  Change a spread and
+ * change its base by half as much in the other direction, or the voice
+ * moves as well as widening.
+ *
+ * ATTACK is deliberately 0.  It is the confirmation that a shot landed,
+ * and a confirmation that sounds different every time reads as a
+ * different event.  The two sounds that describe a PHYSICAL thing -- a
+ * footfall, a blast -- are the ones that want the variation. */
+static const uint16_t sfx_vary[SFX_VOICES] = { 0x003F, 0x0000, 0x00FF };
 /* MOVE is deliberately the shortest burst of the three -- a tick, not a
  * thud.  It fires on every step of every unit, so it is the one sound the
  * player hears constantly, and anything with a tail makes holding a

@@ -38,6 +38,7 @@
 #include "../include/level_1.h"
 #include "../include/memmap.h"
 #include "../include/render.h"
+#include "../include/strings.h"
 #include "../include/tiles_map.h"
 #include "../include/tiles_view.h"
 #include "../include/units_map.h"
@@ -452,13 +453,25 @@ static uint8_t dirty_all;
 #error "the view buffer assumes a full-width, byte-aligned play view"
 #endif
 
-/* Status-panel labels, padded to 8 characters like the terrain names
-   the map converter generates. */
-static const char *const unit_names[UNIT_TYPES] = {
-    "INFANTRY",
-    "TANK    ",
-    "CANNON  ",
-    "BASE    "
+/* Status-panel labels, ONE PER SIDE.
+ *
+ * Indexed [side][type], side 1 being whoever U_SIDE marks.  The enemy
+ * names carry an "E-" prefix so the panel says whose unit the cursor is
+ * over in words, not only in colour -- which matters on a machine where
+ * the same cell can be red for two different reasons.
+ *
+ * TEN characters, padded, and the field starts at column 9 rather than
+ * 10 for exactly that reason: "E-INFANTRY" is ten and would have run
+ * into the HP figure at 19.  Column 9 was the one free column between
+ * the "UNIT   :" label and the name.
+ *
+ * Pointers into the compressed pool, so the text itself costs nothing
+ * here beyond the sixteen bytes of table. */
+static const char *const unit_names[2][UNIT_TYPES] = {
+    { TXT_UNIT_INFANTRY,   TXT_UNIT_TANK,
+      TXT_UNIT_CANNON,     TXT_UNIT_BASE   },
+    { TXT_UNIT_E_INFANTRY, TXT_UNIT_E_TANK,
+      TXT_UNIT_E_CANNON,   TXT_UNIT_E_BASE }
 };
 
 /* ------------------------------------------------------------ drawing */
@@ -616,7 +629,7 @@ static void draw_unit_line(uint8_t cell)
     uint8_t u = occupancy[cell];
     uint8_t t;
 
-    print_at(1, ROW_UNIT, "UNIT   :");
+    print_at(1, ROW_UNIT, TXT_UNIT);
 
     if (u == NO_UNIT) {
         /* Blank the WHOLE field, columns 10..31, not just the first
@@ -624,13 +637,13 @@ static void draw_unit_line(uint8_t cell)
            behind: stepping the cursor off a TANK showed "-ANK", and off
            INFANTRY "-NFANTRY".  The comment above this function already
            promised it blanked the field; only now does it. */
-        print_at(10, ROW_UNIT, "-                     ");
+        print_at(9, ROW_UNIT, TXT_BLANK_2);
         set_attr_rect(0, ROW_UNIT, 32, 1, ATTR_TEXT);
         return;
     }
 
     t = u_type[u];
-    print_at(10, ROW_UNIT, unit_names[t]);
+    print_at(9, ROW_UNIT, unit_names[(u_flags[u] & U_SIDE) ? 1 : 0][t]);
     print_num(19, ROW_UNIT, u_hp[u], 3);
     print_char(22, ROW_UNIT, '/');
     print_num(23, ROW_UNIT, unit_health[t], 3);
@@ -654,7 +667,7 @@ void draw_status(const char *label, uint8_t x, uint8_t y)
 
     draw_unit_line(cell);
 
-    print_at(1, ROW_TURN, "TURN   :");
+    print_at(1, ROW_TURN, TXT_TURN);
     print_num(10, ROW_TURN, turn, 3);
 
     print_at(1, ROW_COORD, label);
@@ -662,9 +675,9 @@ void draw_status(const char *label, uint8_t x, uint8_t y)
     print_char(12, ROW_COORD, ',');
     print_num(13, ROW_COORD, y, 2);
 
-    print_at(1, ROW_TERRAIN, "TERRAIN:");
+    print_at(1, ROW_TERRAIN, TXT_TERRAIN);
     print_at(10, ROW_TERRAIN, level_1_terrain_names[t]);
-    print_at(19, ROW_TERRAIN, "COVER");
+    print_at(19, ROW_TERRAIN, TXT_COVER);
     print_num(25, ROW_TERRAIN, terrain_cover[t], 2);
     print_char(27, ROW_TERRAIN, '%');
 
@@ -692,7 +705,7 @@ void render_view_to(uint8_t wx, uint8_t wy)
     cursor_y = wy;
     set_page();
     render_play();
-    render_hint("      ENEMY TURN");
+    render_hint(TXT_ENEMY_TURN);
 }
 
 void set_page(void)
@@ -1840,10 +1853,22 @@ static void noise_cycle(void) __naked
  * The width of the period is what stops it settling into a tone, and its
  * lowness is what makes it a crunch rather than a hiss.  Blocking, which
  * is fine -- a unit dies between turns, not inside a frame budget. */
+/* Shared by the noise itself and by the per-burst pitch offset.  One
+   stream, so the two cannot fall into step with each other. */
+static prng_t np = { 0xACE1u, 0x1234u };
+
+/* The starting period for one burst of `voice`, wandered a little.
+ *
+ * Called once per burst, NOT once per cycle: the cycle-by-cycle variation
+ * is what makes the sound noisy, and this is what stops two bursts of the
+ * same voice being identical to each other. */
+static uint16_t sfx_pitch(uint8_t voice)
+{
+    return (uint16_t)(sfx_base[voice] + (prng_next(&np) & sfx_vary[voice]));
+}
+
 static void noise(uint8_t len, uint8_t border, uint16_t base, uint16_t mask)
 {
-    static prng_t np = { 0xACE1u, 0x1234u };
-
     noise_port = border;
     while (len--) {
         noise_hold = (uint16_t)((prng_next(&np) & mask) + base);
@@ -1855,7 +1880,7 @@ static void noise(uint8_t len, uint8_t border, uint16_t base, uint16_t mask)
    the explosion flickers it, and that is part of the explosion. */
 void sfx(uint8_t voice)
 {
-    noise(sfx_len[voice], 7, sfx_base[voice], sfx_mask[voice]);
+    noise(sfx_len[voice], 7, sfx_pitch(voice), sfx_mask[voice]);
 }
 
 /* Draw the explosion over the terrain at a view cell, in `attr`. */
@@ -1901,9 +1926,11 @@ void render_boom(uint8_t wx, uint8_t wy)
         boom_cell((uint8_t)vx, (uint8_t)vy, (uint8_t)(step & 1),
                   boom_attr[step & 1]);
         /* Shortening bursts, so the bang decays rather than droning. */
+        /* A fresh offset per step, so the four bursts of one blast are
+           not four copies of the same crunch. */
         noise((uint8_t)(sfx_len[SFX_BOOM] - step * 4),
               (uint8_t)(step & 1 ? 2 : 7),
-              sfx_base[SFX_BOOM], sfx_mask[SFX_BOOM]);
+              sfx_pitch(SFX_BOOM), sfx_mask[SFX_BOOM]);
     }
 
     /* Put the cell back to whatever it should be now -- empty ground, or
@@ -2147,11 +2174,11 @@ void render_hint(const char *hint)
 void render_play(void)
 {
     render_compose();
-    draw_header("THE FIELD");
+    draw_header(TXT_THE_FIELD);
     set_page();
     draw_view();
     render_discard();       /* draw_view() already used the real colours */
-    draw_status("CURSOR :", cursor_x, cursor_y);
+    draw_status(TXT_CURSOR, cursor_x, cursor_y);
     render_hint(PLAY_HINT);
     render_show();
 
@@ -2184,29 +2211,29 @@ void render_play(void)
 void render_map(void)
 {
     render_compose();
-    draw_header("CAMPAIGN MAP");
+    draw_header(TXT_CAMPAIGN_MAP);
     draw_map();
     solid_map_cell(cursor_x, cursor_y, ATTR_HINT);  /* the play cursor */
     solid_map_cell(cur_x, cur_y, ATTR_CURSOR);
-    draw_status("CURSOR :", cur_x, cur_y);
-    render_hint("QAOP LOOK AROUND  ENTER BACK");
+    draw_status(TXT_CURSOR, cur_x, cur_y);
+    render_hint(TXT_QAOP_LOOK_AROUND_ENTER_BACK);
     render_show();
 }
 
 void render_won(void)
 {
     render_compose();
-    draw_header("CAMPAIGN COMPLETE");
+    draw_header(TXT_CAMPAIGN_COMPLETE);
 
-    print_at(4, 9,  "EVERY LEVEL TAKEN");
-    print_at(4, 11, "LEVELS WON     :");
+    print_at(4, 9,  TXT_EVERY_LEVEL_TAKEN);
+    print_at(4, 11, TXT_LEVELS_WON);
     print_num(22, 11, LEVEL_COUNT, 2);
-    print_at(4, 12, "FINAL SCORE    :");
+    print_at(4, 12, TXT_FINAL_SCORE);
     print_num(21, 12,
               (uint8_t)(campaign_score > 999 ? 999 : campaign_score), 3);
     set_attr_rect(0, 9, 32, 4, ATTR_TEXT);
 
-    render_hint("SPACE / FIRE 1");
+    render_hint(TXT_SPACE_FIRE_1);
     render_show();
 }
 

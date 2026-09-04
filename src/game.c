@@ -65,6 +65,7 @@
 #include "../include/input.h"
 #include "../include/music.h"
 #include "../include/render.h"
+#include "../include/strings.h"
 #include "../include/vsync.h"
 
 /* Action bits — keyboard and Kempston are folded into one byte so a
@@ -491,7 +492,7 @@ static void view_to(uint8_t cell)
     cursor_x = col_of[cell];        /* a table, not a divide */
     cursor_y = (uint8_t)(cell / GRID_COLS);
     render_play();          /* set_page, whole window, one clean reveal */
-    render_hint("      ENEMY TURN");
+    render_hint(TXT_ENEMY_TURN);
     redraw_status = 1;
 }
 
@@ -526,7 +527,7 @@ static void update_state(void)
                 enemy_tick();
                 render_tick();
                 if (redraw_status) {
-                    draw_status("ENEMY  :", cursor_x, cursor_y);
+                    draw_status(TXT_ENEMY, cursor_x, cursor_y);
                     redraw_status = 0;
                 }
                 break;
@@ -534,7 +535,7 @@ static void update_state(void)
             move_play_cursor();
             render_tick();
             if (redraw_status) {
-                draw_status("CURSOR :", cursor_x, cursor_y);
+                draw_status(TXT_CURSOR, cursor_x, cursor_y);
                 redraw_status = 0;
             }
             break;
@@ -542,7 +543,7 @@ static void update_state(void)
         case ST_MAP:
             move_cursor();
             if (redraw_status) {
-                draw_status("CURSOR :", cur_x, cur_y);
+                draw_status(TXT_CURSOR, cur_x, cur_y);
                 redraw_status = 0;
             }
             break;
@@ -594,7 +595,7 @@ static void handle_input(void)
                         enemy_begin();
                         enemy_active = 1;
                         enemy_beat = ENEMY_BEAT;
-                        render_hint("      ENEMY TURN");
+                        render_hint(TXT_ENEMY_TURN);
                         redraw_status = 1;
                     }
                 } else if (edge & ACT_CANCEL) {
@@ -625,7 +626,7 @@ static void handle_input(void)
                 if (targeting) {
                     /* SPACE confirms the highlighted target.  Nothing else
                        on this screen can act while the mode is up. */
-                    render_hint("");
+                    render_hint(TXT_BLANK);
                     sfx(SFX_ATTACK);
                     attack(target_now());
                     targeting = 0;
@@ -668,7 +669,7 @@ static void handle_input(void)
                            for a unit that does not move -- a Cannon -- the
                            first press changed nothing visible and looked
                            like a shot that did no damage. */
-                        render_hint("QAOP PICK  SPACE FIRE  ENTER BACK");
+                        render_hint(TXT_QAOP_PICK_SPACE_FIRE_ENTER_B);
                     } else {
                         uint8_t step = best_adjacent(cell);
 
@@ -678,7 +679,7 @@ static void handle_input(void)
                             move_selected_to(step);
                             targeting_open(selected, cell);
                             cursor_to(target_now());
-                            render_hint("QAOP PICK  SPACE FIRE  ENTER BACK");
+                            render_hint(TXT_QAOP_PICK_SPACE_FIRE_ENTER_B);
                         }
                     }
                 } else if (u == NO_UNIT && cost[cell] != NO_COST &&
@@ -845,6 +846,23 @@ void game_run(void)
     turn = 0;
     level = 1;
     load_tiles();
+
+    /* HERE, with the other unpacks, and not in main().
+     *
+     * The strings land in MEM_TEXTPOOL, which is above 0xC000 -- a paged
+     * bank on a 128K.  load_tiles() calls screens_init(), which is what
+     * selects page 7 and leaves it selected; every buffer up there
+     * belongs to that page.  Unpacking before it ran wrote the text into
+     * whichever bank was mapped at the time, page 7 came in over the top
+     * of it, and the 128K title screen came up with its attributes
+     * painted and not one pixel of ink.  A 48K has no paging and showed
+     * nothing wrong.
+     *
+     * The music buffer never caught this because a tune is unpacked at
+     * the moment it plays, long after the map has settled. */
+    text_init();
+    font_init();        /* after screens_init(): needs is_128k and page_reg */
+
     load_map();
 
     splash();

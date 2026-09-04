@@ -1,7 +1,7 @@
 ---
 name: zx-memory
 description: Place code, graphics and buffers correctly on the ZX Spectrum — the 48K/128K/+3 memory map, contended vs uncontended RAM, bank switching and the ROM-select trap, and the linking rules that stop generated asset headers being duplicated into every translation unit.
-when_to_use: "out of memory" or "checkmem failed" or "compress music" or "song data is too big" or "where should the tunes go" or "relocating data with pointers in it" or "how much memory is free" or "where should this buffer go" or "add a graphic" or "new asset" or "banking" or "paging" or "contended memory" or "0x7FFD" or "duplicate symbol" or "undefined symbol" or "it works on 48K but not 128K" or "crashes on the +3" (for building the .tap itself, see zx-loader)
+when_to_use: "out of memory" or "checkmem failed" or "compress text" or "where should the strings go" or "externalise strings" or "compress music" or "song data is too big" or "where should the tunes go" or "relocating data with pointers in it" or "how much memory is free" or "where should this buffer go" or "add a graphic" or "new asset" or "banking" or "paging" or "contended memory" or "0x7FFD" or "duplicate symbol" or "undefined symbol" or "it works on 48K but not 128K" or "crashes on the +3" (for building the .tap itself, see zx-loader)
 allowed-tools: Bash Read Write Edit
 effort: medium
 ---
@@ -418,7 +418,47 @@ it does not know about `memmap.h`. And an asset used *once at boot* can
 hide a placement bug that an asset used *per level* exposes; if graphics
 survive the title screen, that is not evidence they are safely placed.
 
-## Compressing music (or any large read-mostly data)
+## Never bank data you must read WHILE DRAWING
+
+On a 128K the shadow screen is at `0xC000`, and so is the only window a
+RAM bank can be paged into. They are the same sixteen kilobytes.
+
+So anything paged in at `0xC000` is unavailable for as long as it is
+paged, and if the code doing the paging also draws to the shadow screen,
+**the bank replaces the screen it is drawing to.**
+
+Measured, by putting a 768-byte font in a bank and pointing the character
+printer at it:
+
+```
+48k    ' UNIT   :Red Base  025/025 R0 M0'    perfect
+128k   ' ?NI?   :Red B?se   2?/ 2? R  ? '    corrupt
+```
+
+Corruption ONLY on the machine that double-buffers -- the signature of
+exactly this collision. The glyph writes were landing in the font bank
+and the reads were colliding with the screen.
+
+**Banks are for data read at a moment you control**: a cutscene picture
+decompressed while nothing else happens, a tune unpacked before it plays,
+a level loaded between turns. They are not for anything a per-frame or
+per-character routine reads.
+
+The escape -- page in, copy the one glyph, page out, draw -- is two page
+switches per character. Costed and rejected.
+
+Note also that everything else above `0xC000` is in the SAME window: the
+compose buffer, the tile sheets, the string pool. Paging a bank in hides
+all of them, which is why unpacking must happen after the map is settled
+and why a cutscene cannot print while its bank is in. Three separate
+bugs in this project, one cause.
+
+## Compressing read-mostly data: music, and text
+
+*Laying out a NEW project?  `.claude/skills/zx0-layout` covers the
+decision -- which region each kind of thing belongs in and what is worth
+compressing at all.  This section is the two worked examples.*
+
 
 **Song data is the most compressible thing in a game and it starts in the
 worst place.** Measured on this project's two Tritone tunes:
@@ -491,6 +531,59 @@ Three checks, all cheap, all in the build:
 
 None of these can hear the tune. They prove the engine reads what the
 arranger wrote; pitch and tempo still need a person.
+
+## Compressing TEXT
+
+The same shape, and the numbers came out better still:
+
+```
+628 bytes of strings  ->  356 ZX0     43% saved
+decoder                    0 bytes    dzx0 was already linked
+offset table               0 bytes    not needed -- see below
+```
+
+**+278 bytes of the program region**, for 628 above `MEM_END`.
+
+### The addresses are constants, so no call site changes
+
+The pool unpacks to a FIXED address and the offsets are known when the
+generator runs, so a string is a compile-time constant:
+
+```c
+#define TXT_HINT_PLAY ((const char *)(MEM_TEXTPOOL + 123))
+```
+
+One `ld hl,nn` at the call site -- exactly what a plain `const char[]`
+cost. **Do not route this through a `str_of(n)` function.** That was
+tried: the extra push/call/return cost about six bytes at each of 52 call
+sites, roughly 300 bytes, against 180 saved. It only came to light
+because the contended block overran by 15 bytes and the build stopped.
+
+An offset table is unnecessary for the same reason: 92 bytes saved.
+
+### What NOT to do: a word dictionary
+
+Also tried, and it LOST twelve bytes. Repeated words became one-byte
+tokens, which packed 628 to 500 -- but it needed 116 bytes of bespoke
+expander, and 128 saved against 116 spent is not worth the machinery.
+
+**A scheme that reuses a decoder the program already carries starts a
+hundred-odd bytes ahead of one that does not.** That is the whole reason
+ZX0 wins here, and it is the first thing to check before inventing a
+format.
+
+Per-string or per-level compression is worse than storing text raw:
+
+```
+one ZX0 stream per string   2576 bytes   WORSE than raw (+32)
+groups of 8                 1806         +454 vs one block
+ONE block                   1352         the only form that pays
+```
+
+ZX0 needs a run of data to find matches in. Short strings give it nothing
+and each stream carries its own overhead; splitting per level throws away
+exactly the redundancy that makes text compressible, because words recur
+ACROSS levels, not within one.
 
 ### It pays twice
 

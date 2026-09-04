@@ -19,6 +19,22 @@ keyboard and Kempston input once per frame.
 - Fuse (`make run`) — reference emulator
 - Optional: ZEsarUX + Python 3 for headless inspection (see `.claude/skills/zesarux-test`)
 
+
+## Build options
+
+```
+make                     the shipping tap
+make FONT=resident       swap the ROM font for assets/fonts/*.ch8 (+768 bytes)
+make DEBUG_KEYS=1        W/L state-walk keys, for tests/p0_state_walk.py
+make FREEZE_ANIM=1       stop the sprite animation, for tests/pixel_hash.py
+make map                 rebuild with a link map, enforce the 0xC000
+                         ceiling, and print free memory per region
+```
+
+`FONT=bank` also exists and is broken on a 128K by design of the
+hardware -- the shadow screen and the bank window are the same sixteen
+kilobytes. See `src/font_rt.c`.
+
 ## Build & run
 
 ```bash

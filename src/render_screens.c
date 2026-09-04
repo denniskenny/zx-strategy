@@ -34,6 +34,7 @@
 #include "../include/gfx.h"
 #include "../include/hw.h"
 #include "../include/render.h"
+#include "../include/strings.h"
 #include "../include/vsync.h"
 
 /* render.c keeps these private; the cutscene needs both. */
@@ -109,44 +110,44 @@ void render_cutscene(uint8_t idx)
 void render_title(void)
 {
     render_compose();
-    draw_header("ZX STRATEGY");
+    draw_header(TXT_ZX_STRATEGY);
 
-    print_at(1, 3, "MACHINE :");
-    print_at(11, 3, is_128k ? "128K" : "48K");
+    print_at(1, 3, TXT_MACHINE);
+    print_at(11, 3, is_128k ? TXT_T_128K : TXT_T_48K);
 
-    print_at(1, 4, "KEMPSTON:");
-    print_at(11, 4, has_kempston ? "YES" : "NO");
+    print_at(1, 4, TXT_KEMPSTON);
+    print_at(11, 4, has_kempston ? TXT_YES : TXT_NO);
 
-    print_at(1, 5, "VSYNC   :");
+    print_at(1, 5, TXT_VSYNC);
     switch (vsync_mode) {
         /* The two bus lines differ by four characters, so they share a
            prefix rather than carrying it twice. */
         case VSYNC_MODE_48K:
         case VSYNC_MODE_128K:
-            print_at(11, 5, "FLOATING BUS 0X");
-            print_at(26, 5, vsync_mode == VSYNC_MODE_48K ? "40FF" : "0FFD");
+            print_at(11, 5, TXT_FLOATING_BUS_0X);
+            print_at(26, 5, vsync_mode == VSYNC_MODE_48K ? TXT_T_40FF : TXT_T_0FFD);
             break;
         default:
-            print_at(11, 5, "HALT FALLBACK  ");
+            print_at(11, 5, TXT_HALT_FALLBACK);
             break;
     }
     /* Whether the shadow screen is actually in use.  On the title
        screen because it is the only place a tester without a debugger
        can see it, and because "is the 128K path live?" has been the
        hardest question to answer all the way through this. */
-    print_at(1, 6, "SCREEN  :");
-    print_at(11, 6, shadow_ok ? "DOUBLE" : "SINGLE");
+    print_at(1, 6, TXT_SCREEN);
+    print_at(11, 6, shadow_ok ? TXT_DOUBLE : TXT_SINGLE);
 
     set_attr_rect(0, 3, 32, 4, ATTR_TEXT);
 
-    print_at(1, 10, "SPACE / FIRE 1   START");
+    print_at(1, 10, TXT_SPACE_FIRE_1_START);
     set_attr_rect(0, 10, 32, 1, ATTR_HINT);
 
     /* The whole control scheme, in the two lines it takes.  Every screen
        obeys it, so this is the only place it needs saying. */
-    print_at(1, 19, "QAOP / KEMPSTON  MOVE");
-    print_at(1, 20, "SPACE / FIRE 1   DO");
-    print_at(1, 21, "ENTER / FIRE 2   BACK");
+    print_at(1, 19, TXT_QAOP_KEMPSTON_MOVE);
+    print_at(1, 20, TXT_SPACE_FIRE_1_DO);
+    print_at(1, 21, TXT_ENTER_FIRE_2_BACK);
     set_attr_rect(0, 20, 32, 1, ATTR_TEXT);
 
     /* The hint row is where the tune's banner goes, and where it is
@@ -169,11 +170,11 @@ void render_title(void)
 void render_over(void)
 {
     render_compose();
-    draw_header(player_won ? "VICTORY" : "DEFEAT");
+    draw_header(player_won ? TXT_VICTORY : TXT_DEFEAT);
 
-    print_at(1, 10, player_won ? "LEVEL TAKEN    :" : "LEVEL LOST     :");
+    print_at(1, 10, player_won ? TXT_LEVEL_TAKEN : TXT_LEVEL_LOST);
     print_num(18, 10, level, 2);
-    print_at(1, 11, "TURNS TAKEN    :");
+    print_at(1, 11, TXT_TURNS_TAKEN);
     print_num(18, 11, (uint8_t)(turn > 99 ? 99 : turn), 2);
 
     /* Score is SCORE_PAR less the turns it took, so a quick win scores
@@ -181,16 +182,16 @@ void render_over(void)
        level that took longer than par is worth zero rather than a debt.
        Only on a win: there is no score for losing. */
     if (player_won) {
-        print_at(1, 12, "LEVEL SCORE    :");
+        print_at(1, 12, TXT_LEVEL_SCORE);
         print_num(18, 12, level_score(), 2);
-        print_at(1, 13, "TOTAL SCORE    :");
+        print_at(1, 13, TXT_TOTAL_SCORE);
         print_num(17, 13,
                   (uint8_t)(campaign_score > 999 ? 999 : campaign_score), 3);
     }
     set_attr_rect(0, 10, 32, 4, ATTR_TEXT);
 
-    render_hint(player_won ? "SPACE FOR THE NEXT LEVEL"
-                           : "SPACE TO RETURN TO THE TITLE");
+    render_hint(player_won ? TXT_SPACE_FOR_THE_NEXT_LEVEL
+                           : TXT_SPACE_TO_RETURN_TO_THE_TITLE);
     render_show();
 }
 

@@ -47,6 +47,11 @@ void clear_blit(int8_t col, uint8_t y, uint8_t w, uint8_t h);
 
 /* Print a null-terminated string at character position (col, row)
  * using the ROM font. Does not set attributes. */
+/* Chooses where the glyphs come from: the resident array, or a RAM bank
+   on a 128K with the ROM font as the 48K fallback.  Call once, after
+   is_128k and page_reg are valid. */
+void font_init(void);
+
 void print_at(uint8_t col, uint8_t row, const char *s);
 
 #endif /* _GFX_H_ */

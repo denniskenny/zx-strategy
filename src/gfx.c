@@ -4,6 +4,7 @@
 
 #include "../config/app_config.h"
 #include "../include/gfx.h"
+#include "../include/memmap.h"
 
 /* Where drawing lands.  Normally the displayed screen at 0x4000; on a
    128K it can be pointed at the shadow screen so a whole screen can be
@@ -141,7 +142,23 @@ void clear_blit(int8_t col, uint8_t y, uint8_t w, uint8_t h)
 }
 
 /* ROM character set: 96 chars (space..copyright), 8 bytes each */
-#define ROM_FONT ((const uint8_t *)0x3D00)
+/* Where the glyphs are, and what has to happen around reading them.
+ *
+ * The ROM CANNOT be overwritten -- 0x0000-0x3FFF is read-only on every
+ * Spectrum -- so a replacement font is one held in RAM with the printer
+ * pointed at it.  A .ch8 has the ROM's layout, 8 rows per glyph from
+ * character 32, so the indexing below is unchanged.
+ *
+ * font_prepare()/font_release() are hooks rather than #if, because this
+ * file has an __asm block in it and zcc drops #if directives that follow
+ * one.  In the resident build they cost a `ret` each; in the banked build
+ * they page the font in and copy the string somewhere that is not paged.
+ * src/font_rt.c has the reasoning. */
+extern const uint8_t *font_base;
+const char *font_prepare(const char *s);
+void font_release(void);
+
+#define ROM_FONT font_base
 
 void print_at(uint8_t col, uint8_t row, const char *s)
 {
@@ -151,6 +168,7 @@ void print_at(uint8_t col, uint8_t row, const char *s)
 
     px = col << 3;
     py = row << 3;
+    s = font_prepare(s);
 
     while (*s) {
         if (col >= 32) break;
@@ -164,4 +182,5 @@ void print_at(uint8_t col, uint8_t row, const char *s)
         col++;
         px += 8;
     }
+    font_release();
 }

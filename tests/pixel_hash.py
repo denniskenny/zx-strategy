@@ -167,7 +167,18 @@ def main():
         io(None)
         time.sleep(1.0)
 
-        blob = rd(0x4000, 0x800) + rd(0x4800, 0x800)
+        # ALL THREE THIRDS, 0x4000-0x57FF.
+        #
+        # This read two of them for a long time, so the bottom eight
+        # character rows -- the status panel and the hint line, every
+        # word of text the play screen shows -- were outside the hash.
+        # Moving the unit name a whole column left changed nothing the
+        # test could see.
+        #
+        # A golden master that covers two thirds of the screen is not a
+        # golden master; it is a golden master of the part that happened
+        # to be easy to read.
+        blob = rd(0x4000, 0x800) + rd(0x4800, 0x800) + rd(0x5000, 0x800)
         got = hashlib.sha1(blob).hexdigest()
         nz = sum(1 for b in blob if b)
     finally:

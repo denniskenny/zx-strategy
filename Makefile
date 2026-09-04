@@ -260,14 +260,71 @@ assets/music/%_linkable.asm: assets/music/%.asm tools/gen_tritone_module.py incl
 	$(PYTHON) tools/gen_tritone_module.py $< -o $@ --name $* \
 	    --org $(MUSIC_ORG) --zx0 $(ZX0)
 
+# text/strings.txt -> the generated pair.  Every string the player reads
+# lives in that one file; identical text is stored once, and the build
+# fails on a string wider than the screen.  See tools/mktext.py for why
+# there is no compression here yet and what it would cost.
+include/strings.h src/strings.c: text/strings.txt tools/mktext.py
+	$(PYTHON) tools/mktext.py $< --header include/strings.h \
+	    --source src/strings.c --width 32 --zx0 $(ZX0)
+
+# A .ch8 font binary -> a C array.  The ROM's font cannot be replaced in
+# place, so print_at() reads this instead; the layout is the ROM's own.
+# NO SPACES in this path: Make splits a prerequisite on whitespace and
+# the failure reads "No rule to make target `assets/fonts/Adventure'".
+# assets/fonts/README.md records where the file came from.
+FONT_CH8 = assets/fonts/artic_ship_of_doom.ch8
+
+# FONT_BANK=1 puts the font in a RAM bank: 768 bytes back, and BROKEN on
+# a 128K.  The shadow screen is at 0xC000 and so is the bank window, so
+# paging the font in replaces the screen being drawn to.  See the top of
+# src/font_rt.c for the evidence.  Kept at 0 so the finding is not lost.
+# FONT=rom | resident | bank
+#
+#   rom        the ROM's own font at 0x3D00.  DEFAULT: costs nothing.
+#   resident   the .ch8 in a 768-byte array.  Works, but 768 bytes of
+#              0x8000-0xBFFF is too much to spend on a typeface here.
+#   bank       the .ch8 in a RAM bank.  BROKEN on a 128K -- the shadow
+#              screen and the bank window are both at 0xC000.  See the
+#              top of src/font_rt.c.
+FONT ?= rom
+FONT_BANK_NO = 4
+
+ifeq ($(FONT),bank)
+TARGET_DEF += -DFONT_BANK=1 -DFONT_BANK_NO=$(FONT_BANK_NO)
+# Offset 0 in its own bank, so font_base is a plain 0xC000 and the glyph
+# index needs no addition.  Bank 4 is untouched by the cutscenes, which
+# use 1 and 3.
+FONT_BANK_ARG = --bank $(FONT_BANK_NO) 0x0000 $(APP)_font.bin
+FONT_DEP = $(APP)_font.bin
+else ifeq ($(FONT),resident)
+TARGET_DEF += -DFONT_RESIDENT=1
+else
+TARGET_DEF += -DFONT_ROM=1
+endif
+
+src/font.c: $(FONT_CH8) tools/mkfont.py
+	$(PYTHON) tools/mkfont.py $(FONT_CH8) -o $@
+
+$(APP)_font.bin: $(FONT_CH8)
+	cp $(FONT_CH8) $@
+
 # keep generated .asm intermediates from being auto-deleted
 .SECONDARY:
 
 # --- Source files ---
-SRCS = src/main.c src/game.c src/logic.c src/render.c src/render_screens.c src/music.c src/gfx.c src/input.c src/hw_detect.c \
+SRCS = src/main.c src/strings.c src/text.c src/font_rt.c src/game.c src/logic.c src/render.c src/render_screens.c src/music.c src/gfx.c src/input.c src/hw_detect.c \
        src/vsync.c src/prng.c src/dzx0.c src/no_font64.asm src/assets_low_syms.asm src/logic_org.asm
 
+# The resident font is a source file; the banked one is a tape block, so
+# it must be appended AFTER SRCS is assigned rather than inside the ifeq
+# above -- the assignment would wipe it.
+ifeq ($(FONT),resident)
+SRCS += src/font.c
+endif
+
 HEADERS = config/app_config.h config/game_config.h include/gfx.h include/input.h include/hw.h \
+          include/strings.h src/font.c \
           include/vsync.h include/prng.h include/game.h include/board.h \
           include/render.h include/dzx0.h \
           include/music.h $(GENERATED_HEADERS)
@@ -348,12 +405,12 @@ $(BANKCOPY_BIN): src/bankcopy.asm
 include/cutscenes.h cutscenes.args: $(CUTSCENE_SCRS) tools/mkcutscenes.py
 	$(PYTHON) tools/mkcutscenes.py $(ZX0) $(CUTSCENE_SCRS)
 
-$(APP).tap: $(SRCS) $(HEADERS) $(MUSIC_LINKABLE) $(ASSETS_LOW_BIN) $(BANKCOPY_BIN) $(LOGO_PIX) $(LOGO_ATT) cutscenes.args src/assets_low_syms.asm src/logic_org.asm logic_org.addr tools/mktap.py
+$(APP).tap: $(FONT_DEP) $(SRCS) $(HEADERS) $(MUSIC_LINKABLE) $(ASSETS_LOW_BIN) $(BANKCOPY_BIN) $(LOGO_PIX) $(LOGO_ATT) cutscenes.args src/assets_low_syms.asm src/logic_org.asm logic_org.addr tools/mktap.py
 	PATH=$(Z88DK)/bin:$$PATH Z88DK=$(Z88DK) ZCCCFG=$(ZCCCFG) $(ZCC) $(CFLAGS) $(USER_CFLAGS) -o $(APP) $(SRCS) $(MUSIC_LINKABLE) $(LDFLAGS)
 	$(PYTHON) tools/mktap.py $(APP).tap --name ' ' --clear $(CLEAR_ADDR) --usr $(USR_ADDR) \
 	    --splash 0x5000 $(LOGO_PIX) --splash 0x5A00 $(LOGO_ATT) \
 	    --bankcopy $(BANKCOPY_BIN) \
-	    $$(cat cutscenes.args) \
+	    $$(cat cutscenes.args) $(FONT_BANK_ARG) \
 	    --code 0x6000 $(ASSETS_LOW_BIN) \
 	    --code $$(cat logic_org.addr) $(APP)_LOGIC.bin \
 	    --code $(USR_ADDR) $(APP)

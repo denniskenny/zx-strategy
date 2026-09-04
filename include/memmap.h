@@ -120,7 +120,20 @@
 #define MEM_MUSIC       (MEM_THREAT + 98)
 #define MEM_MUSIC_SIZE  544         /* grenadiers assembles to 513 */
 
-#define MEM_END         (MEM_MUSIC + MEM_MUSIC_SIZE)
+/* Every string the player reads, unpacked from ZX0 once at boot by
+   src/text.c.  Raw here, compressed in the program: 628 bytes of text
+   ship as 356, and dzx0 is already linked so the decoder is free.
+ *
+   Up here rather than in bss because bss lives inside 0x8000-0xBFFF, the
+   only region that can hold code.  This region can never hold code -- a
+   128K pages it -- so a buffer is exactly what it is for.
+ *
+   tools/mktext.py prints the pool size and src/text.c fails the build if
+   it outgrows this. */
+#define MEM_TEXTPOOL      (MEM_MUSIC + MEM_MUSIC_SIZE)
+#define MEM_TEXTPOOL_SIZE 800       /* 715 used; room for more strings */
+
+#define MEM_END         (MEM_TEXTPOOL + MEM_TEXTPOOL_SIZE)
 
 /* The buffers now live ABOVE the program, at 0xDB00, so the old check
    against the stack no longer applies: with -zorg 0x6000 the stack is at

@@ -1,0 +1,71 @@
+# strings.txt -- every string the player reads.
+#
+# ID = the text.  Trailing spaces matter and several strings depend on
+# them, so quote anything with padding.  tools/mktext.py turns this into
+# include/strings.h and src/strings.c; identical text is stored once.
+#
+# The screen is 32 characters wide and the build fails on anything longer.
+
+# --- game ---
+ENEMY_TURN                     = "      ENEMY TURN"
+ENEMY                          = ENEMY  :
+CURSOR                         = CURSOR :
+BLANK                          = 
+QAOP_PICK_SPACE_FIRE_ENTER_B   = QAOP PICK  SPACE FIRE ENTER BACK
+
+# --- the play screen ---
+UNIT                           = UNIT   :
+BLANK_2                        = "-                      "
+TURN                           = TURN   :
+TERRAIN                        = TERRAIN:
+COVER                          = COVER
+THE_FIELD                      = THE FIELD
+CAMPAIGN_MAP                   = CAMPAIGN MAP
+QAOP_LOOK_AROUND_ENTER_BACK    = QAOP LOOK AROUND  ENTER BACK
+CAMPAIGN_COMPLETE              = CAMPAIGN COMPLETE
+EVERY_LEVEL_TAKEN              = EVERY LEVEL TAKEN
+LEVELS_WON                     = LEVELS WON     :
+FINAL_SCORE                    = FINAL SCORE    :
+SPACE_FIRE_1                   = SPACE / FIRE 1
+
+# --- title, map, cutscene, result ---
+ZX_STRATEGY                    = ZX STRATEGY
+MACHINE                        = MACHINE :
+T_128K                         = 128K
+T_48K                          = 48K
+KEMPSTON                       = KEMPSTON:
+YES                            = YES
+NO                             = NO
+VSYNC                          = VSYNC   :
+FLOATING_BUS_0X                = FLOATING BUS 0X
+T_40FF                         = 40FF
+T_0FFD                         = 0FFD
+HALT_FALLBACK                  = "HALT FALLBACK  "
+SCREEN                         = SCREEN  :
+DOUBLE                         = DOUBLE
+SINGLE                         = SINGLE
+SPACE_FIRE_1_START             = SPACE / FIRE 1   START
+QAOP_KEMPSTON_MOVE             = QAOP / KEMPSTON  MOVE
+SPACE_FIRE_1_DO                = SPACE / FIRE 1   DO
+ENTER_FIRE_2_BACK              = ENTER / FIRE 2   BACK
+VICTORY                        = VICTORY
+DEFEAT                         = DEFEAT
+LEVEL_TAKEN                    = LEVEL TAKEN    :
+LEVEL_LOST                     = LEVEL LOST     :
+TURNS_TAKEN                    = TURNS TAKEN    :
+LEVEL_SCORE                    = LEVEL SCORE    :
+TOTAL_SCORE                    = TOTAL SCORE    :
+SPACE_FOR_THE_NEXT_LEVEL       = SPACE FOR THE NEXT LEVEL
+SPACE_TO_RETURN_TO_THE_TITLE   = SPACE TO RETURN TO THE TITLE
+
+# --- status panel: one name per side ---
+# The field is columns 9..18, so TEN characters including the prefix.
+# E-INFANTRY is exactly ten and is what sets the width.
+UNIT_INFANTRY                  = "Red Shadow"
+UNIT_TANK                      = "Red Hyena "
+UNIT_CANNON                    = "Las Cannon"
+UNIT_BASE                      = "Red Base  "
+UNIT_E_INFANTRY                = "E-INFANTRY"
+UNIT_E_TANK                    = "E-TANK    "
+UNIT_E_CANNON                  = "E-CANNON  "
+UNIT_E_BASE                    = "E-BASE    "

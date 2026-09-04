@@ -1135,6 +1135,26 @@ frame index — it already returns the sprite pointer, so animation is a
 different offset rather than a different path. That is the payoff for
 having consolidated the three draw paths into it.
 
+### A replacement font  ✓ built, and switched OFF
+
+`make FONT=resident` puts *Adventure C - The Ship of Doom* (Artic, 1982)
+in place of the ROM's font: `tools/mkfont.py`, `src/font.c`,
+`src/font_rt.c`, and `assets/fonts/artic_ship_of_doom.ch8`.
+
+**Not in the shipping build.**  768 bytes of 0x8000-0xBFFF is too much
+for a typeface when that region had 1 499 bytes in it -- the font alone
+was half of everything left.  `FONT=rom` is the default and costs
+nothing; the ROM's font is already in the machine.
+
+`FONT=bank` exists and is BROKEN on a 128K: the shadow screen and the
+bank window are the same sixteen kilobytes, so paging the font in
+replaces the screen being drawn to.  Kept for the finding.  See the top
+of `src/font_rt.c` and `.claude/skills/zx0-layout` § What a bank can and
+cannot hold.
+
+The ROM cannot be overwritten, of course; "replacing the font" is holding
+one in RAM and pointing print_at() at it.
+
 ### Removing the stdio console driver  (~570 bytes, not started)
 
 `fputc_cons_generic` (438) + `generic_console_printc` (133) are linked into
