@@ -1,7 +1,7 @@
 ---
 name: zx-memory
 description: Place code, graphics and buffers correctly on the ZX Spectrum — the 48K/128K/+3 memory map, contended vs uncontended RAM, bank switching and the ROM-select trap, and the linking rules that stop generated asset headers being duplicated into every translation unit.
-when_to_use: "out of memory" or "checkmem failed" or "compress text" or "where should the strings go" or "externalise strings" or "compress music" or "song data is too big" or "where should the tunes go" or "relocating data with pointers in it" or "how much memory is free" or "where should this buffer go" or "add a graphic" or "new asset" or "banking" or "paging" or "contended memory" or "0x7FFD" or "duplicate symbol" or "undefined symbol" or "it works on 48K but not 128K" or "crashes on the +3" (for building the .tap itself, see zx-loader)
+when_to_use: "out of memory" or "checkmem failed" or "replace the font" or "custom font" or "ch8" or "character set" or "compress text" or "where should the strings go" or "externalise strings" or "compress music" or "song data is too big" or "where should the tunes go" or "relocating data with pointers in it" or "how much memory is free" or "where should this buffer go" or "add a graphic" or "new asset" or "banking" or "paging" or "contended memory" or "0x7FFD" or "duplicate symbol" or "undefined symbol" or "it works on 48K but not 128K" or "crashes on the +3" (for building the .tap itself, see zx-loader)
 allowed-tools: Bash Read Write Edit
 effort: medium
 ---
@@ -591,6 +591,87 @@ At 530 bytes of raw pattern the debug build could not afford both tunes
 and linked one, so it played different music from the shipping build —
 a debug build testing something else. Compressed, the divergence stopped
 being worth having and a conditional came out of three files.
+
+## Replacing the character font
+
+**The ROM cannot be overwritten.** `0x0000-0x3FFF` is read-only on every
+Spectrum, so "replace the font" means holding one in RAM and pointing the
+printer at it instead of at `0x3D00`.
+
+A `.ch8` file is 8 bytes per glyph, one bit per pixel, MSB left, starting
+at character 32 — **exactly the ROM's layout**. So the printer's
+arithmetic does not change; only where it reads from:
+
+```c
+extern const uint8_t *font_base;         /* was ((uint8_t *)0x3D00) */
+glyph = font_base + ((c - 32) << 3);     /* unchanged */
+```
+
+### The decision is 768 bytes of `0x8000-0xBFFF`
+
+That is the whole story. A 96-glyph font is 768 bytes of the only region
+that can hold code, and in this project that was **half of everything
+left** — so it is built and switched off, behind `make FONT=resident`.
+The ROM's font is already in the machine and costs nothing.
+
+Decide this on the free-memory figure, not on taste.
+
+### Three things that do NOT work
+
+**A bank.** See § Never bank data you must read WHILE DRAWING above: the
+shadow screen and the bank window are the same sixteen kilobytes, so
+paging the font in replaces the screen being drawn to. Corrupts on a
+128K, perfect on a 48K, which is the signature.
+
+**Compression.** ZX0 takes 768 to 451, but the *decompressed* copy still
+has to live somewhere the printer can read every glyph. Trading 317 bytes
+of the program region for 768 bytes of the data region is only a win if
+the data region has more spare — check before assuming.
+
+**A subset.** Tempting, and it was measured: the game printed 50 distinct
+characters, but they ran from space to lowercase `y`, so a subset saved
+48 bytes of the 768 and introduced a cliff the moment someone typed a
+`z`. Count the RANGE, not the number of distinct characters.
+
+### Conditional font sources and the `__asm` trap
+
+If `print_at()` lives in a file containing an `__asm` block — and it
+probably does — **you cannot put `#if` inside it**: zcc drops
+preprocessor directives that follow an `__asm` block in the same file.
+
+Call unconditional hooks instead and keep every `#if` in a file with no
+assembly in it:
+
+```c
+s = font_prepare(s);   /* may copy the string somewhere safe */
+...draw...
+font_release();        /* a `ret` when nothing is paged */
+```
+
+### Do not name the asset with spaces in it
+
+**Make splits a prerequisite on whitespace.** A rule depending on
+`Adventure C - The Ship of Doom.ch8` fails with
+
+```
+No rule to make target `assets/fonts/Adventure'
+```
+
+which does not mention spaces and sends you looking at the wrong thing.
+Rename the file and record its provenance in a README beside it.
+
+### While you are here: the 64-column font you are not using
+
+Unrelated to a replacement font, but the same 768 bytes: z88dk links
+`CRT_FONT_64` because the zx console's variables declare an `EXTERN` for
+it, even when nothing prints through the console. See § Reclaiming space
+you did not know you were spending — satisfying the reference yourself
+gets all 768 bytes back.
+
+And note that a 64-column font being *linked* does not mean the display
+is 64 columns. `print_at()` stops at column 32, so a 33-character string
+is truncated on the machine — a width check in the string generator is
+the cheapest place to catch it.
 
 ## Adding a graphic
 
