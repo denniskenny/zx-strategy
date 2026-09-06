@@ -153,9 +153,15 @@ static uint8_t scan_actions(void)
 }
 
 #if DEBUG_STATE_WALK
-/* P0 state walk: W wins the level, L loses it.  Kept out of the action
-   byte — every bit of it is taken, and this is temporary scaffolding
-   that comes out with the real win check in P4. */
+/* State walk: CAPS SHIFT + W wins the level, CAPS SHIFT + L loses it.
+   Kept out of the action byte — every bit of it is taken.
+
+   CAPS SHIFT IS REQUIRED, and that is the whole reason these can ship in
+   the normal build.  Unshifted W and L are two ordinary keys a player
+   brushes while reaching for Q/A/O/P, and either one ends the level
+   instantly; nobody presses CAPS SHIFT and W together by accident.  The
+   cost of having them always available is one extra port read per frame
+   and about a dozen bytes. */
 #define DBG_WIN     0x01
 #define DBG_LOSE    0x02
 
@@ -165,8 +171,12 @@ static void poll_debug(void)
 {
     uint8_t a = 0, stable;
 
-    if (!(read_keys(KEY_QWERT) & 0x02))     a |= DBG_WIN;    /* W */
-    if (!(read_keys(KEY_ENTER_ROW) & 0x02)) a |= DBG_LOSE;   /* L */
+    /* CAPS SHIFT is bit 0 of its row; read once and reused, because the
+       ULA read is the expensive part, not the test. */
+    if (!(read_keys(KEY_SHZXCV) & 0x01)) {
+        if (!(read_keys(KEY_QWERT) & 0x02))     a |= DBG_WIN;    /* W */
+        if (!(read_keys(KEY_ENTER_ROW) & 0x02)) a |= DBG_LOSE;   /* L */
+    }
 
     stable = (uint8_t)(a & dbg_last);
     dbg_last = a;

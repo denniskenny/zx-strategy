@@ -1720,7 +1720,7 @@ void scroll_view(int8_t dx, int8_t dy)
    evaluate preprocessor directives inside a function body that contains
    an __asm block (.claude/skills/zx-memory), so the #if has to be out
    here and mark_dirty() has to stay asm-free. */
-#if DEBUG_STATE_WALK
+#if DEBUG_DIAG
 static void dirty_dropped(void) __naked
 {
     __asm
@@ -2068,7 +2068,7 @@ static void animate(void)
 
     anim_frame = (uint8_t)!anim_frame;
 
-#if DEBUG_STATE_WALK
+#if DEBUG_DIAG
     /* DIAGNOSTIC: repaint the WHOLE view, not just the occupied cells.
      *
      * A ghost sprite is a cell holding a picture nothing believes is

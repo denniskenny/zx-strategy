@@ -4,7 +4,7 @@ Drives the built .tap through title -> play -> ST_OVER -> next level ->
 ... -> ST_WON -> title using the DEBUG_STATE_WALK keys (W wins a level,
 L loses it), and checks terrain[] against the .tmx at levels 1, 5 and 10.
 
-    make DEBUG_KEYS=1 map         # the W/L keys, and the symbol map
+    make map                      # the state-walk keys are standard now
 
 That tap is 94 bytes over the 0xC000 ceiling and so is 48K-only; a 128K
 would bank page 7 over its tail.  This is a 48K test, so that is fine —
@@ -130,8 +130,14 @@ def rd(s, a, n):
     return bytes.fromhex(x[:n * 2])
 
 
-# Keyboard: (half-row index, bit), active LOW.
-KEY = {'W': (2, 1), 'L': (6, 1), 'SPACE': (7, 0),
+# Keyboard: (half-row index, bit), active LOW.  A value may be a LIST of
+# (row, bit) pairs, for a key that needs CAPS SHIFT held with it.
+CAPS = (0, 0)                   # CAPS SHIFT: bit 0 of the 0xFEFE row
+
+KEY = {'W': [CAPS, (2, 1)],     # the state-walk keys are SHIFTED, because
+       'L': [CAPS, (6, 1)],     # they ship in the normal build now and
+                                # unshifted W/L sit next to Q/A/O/P
+       'SPACE': (7, 0),
        'ENTER': (6, 0), 'X': (0, 2)}
 
 # Kempston: the ninth byte of set-ui-io-ports, active HIGH.
@@ -156,8 +162,11 @@ def io(s, k=None):
     if k in KEMP:
         kemp = KEMP[k]
     else:
-        i, b = KEY[k]
-        rows[i] &= ~(1 << b) & 0xFF
+        pairs = KEY[k]
+        if not isinstance(pairs, list):
+            pairs = [pairs]
+        for i, b in pairs:      # a shifted key asserts two bits at once
+            rows[i] &= ~(1 << b) & 0xFF
     cmd(s, 'set-ui-io-ports '
         + ''.join(f'{x:02x}' for x in rows) + f'{kemp:02x}')
 

@@ -31,7 +31,26 @@ APP        = zxstrategy
 ORG_DEF    = -zorg=32768
 USR_ADDR   = 32768
 
-DEBUG_KEYS ?= 0
+# IN THE STANDARD BUILD.  The state-walk keys are CAPS SHIFT + W (win)
+# and CAPS SHIFT + L (lose); the shift is what makes them safe to ship,
+# because unshifted W and L sit next to the movement keys and either one
+# would end a level by accident.
+#
+# DEBUG_KEYS=0 still removes them, for a build that must not be able to
+# skip a level at all.
+DEBUG_KEYS ?= 1
+
+# The DIAGNOSTICS are a separate switch, and default OFF.
+#
+# They used to share DEBUG_KEYS, which was harmless while that flag was
+# only ever set for a test run.  Putting the keys in the standard build
+# made it harmful: DEBUG_DIAG also makes animate() repaint the WHOLE view
+# every beat instead of the cells units occupy, which is a per-beat cost
+# no shipping build should carry.  tests/pixel_hash.py caught it -- the
+# extra repaint changed the screen.
+#
+# A switch that gates two unrelated things is one switch too few.
+DEBUG_DIAG ?= 0
 
 # FREEZE_ANIM=1 stops the at-rest sprite animation.  For tests/pixel_hash.py
 # only: the animation flips every sprite every ~18 frames, so a screen
@@ -41,23 +60,20 @@ DEBUG_KEYS ?= 0
 # neither test suite reads pixels, and a blit that writes the wrong pixels
 # with the right attributes passes both of them.
 FREEZE_ANIM ?= 0
-TARGET_DEF = -DDEBUG_STATE_WALK=$(DEBUG_KEYS) -DFREEZE_ANIM=$(FREEZE_ANIM)
+TARGET_DEF = -DDEBUG_STATE_WALK=$(DEBUG_KEYS) -DDEBUG_DIAG=$(DEBUG_DIAG) \
+             -DFREEZE_ANIM=$(FREEZE_ANIM)
 
 # The state-walk debug keys cost 99 bytes and the shipping tap has 5
 # spare, so they are off by default and tests/p0_state_walk.py asks for
 # them explicitly:
-#     make DEBUG_KEYS=1 map
+#     make map
 #
-# That tap is 94 bytes over the ceiling and is therefore **48K only** —
-# on a 128K page 7 would be banked in over its tail.  The ceiling is
-# relaxed here rather than silently broken, and p0_state_walk.py is a
-# 48K test.  Anything that has to run on a 128K must be built without
-# DEBUG_KEYS; render_paths.py drives both machines and needs no keys.
-ifeq ($(DEBUG_KEYS),0)
+# ONE CEILING FOR BOTH.  The debug tap used to be 94 bytes over 0xC000
+# and therefore 48K-only, so the limit was relaxed when DEBUG_KEYS was
+# set.  It is not over any more -- compressing the tunes and the strings
+# freed more than it needs -- and a build that cannot run on a 128K is
+# not a build worth testing with.
 MEM_LIMIT  = 0xC000
-else
-MEM_LIMIT  = 0x10000
-endif
 
 ifeq ($(UNAME_S),Darwin)
 FUSE ?= open -a Fuse
