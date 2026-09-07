@@ -31,9 +31,63 @@ When all the player's units have been moved or used their action, the player can
 
 The enemy units will then take their turn. Enemy units are red, player units are green.
 
+### Turns and scoring
+
+**A level has a turn limit, and the counter runs DOWN.**
+
+- The limit comes from `docs/levels.md` -- `Turns:` -- per level. Every level
+  is currently 20, which is also the default for a level that does not say.
+- The build ingests those numbers into the game config as a per-level table,
+  the same way the maps and the rosters are ingested. **It is not retyped.**
+- `ST_PLAY` shows `config_turns - turns_elapsed`: **turns remaining**, not
+  turns taken. A countdown says how much rope is left, which is the thing the
+  player is deciding against; a count-up says how long they have been playing,
+  which is not.
+
+**The score is the rope you did not use.**
+
+```
+level score = config_turns - turns_elapsed
+```
+
+added to the campaign total **on victory only**. A level taken in five of
+twenty is worth 15; one taken in nineteen is worth 1. There is no score for
+losing.
+
+**The turn limit IS the par**, which is why there is no multiplier. A x10
+version was considered and dropped: it makes the maximum 200, which is inside
+`uint8_t` only while no level has more than 25 turns, and it needs a third
+digit in the `ST_OVER` field. Scaling a score by a constant tells the player
+nothing the unscaled number does not.
+
+This replaces `SCORE_PAR`, which was a single constant for every level -- the
+right answer while every level had the same shape, and the wrong one as soon as
+the levels differ. The turn limit already says how hard a level is meant to be,
+so scoring against it needs no second number.
+
+#### Consequences to handle when this is built
+
+- **`level_score()` keeps its `uint8_t` and its two-digit field.** The score
+  is at most `config_turns`, so nothing widens and nothing overflows -- which
+  is the reason for dropping the x10.
+- **Running out of turns needs a meaning.** The natural one is defeat -- a turn
+  limit with no consequence is a decoration -- which routes to `ST_OVER` with
+  `player_won = 0` exactly as losing the base does. **This is not yet decided
+  and it is the one design question in here.**
+- **`turn` is currently a count-up and is used elsewhere.** Keep it counting
+  up internally and subtract for display, rather than counting down in the
+  variable: the AI's pacing and the walk animation both read it, and a
+  countdown that reaches zero is a worse thing to index arrays with.
+
 ### Game Init
 
-The game starts with level_1.tmx. 
+The game starts with level_1.tmx.
+
+**`docs/levels.md` is the level book**: one entry per level giving its
+mission title, dateline, turn limit, both rosters and the briefing text.
+It is the source for the per-level metadata described in § Turns and
+scoring and § ST_BRIEF, and the intention is that the build reads it
+rather than that anybody retypes it into a header.
 
 The global starting values for each unit type are defined in `config/game_config.h`.
 
@@ -177,7 +231,47 @@ to units.
 
 The cursor is constrained by none of this — see § Cursor and movement.
 
-### Sprite masks and animation
+### Sound: pitch variation
+
+Three voices, in `config/game_config.h`: a move, a strike, a death.  Each
+burst is noise, not a tone -- `sfx_mask` re-randomises the period every
+cycle -- and `sfx_vary` moves the whole band between one firing and the
+next, so two footsteps are not the same footstep.
+
+**A spread must be comparable to `base + mask/2`, not a fraction of it.**
+The first attempt used `0x3F` against a mask of `0x00FF`, which sounds
+generous and is not: the per-cycle noise already spans 0..255, so the
+offset shifted the mean period from 216 to 278 -- 312 Hz to 241 Hz, a
+1.29x spread, and inaudible.  The fix was to narrow the mask and widen
+the offset: a tighter band per burst, moving much further between them.
+
+Calibration, measured on this project: **Hz ~= 67200 / period**.
+
+| voice | mask | vary | mean period | pitch | spread |
+|---|---|---|---|---|---|
+| MOVE | `0x007F` | `0x00FF` | 112..366 | 603..183 Hz | 3.3x |
+| ATTACK | `0x007F` | `0x0000` | 104 | 646 Hz | flat |
+| BOOM | `0x03FF` | `0x03FF` | 632..1654 | 106..41 Hz | 2.6x |
+
+`ATTACK` is deliberately flat.  It confirms that a shot landed, and a
+confirmation that sounds different every time reads as a different
+event; the two voices describing a physical thing -- a footfall, a blast
+-- are the ones that want the variation.
+
+### Retuning
+
+Change a spread and move its base **half as much the other way**, or the
+voice shifts as well as widening.  `game_config.h` carries the pairs that
+hold the mean pitch still, including the "too varied" setting ready to
+paste:
+
+```c
+#define SFX_VARY_MOVE   0x00FF      /* base  48   603..183 Hz  3.3x */
+/*      SFX_VARY_MOVE   0x007F         base 112   410..205 Hz  2.0x */
+/*      SFX_VARY_MOVE   0x0000         base 176   305 Hz flat       */
+```
+
+## Sprite masks and animation
 
 **Not built.** Two related additions to the graphics pipeline: a mask per
 sprite, generated at build time, and a second frame of animation that only
@@ -1194,13 +1288,24 @@ changes when somebody takes a turn.
 | State | Screen | Purpose |
 |-------|--------|---------|
 | `ST_TITLE` | "ZX STRATEGY" + hardware report | Front end; entry to a game |
-| `ST_PLAY` | "THE FIELD" — 8x4 window on the board | The game proper |
+| `ST_CUTSCENE` | a full-screen picture for the level | Sets the scene before each level. **128K only** |
+| `ST_BRIEF` | mission, dateline and briefing text | Says what this level is |
+| `ST_PLAY` | the level's mission title — 8x4 window on the board | The game proper |
 | `ST_MAP` | "CAMPAIGN MAP" — whole world | Read-only overview, opened from play |
 | `ST_OVER` | win / lose message | Ends a level; advances or abandons the campaign |
 | `ST_WON` | "CAMPAIGN COMPLETE" | The last level was won; the campaign is over |
 
 Every state is part of the game. **Music is not a state**: the tune is a
-blocking call `ST_TITLE` makes, which is what § Long operations is for.
+blocking call that `ST_TITLE` and `ST_CUTSCENE` make, which is what
+§ Long operations is for.
+
+**`ST_CUTSCENE` is the only state a 48K never enters.** The cutscene pictures live in
+RAM banks, which a 48K does not have, so `set_state(is_128k ? ST_CUTSCENE :
+ST_PLAY)` sends it straight to the board. That is the one place the two
+machines see a different sequence of states rather than the same sequence
+drawn differently. **`ST_BRIEF` is NOT 128K-only** -- its briefings are 611
+bytes of ZX0 unpacked into the compose buffer, so both machines get them; see
+§ Where the metadata lives.
 
 **`SPACE` is the key that moves you on**, everywhere: it starts a game, closes
 the overview and takes the level-end screen on, and inside `ST_PLAY` it is also
@@ -1255,6 +1360,150 @@ for it is no bad thing.
   game has hung". Starting a game takes two keypresses from cold — one to stop
   the tune, then `SPACE`. The screen is painted before the tune starts, so
   there is something to read in the meantime.
+
+### ST_CUTSCENE
+
+- **Shows**: one full-screen picture per level, ZX0'd in a RAM bank and
+  decompressed straight to the display file. Ten of them, ~2 519 bytes each,
+  25 KB across banks 1 and 3.
+- **128K ONLY.** The pictures are in banks, so a 48K has nowhere to keep them
+  and skips the state entirely — `set_state(is_128k ? ST_CUTSCENE : ST_PLAY)`
+  at both entry points.
+- **Entered**: from `ST_TITLE` when a game starts, and from `ST_OVER` on a win
+  once the next level's map has loaded. Always immediately before `ST_PLAY`.
+- **Per frame**: nothing. The state paints once and then blocks.
+- **Exits**: to `ST_PLAY`, on any key or fire.
+
+#### Behaviours worth knowing
+
+- **The picture is held for `CUTSCENE_HOLD` frames — one second — before any
+  press can dismiss it.** Without that it was possible to never see it at all:
+  `render_cutscene()` takes a visible moment (a bank page, a decompress, two
+  6 912-byte copies), so a player whose keypress appeared to do nothing pressed
+  again, and the second press stopped the tune the instant it started. A
+  double-tap 0.12 s apart skipped the scene; a single press or a 1.2 s hold
+  never did, which is why it survived several rounds of "cannot reproduce".
+- **Past the hold, pressing does dismiss it**, and should: mashing the key
+  means *skip this*. The hold guarantees the picture is never invisible, not
+  that it cannot be cut short. It is a minimum display time, NOT a demand for
+  the keyboard to fall quiet — requiring quiet meant every press restarted the
+  count, so a player mashing could never get past at all.
+- **The tune IS the wait.** `lowlands_play()` blocks until a key, so nothing
+  after it may wait again; asking the input loop for another press made the
+  player press twice for one picture. Same shape as `splash()`.
+- **It calls `lowlands_play()` directly, not `play_music()`**, because
+  `play_music()` brackets the tune with `busy_on()`/`busy_off()` — which draw
+  chrome and *present*, and presenting flips the screen away from the picture.
+- **Nothing may print while the bank is in.** The picture is decompressed
+  between `cs_page_in()` and `cs_page_out()`, and while a bank occupies
+  `0xC000-0xFFFF` the string pool, the compose buffer and the tile sheets are
+  all hidden behind it. A `print_at()` added between those two calls would draw
+  from the bank and produce rubbish. See `.claude/skills/zx0-layout` § What a
+  bank can and cannot hold.
+- **On a 128K the picture is copied to both screens** (`memcpy(SCREEN_1,
+  SCREEN_0, 6912)`), so the flip that `ST_PLAY` performs on entry cannot reveal
+  a stale screen underneath it.
+
+### ST_BRIEF
+
+- **Shows**: the level's **mission** title, its **dateline**, and the
+  **briefing** paragraph, wrapped to the screen. Source: `docs/levels.md`.
+- **Entered**: from `ST_CUTSCENE`, so the order is picture, then words, then
+  board.
+- **Exits**: `SPACE` or fire 1, to `ST_PLAY`.
+- **Both machines.** The briefings cost 611 bytes of ZX0 and no RAM, because
+  they unpack into the compose buffer. See § Where the metadata lives.
+- **Per frame**: nothing. It paints once and blocks.
+
+#### The music: `lowlands` RESTARTS here
+
+The Tritone player is **blocking** — it owns the CPU and returns only on a
+keypress — so a single run of a tune cannot span two states that each wait for
+their own input. `ST_BRIEF` therefore starts the tune again rather than
+inheriting it.
+
+Two consecutive runs of the same tune is not an accident of the
+implementation, it is the design: the cutscene's run scores the picture, the
+brief's run scores the words, and each ends when the player has finished with
+that screen. The tune is short enough that a restart reads as a reprise.
+
+The rule from `ST_CUTSCENE` still holds: **where a tune blocks until input,
+the tune IS the wait, and nothing after it may wait again.** So `ST_BRIEF`
+calls `lowlands_play()` and does NOT ask the input loop for a second press —
+that was the bug that made the player press twice for one cutscene.
+
+#### Where the metadata lives
+
+Measured from `docs/levels.md`:
+
+| | entries | longest | total raw |
+|---|---|---|---|
+| mission | 10 | 38 | 250 |
+| dateline | 10 | 23 | 192 |
+| briefing | 10 | 259 | 1326 |
+
+A briefing wraps to **2..9 rows** of 31 columns; the screen has ~14 free.
+
+**BOTH MACHINES GET THE BRIEFING**, and the thing that makes it possible is
+that there is already a 4 KB buffer standing idle.
+
+- The ten briefings ZX0 as **ONE block: 1 326 bytes -> 611**, 54% saved.
+  One block, not ten: per-level blobs come to 1 207, *worse than raw*, because
+  each is too short for ZX0 to find anything and every stream pays its own
+  overhead. The repetition worth having -- RED SHADOWS, ACTION FORCE, RED
+  JACKAL -- is BETWEEN briefings.
+- A single block has to be unpacked whole, and 1 326 bytes will not fit the
+  410 free above `MEM_END`. **It does fit `MEM_VBUF`**, which is 4 096 bytes
+  and holds nothing during `ST_BRIEF`: the board is not being composed, and
+  entering `ST_PLAY` calls `render_play()` -> `draw_view()`, which rebuilds
+  every cell of it from scratch. Unpack into the compose buffer, print from
+  it, and let the board overwrite it.
+- So the cost is **611 bytes of `0x8000-0xBFFF` and no new RAM at all**, on a
+  48K and a 128K alike. No bank, and `ST_BRIEF` need not be 128K-only.
+
+**Do not reach for a word dictionary.** It would save ~347 raw bytes across
+the briefings, but ZX0 is already exploiting exactly that repetition and needs
+no decoder; a dictionary cost 116 bytes of expander last time and came out
+twelve bytes WORSE than storing the text raw.
+
+**Uppercasing the briefings** takes the block 611 -> 561. Worth 50 bytes if
+the house style allows it; the mixed case in `docs/levels.md` is deliberate
+for unit names, so this is a choice about the writing, not the code.
+
+#### The letter budget
+
+Working back from the code region, which is the only thing that is scarce:
+
+```
+1433 bytes free today
+   -120   missions into the resident pool (compressed delta)
+   -200   ST_BRIEF: the state, word wrap, printing
+    -30   the per-level turn table and the new score
+   -300   headroom, so this does not end at the wall again
+  =====
+    783   for the briefing block
+```
+
+At the measured ratio that is:
+
+| | ZX0 budget | raw characters | per briefing |
+|---|---|---|---|
+| as written | 783 | ~1 700 | **~170** |
+| uppercased | 783 | ~1 860 | **~186** |
+
+**You use 1 317 today** — 131 average, longest 259. So there is room for
+roughly **385 to 545 more characters in total**, and the budget is on the
+TOTAL rather than on each one: a 300-character briefing is fine if others are
+short.
+
+Two things make this conservative:
+
+- **Longer text in the same vocabulary compresses better.** Doubling the
+  briefings takes the block only 611 -> 645, a ratio of 0.24 rather than 0.46.
+  The 170-character figure assumes no improvement; in practice adding text
+  costs far less than the first 1 300 bytes did.
+- The **screen** caps a single briefing at ~14 rows x 31 columns = **434
+  characters**, which will bite before the memory does.
 
 ### ST_PLAY
 

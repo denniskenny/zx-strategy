@@ -162,10 +162,26 @@ def main():
         # The cursor starts on the player's base, so one ACTION press
         # selects it, marks its cell dirty and sends it through
         # present_cell().  Both blits are now in the hash.
-        io((7, 0))              # SPACE
+        io((7, 0))              # SPACE: selects the unit under the cursor
         time.sleep(0.5)
         io(None)
         time.sleep(1.0)
+
+        # ...then STEP OFF IT, or the selection is invisible here.
+        #
+        # The cursor's own wash covers its whole cell, so a selected unit
+        # standing under the cursor shows ATTR_CURSOR and nothing of the
+        # selection at all.  Moving the wash from the whole cell to the
+        # sprite half changed the screen visibly and left this hash
+        # IDENTICAL -- twice, before and after the attribute third was
+        # added -- because the capture never showed a selected cell.
+        #
+        # One step right scrolls the world under the pinned cursor and
+        # puts the selected cell somewhere its own colours are visible.
+        io((5, 0))              # P
+        time.sleep(0.35)
+        io(None)
+        time.sleep(1.2)
 
         # ALL THREE THIRDS, 0x4000-0x57FF.
         #
@@ -178,7 +194,18 @@ def main():
         # A golden master that covers two thirds of the screen is not a
         # golden master; it is a golden master of the part that happened
         # to be easy to read.
-        blob = rd(0x4000, 0x800) + rd(0x4800, 0x800) + rd(0x5000, 0x800)
+        # PIXELS AND ATTRIBUTES: 0x4000-0x5AFF, the whole display file.
+        #
+        # The attribute third was outside this for a long time, so the
+        # entire colour scheme was untested here.  Moving the selection
+        # wash from a whole cell to the sprite half -- a change visible
+        # at a glance on the screen -- left the hash IDENTICAL.
+        #
+        # A golden master that covers the pixels and not the colours is a
+        # golden master of half the display.  Same lesson as the bottom
+        # third of the pixels, which was also missing until it wasn't.
+        blob = (rd(0x4000, 0x800) + rd(0x4800, 0x800) + rd(0x5000, 0x800)
+                + rd(0x5800, 0x300))
         got = hashlib.sha1(blob).hexdigest()
         nz = sum(1 for b in blob if b)
     finally:

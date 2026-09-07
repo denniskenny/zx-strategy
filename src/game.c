@@ -413,7 +413,14 @@ static void move_cursor(void)
 
     /* Only colours change as the cursor moves, so the tiles underneath
        are left alone: put the vacated cell's own attributes back, then
-       flood the new one. */
+       flood the new one.
+
+       ONE SCREEN IS ENOUGH HERE, which is worth saying because it is the
+       exception.  render_show() leaves gfx_attr pointing at the screen
+       it just made visible, and ST_MAP never flips again until it is
+       left -- at which point render_play() recomposes both.  Verified on
+       a 128K: after a step, both screens read 0x78 on the new cell and
+       the terrain colour on the vacated one. */
     if (cur_x == cursor_x && cur_y == cursor_y)
         solid_map_cell(cur_x, cur_y, ATTR_HINT);    /* the play cursor */
     else

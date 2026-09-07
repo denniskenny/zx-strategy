@@ -38,11 +38,27 @@
 #define SFX_BOOM        2       /* a death:       ~37-224 Hz, a crunch  */
 #define SFX_VOICES      3
 
-static const uint16_t sfx_base[SFX_VOICES] = {     88,     40,    172 };
-static const uint16_t sfx_mask[SFX_VOICES] = { 0x00FF, 0x007F, 0x05FF };
+static const uint16_t sfx_base[SFX_VOICES] = {     48,     40,    120 };
+static const uint16_t sfx_mask[SFX_VOICES] = { 0x007F, 0x007F, 0x03FF };
 static const uint8_t  sfx_len[SFX_VOICES]  = {      3,      8,     24 };
 
 /* HOW FAR THE PITCH WANDERS between one firing and the next.
+ *
+ * IT MUST BE COMPARABLE TO base + mask/2, NOT A FRACTION OF IT.  The
+ * first attempt used 0x3F against a mask of 0x00FF, which sounds like a
+ * reasonable spread and is not: the per-cycle mask already moves the
+ * period by 0..255, so an offset of 0..63 shifted the MEAN period only
+ * from 216 to 278 -- 312 Hz to 241 Hz, a 1.29x spread, and inaudible
+ * against noise that broad.
+ *
+ * The mask was narrowed and the offset widened to fix it.  Each burst is
+ * now a tighter band of noise, and the band itself moves much further
+ * between bursts, which is what the ear picks up:
+ *
+ *     MOVE   mean period 112..366  =  603..183 Hz   3.3x
+ *     BOOM   mean period 632..1654 =  106..41 Hz    2.6x
+ *
+ * Calibration, from this project's own measurements: Hz ~= 67200/period.
  *
  * `mask` above already randomises the period cycle BY cycle, which is
  * what makes each burst noise rather than a tone.  But every burst
@@ -63,7 +79,23 @@ static const uint8_t  sfx_len[SFX_VOICES]  = {      3,      8,     24 };
  * and a confirmation that sounds different every time reads as a
  * different event.  The two sounds that describe a PHYSICAL thing -- a
  * footfall, a blast -- are the ones that want the variation. */
-static const uint16_t sfx_vary[SFX_VOICES] = { 0x003F, 0x0000, 0x00FF };
+/* TO RETUNE: change a spread and move its base by half as much the other
+   way, or the voice shifts as well as widening.  These pairs keep the
+   mean pitch where it is:
+
+       SFX_VARY_MOVE_WIDE    0x00FF with base  48   603..183 Hz   3.3x
+       SFX_VARY_MOVE_NARROW  0x007F with base 112   410..205 Hz   2.0x
+       SFX_VARY_MOVE_OFF     0x0000 with base 176   305 Hz flat
+
+   Halving the spread and raising the base is the "too varied" fix; the
+   narrow row above is that setting, ready to paste. */
+#define SFX_VARY_MOVE   0x00FF      /* with sfx_base[SFX_MOVE] =  48 */
+#define SFX_VARY_ATTACK 0x0000      /* deliberately flat: see above  */
+#define SFX_VARY_BOOM   0x03FF      /* with sfx_base[SFX_BOOM] = 120 */
+
+static const uint16_t sfx_vary[SFX_VOICES] = { SFX_VARY_MOVE,
+                                               SFX_VARY_ATTACK,
+                                               SFX_VARY_BOOM };
 /* MOVE is deliberately the shortest burst of the three -- a tick, not a
  * thud.  It fires on every step of every unit, so it is the one sound the
  * player hears constantly, and anything with a tail makes holding a

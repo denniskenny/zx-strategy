@@ -1155,6 +1155,52 @@ cannot hold.
 The ROM cannot be overwritten, of course; "replacing the font" is holding
 one in RAM and pointing print_at() at it.
 
+### The animation beat  ✓ bounded; half-tiles tried and reverted
+
+**Bounded, and kept.**  `animate()` repainted every visible unit before
+returning, so a whole beat landed in one frame.  At ~13 500 T-states a
+cell against 69 888 in a frame:
+
+| units in view | frames of work |
+|---|---|
+| 4 | 0.77 |
+| 6 | 1.16 |
+| 14 | 2.71 |
+
+Anything over 1.00 drops a frame, so a level with a dozen units in view
+dropped two or three every eighteenth frame.  `anim_paint()` now draws at
+most `ANIM_CELLS` (4) a frame and carries the rest forward: **0.77 worst
+case, flat, whatever the unit count**.  `anim_frame` still flips all at
+once, so units stay in step -- only the repainting spreads, and at
+`ANIM_BEAT` 18 there is room for four frames of it.
+
+**Half-tiles tried, measured, and REVERTED.**  A sprite is the bottom 16
+of a cell's 32 pixel rows, so the top half is terrain that cannot change
+between poses.  Composing and presenting only the sprite half worked and
+delivered what it promised -- 13 512 T a cell down to 8 136, **-40%** --
+and the worst frame went 0.77 to 0.47.
+
+It cost **340 bytes** of 0x8000-0xBFFF: a row count in each of the two
+assembly blits (`ct_rows`, `pc_rows`), a second draw path, and a fallback
+to the whole cell for a walking sprite, which sits at row offset 0.
+
+**Reverted because it bought nothing visible.**  Bounding the beat had
+already removed every dropped frame; 0.77 and 0.47 are both comfortably
+inside a frame and no eye can separate them.  340 bytes, with 1 433 left
+in the region, is real money for an improvement nobody can see.
+
+The lesson is the ordering: **bound the loop before optimising the item.**
+The per-cell cost was never the problem -- the absence of a bound was --
+and the 40% saving was measured against a fault that had already gone.
+
+The code is in the history and the reasoning is at `ANIM_CELLS` in
+`src/render.c`.  Worth revisiting only if a beat has to fit somewhere
+much tighter than one frame.
+
+`tests/anim_paths.py` came out of this and stays: it freezes the CPU at
+`vsync_wait()` and checks both screens against VBUF after a beat, which
+is the only coverage the at-rest animation path has ever had.
+
 ### Removing the stdio console driver  (~570 bytes, not started)
 
 `fputc_cons_generic` (438) + `generic_console_printc` (133) are linked into
@@ -1179,6 +1225,65 @@ reason.
 the copy.**  The cost is owning a 300-line CRT file forever, including
 whatever z88dk changes in it upstream.  Worth it when the program region
 is genuinely full; not before.
+
+### P12 — Mission metadata, ST_BRIEF, and turn-limit scoring  (not started)
+
+`docs/levels.md` already carries a mission title, dateline, turn limit, both
+rosters and a briefing for each of the ten levels.  None of it reaches the
+game.  This phase makes it current, level by level, and replaces the single
+`SCORE_PAR` with the per-level turn limit.
+
+Design: `docs/DESIGN.md` § Turns and scoring, § ST_BRIEF.
+
+#### The work
+
+1. **A generator for the level book.**  `tools/mklevels.py` parses
+   `docs/levels.md` into (a) mission strings appended to `text/strings.txt`,
+   (b) a per-level turn table in the game config, (c) one ZX0 blob per level
+   holding dateline + briefing.  Nothing retyped; the book stays the source.
+2. **Missions resident.**  10 strings, 250 bytes raw, into the existing pool.
+   `MEM_TEXTPOOL_SIZE` 800 -> ~1 000, which the 410 bytes above `MEM_END`
+   covers.  Needed on BOTH machines: the mission replaces "THE FIELD" in the
+   `ST_PLAY` header.
+3. **Briefings as ONE ZX0 block, unpacked into MEM_VBUF.**  611 bytes in the
+   program region and no new RAM: the compose buffer is 4 KB, holds nothing
+   during `ST_BRIEF`, and `render_play()` rebuilds it on the way to the board.
+   ONE block, not ten -- per-level blobs come to 1 207, worse than the 1 326
+   raw, because the repetition worth having is BETWEEN briefings.
+4. **`ST_BRIEF`**, between `ST_CUTSCENE` and `ST_PLAY`, dismissed by
+   SPACE/fire 1, on BOTH machines.  `lowlands` restarts here.
+5. **The turn limit and the new score**, replacing `SCORE_PAR`:
+   `config_turns - elapsed`, added on victory only.  No multiplier: the limit
+   IS the par, and x10 would overflow `uint8_t` past a 25-turn level and need
+   a third digit in the `ST_OVER` field.
+6. **Metadata becomes current on the level advance**, alongside `load_map()`
+   in the `ST_OVER` win path.
+
+#### Measured budget
+
+| | |
+|---|---|
+| missions, resident | 250 raw, in the pool |
+| briefings, one ZX0 block | **611** of the 1 433 free |
+| unpack destination | `MEM_VBUF`, already there, 4 096 bytes |
+| dateline | 192 raw; in the block with the briefings |
+| code region left after P12 | ~300, by design |
+
+**Letter budget for the briefings: ~1 700 characters in total, ~170 each**
+(~1 860 / ~186 if uppercased).  1 317 are used today, so there is room for
+385-545 more.  Conservative, because longer text in the same vocabulary
+compresses better -- doubling the briefings takes the block only 611 -> 645.
+The screen caps a single briefing at ~434 characters, which bites first.
+
+#### Open questions -- settle before writing code
+
+- **What happens when the turns run out?**  Defeat is the natural answer and
+  the design says so, but it is not decided.  A limit with no consequence is a
+  decoration.
+- ~~Which state plays `lowlands`?~~  **Settled: it restarts in `ST_BRIEF`.**
+  The player blocks until a key, so one run cannot span two states; the
+  cutscene's run scores the picture and the brief's run scores the words.
+- ~~`level_score()` widens~~  **Settled: no multiplier, so nothing widens.**
 
 ### P6 — Balance and polish
 

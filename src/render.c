@@ -1140,7 +1140,19 @@ static const uint8_t *cell_attr(uint8_t vx, uint8_t vy,
     u = occupancy[cell];
 
     if (u != NO_UNIT) {
-        if (u == selected)            { *flat = ATTR_HINT; attr_whole = 1; }
+        /* SELECTED: the sprite half only.
+         *
+         * attr_whole is not set, so compose_view_attr() leaves the top
+         * rows as the terrain's own colours and washes only the rows the
+         * sprite occupies.  Colouring the whole cell yellow read as the
+         * TERRAIN being selected rather than the unit standing on it,
+         * and it covered the tile the player needs to see to judge the
+         * move -- cover and movement cost are terrain properties.
+         *
+         * is_target below still takes the whole cell, deliberately: that
+         * wash marks a cell as a place to shoot AT, which is a statement
+         * about the ground as much as about whatever is standing on it. */
+        if (u == selected)            { *flat = ATTR_HINT; }
         else if (is_target(cell))     { *flat = ATTR_TARGET; attr_whole = 1; }
         else if (u_flags[u] & U_SIDE) {
             /* The enemy gets the sheet's per-cell BRIGHT bit too, which it
@@ -2048,7 +2060,57 @@ void render_walk_end(void)
    poses, not a walk cycle, and a fast flip reads as a flicker. */
 #define ANIM_BEAT   18
 
+/* Cells the beat may repaint in ONE frame.
+ *
+ * animate() used to repaint every visible unit before returning, so the
+ * whole beat landed in a single frame.  Each cell costs about 13 500
+ * T-states -- a compose, a masked sprite, and a present to BOTH screens
+ * on a 128K -- against 69 888 in a frame, so:
+ *
+ *      4 units  0.77 frames      6 units  1.16      14 units  2.71
+ *
+ * Anything over 1.00 drops a frame, and a level with a dozen units in
+ * view dropped two or three every eighteenth frame.  render_tick()
+ * already pays the dirty list off a few cells at a time; the beat was
+ * the one repainter with no bound.
+ *
+ * FOUR keeps a beat inside a frame with room to spare.  The flip of
+ * anim_frame still happens all at once, so the units stay in step with
+ * each other -- only the repainting is spread, and at 18 frames a beat
+ * there is a great deal of room to spread it into. */
+#define ANIM_CELLS  4
+
 static uint8_t anim_beat;
+
+/* HALF-TILE UPDATES WERE TRIED HERE, AND REVERTED.
+ *
+ * A sprite is the bottom 16 of a cell's 32 pixel rows, so the top half is
+ * terrain that cannot change between two poses.  Composing and presenting
+ * only the sprite half worked, and measured what it promised:
+ *
+ *     per cell   whole 13 512 T   sprite half 8 136 T   -40%
+ *
+ * It cost 340 BYTES of 0x8000-0xBFFF -- a row count in each of the two
+ * assembly blits, a second draw path, and a fallback to the whole cell
+ * for a walking sprite, which sits at row offset 0 rather than 2.
+ *
+ * IT BOUGHT NOTHING VISIBLE, because bounding the beat had already fixed
+ * the problem it was aimed at.  Worst frame in a beat:
+ *
+ *     unbounded whole   14 units   2.71 frames   dropped 2-3 frames
+ *     bounded   whole   14 units   0.77
+ *     bounded   half    14 units   0.47          <- the 340 bytes
+ *
+ * 0.77 and 0.47 are both comfortably inside a frame; nothing is dropped
+ * either way, and no eye can tell them apart.  The bytes were worth more.
+ *
+ * Do it again only if a beat has to fit somewhere much tighter than a
+ * frame, and expect to pay for the row counts in the blits.
+ *
+ * Where the last beat's repaint got to; a beat is not finished until
+   this reaches unit_count, and render_tick() will not start another
+   until it has. */
+static uint8_t anim_next;
 
 /* Swap every unit to the other frame.
 
@@ -2067,6 +2129,8 @@ static void animate(void)
     uint8_t i;
 
     anim_frame = (uint8_t)!anim_frame;
+    anim_next = 0;              /* the repaint starts, and is paid for
+                                   a few cells a frame by anim_paint() */
 
 #if DEBUG_DIAG
     /* DIAGNOSTIC: repaint the WHOLE view, not just the occupied cells.
@@ -2084,7 +2148,21 @@ static void animate(void)
         draw_view_cell((uint8_t)(i % VIEW_COLS), (uint8_t)(i / VIEW_COLS));
     return;
 #endif
-    for (i = 0; i < unit_count; i++) {
+}
+
+/* Repaint up to ANIM_CELLS of the current beat, and say whether more is
+   owed.  Called once a frame; a beat spreads over as many frames as it
+   needs, which at ANIM_BEAT=18 is never a shortage.
+
+   Skipped units cost a loop iteration and nothing else, so the bound is
+   on cells DRAWN rather than on units examined -- otherwise a board with
+   most of its units off-screen would take frames to do no work. */
+static uint8_t anim_paint(void)
+{
+    uint8_t drawn = 0;
+
+    while (anim_next < unit_count) {
+        uint8_t i = anim_next++;
         int8_t vx, vy;
 
         if (u_type[i] == NO_UNIT) continue;
@@ -2093,7 +2171,9 @@ static void animate(void)
         if (vx < 0 || vx >= VIEW_COLS || vy < 0 || vy >= VIEW_ROWS)
             continue;
         draw_view_cell((uint8_t)vx, (uint8_t)vy);
+        if (++drawn >= ANIM_CELLS) break;
     }
+    return (uint8_t)(anim_next < unit_count);
 }
 
 void render_tick(void)
@@ -2135,11 +2215,20 @@ void render_tick(void)
         return;
     }
 
-    /* At rest: nothing else wanted this frame, so the board may breathe. */
+    /* At rest: nothing else wanted this frame, so the board may breathe.
+     *
+     * A beat in progress is finished before another is started, so the
+     * frame index cannot advance while half the board is still wearing
+     * the previous one. */
 #if !FREEZE_ANIM
+    if (anim_next < unit_count) {
+        anim_paint();
+        return;
+    }
     if (++anim_beat >= ANIM_BEAT) {
         anim_beat = 0;
         animate();
+        anim_paint();           /* the first few cells, this frame */
     }
 #endif
 }
