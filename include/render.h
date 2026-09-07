@@ -173,12 +173,8 @@
 /* The legends a banner has to be able to put back, each 31 columns so
    it overwrites whatever the banner left.  ST_TITLE keeps its key list
    up at rows 10-11 and leaves this row blank. */
-#if DEBUG_STATE_WALK
-#define PLAY_HINT   "FIRE ORDER  ENTER BACK  M MAP"
-#else
-#define PLAY_HINT   "SPACE ORDER  ENTER BACK  M MAP"
-#endif
-#define TITLE_HINT  ""      /* render_hint() pads; see it */
+/* Both live in text/strings.txt now, like every other string the player
+   reads: use TXT_PLAY_HINT and TXT_BLANK at the call site. */
 
 
 /* --- Repaint queues --------------------------------------------------

@@ -2179,7 +2179,7 @@ void render_play(void)
     draw_view();
     render_discard();       /* draw_view() already used the real colours */
     draw_status(TXT_CURSOR, cursor_x, cursor_y);
-    render_hint(PLAY_HINT);
+    render_hint(TXT_PLAY_HINT);
     render_show();
 
     /* LEAVE BOTH SCREENS HOLDING THE BOARD.

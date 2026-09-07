@@ -11,8 +11,8 @@
    at boot, so every string's address is known here.  TXT_* is a
    constant, costing one `ld hl,nn` at the call site -- the same
    as the plain array it replaced. */
-#define TEXT_COUNT      54
-#define TEXT_POOL_SIZE  716
+#define TEXT_COUNT      55
+#define TEXT_POOL_SIZE  747
 
 void text_init(void);
 
@@ -70,5 +70,6 @@ void text_init(void);
 #define TXT_UNIT_E_TANK                    ((const char *)(MEM_TEXTPOOL + 683))   /* 'E-TANK    ' */
 #define TXT_UNIT_E_CANNON                  ((const char *)(MEM_TEXTPOOL + 694))   /* 'E-CANNON  ' */
 #define TXT_UNIT_E_BASE                    ((const char *)(MEM_TEXTPOOL + 705))   /* 'E-BASE    ' */
+#define TXT_PLAY_HINT                      ((const char *)(MEM_TEXTPOOL + 716))   /* 'SPACE ORDER  ENTER BACK  M MAP' */
 
 #endif /* _STRINGS_H_ */

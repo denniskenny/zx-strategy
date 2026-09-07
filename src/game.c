@@ -519,7 +519,7 @@ static void enemy_tick(void)
     cell = enemy_step();
     if (cell == NO_CELL) {
         enemy_active = 0;
-        render_hint(PLAY_HINT);
+        render_hint(TXT_PLAY_HINT);
         return;
     }
     view_to(cell);
@@ -610,7 +610,7 @@ static void handle_input(void)
                     }
                 } else if (edge & ACT_CANCEL) {
                     confirm = CONFIRM_NONE;
-                    render_hint(PLAY_HINT);
+                    render_hint(TXT_PLAY_HINT);
                 }
                 break;
             }

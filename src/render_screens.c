@@ -152,7 +152,7 @@ void render_title(void)
 
     /* The hint row is where the tune's banner goes, and where it is
        cleared back to. */
-    render_hint(TITLE_HINT);
+    render_hint(TXT_BLANK);
 
     /* Row 22 is left blank on purpose — it holds the floating bus sync
        marker written by vsync_wait(). */

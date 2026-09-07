@@ -69,3 +69,13 @@ UNIT_E_INFANTRY                = "E-INFANTRY"
 UNIT_E_TANK                    = "E-TANK    "
 UNIT_E_CANNON                  = "E-CANNON  "
 UNIT_E_BASE                    = "E-BASE    "
+
+# --- the play screen's key legend ---
+# 31 columns, so it overwrites whatever a banner left behind.
+#
+# NOT conditional.  It used to read "FIRE ORDER" in the DEBUG_KEYS build
+# and "SPACE ORDER" otherwise, which was invisible while that flag was
+# only ever set for a test run.  Putting the keys in the standard build
+# made the debug wording the shipping wording; tests/pixel_hash.py caught
+# it, because row 21 changed.
+PLAY_HINT                      = SPACE ORDER  ENTER BACK  M MAP
