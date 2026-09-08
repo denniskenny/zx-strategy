@@ -2285,6 +2285,19 @@ void render_hint(const char *hint)
     hint_row(hint, ATTR_HINT);
 }
 
+/* --- Cold screens that would not fit -------------------------------
+ *
+ * These paint once per state change and belong in the contended window
+ * with render_title() and render_cutscene().  They are up here because
+ * SECTION COLD is full -- see the header of src/render_screens.c for
+ * what each one cost.  Nothing about them wants uncontended memory;
+ * they are paying for space, not speed.
+ *
+ * If the contended window ever gains room, these are the first
+ * candidates to go back, cheapest first: render_won, render_over,
+ * render_map, render_brief.
+ */
+
 /* ST_BRIEF: what this level is, in words.
  *
  * The dateline and briefing are ONE ZX0 block for all ten levels,
@@ -2393,6 +2406,41 @@ void render_map(void)
     solid_map_cell(cur_x, cur_y, ATTR_CURSOR);
     draw_status(TXT_CURSOR, cur_x, cur_y);
     render_hint(TXT_QAOP_LOOK_AROUND_ENTER_BACK);
+    render_show();
+}
+
+void render_over(void)
+{
+    render_compose();
+    draw_header(player_won ? TXT_VICTORY : TXT_DEFEAT);
+
+    print_at(1, 10, player_won ? TXT_LEVEL_TAKEN : TXT_LEVEL_LOST);
+    print_num(18, 10, level, 2);
+    print_at(1, 11, TXT_TURNS_TAKEN);
+    print_num(18, 11, turn, 2);
+
+    /* The score is the turns NOT spent -- config_turns() less those
+       elapsed -- so a quick win scores high and one that runs the clock
+       out scores nothing.  Only on a win: there is no score for losing.
+
+       NO CLAMPS.  Both were unreachable once the turn limit became the
+       par: a level score is at most config_turns (20) and the campaign
+       total at most ten of those, so neither can reach the 99 and 999
+       the old code guarded against, and turn cannot reach 100 in a
+       20-turn level.  print_num() shows the low digits of whatever it
+       is given, so an impossible value would be wrong rather than
+       dangerous.  This is the contended window; 39 bytes of guarding
+       against arithmetic that cannot happen is 39 bytes too many. */
+    if (player_won) {
+        print_at(1, 12, TXT_LEVEL_SCORE);
+        print_num(18, 12, level_score(), 2);
+        print_at(1, 13, TXT_TOTAL_SCORE);
+        print_num(17, 13, campaign_score, 3);
+    }
+    set_attr_rect(0, 10, 32, 4, ATTR_TEXT);
+
+    render_hint(player_won ? TXT_SPACE_FOR_THE_NEXT_LEVEL
+                           : TXT_SPACE_TO_RETURN_TO_THE_TITLE);
     render_show();
 }
 

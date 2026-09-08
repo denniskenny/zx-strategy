@@ -1,24 +1,34 @@
 /*
- * render_screens.c -- the once-per-state screens.
+ * render_screens.c -- once-per-state screens, in the CONTENDED window.
  *
- * Split out of render.c and placed in the CONTENDED window.  These five
- * painters run exactly once each per state change and never inside the
- * frame budget:
+ * WHAT IS HERE:  render_title, render_cutscene.
  *
- *     render_title  render_map  render_over  render_won  render_cutscene
+ * Both paint a whole screen exactly once per state change, never inside
+ * the frame budget, so the 40% the contended window costs buys code
+ * space that per-frame work could not give up.  Same argument as
+ * logic.c and hw_detect.c (src/logic_org.asm).
  *
- * render.c was 9,502 bytes -- 40% of all code -- in a 16K window that had
- * 132 bytes left.  What stays there composes cells and presents them,
- * which is per-frame work and must be uncontended.  A full-screen repaint
- * that happens on a keypress need not be.
+ * A separate FILE because #pragma codeseg is per translation unit:
+ * there is no way to mark individual functions inside one.
  *
- * Same argument as logic.c and hw_detect.c (src/logic_org.asm).  This is a
- * separate FILE because #pragma codeseg is per translation unit: there is
- * no way to mark five functions inside one.
+ * WHAT LEFT, AND WHY -- read this before moving anything back.
  *
- * render_play() stays in render.c deliberately.  It looks like a sibling
- * of these, but the walk and the enemy turn call it mid-sequence, so it is
- * not once-per-state.
+ * The window is 0x6000-0x7FA0 and the low asset block takes the first
+ * 1,646 bytes of it, so SECTION COLD gets about 6.4K and is FULL.  Four
+ * screens have had to give up on it:
+ *
+ *     render_map     never fitted
+ *     render_won     49 bytes over
+ *     render_brief   250 needed, ~150 spare -- twice, before and after
+ *                    the word wrap moved into tools/mklevels.py
+ *     render_over    moved out to buy the window headroom back
+ *
+ * They live in render.c under "cold screens that would not fit".  Cold
+ * code belongs down here when it fits, and only when it fits.
+ *
+ * render_play() is in render.c for a different reason: it looks like a
+ * sibling of these but the walk and the enemy turn call it mid-sequence,
+ * so it is not once-per-state.
  */
 
 #pragma codeseg LOGIC
@@ -31,10 +41,8 @@
 #include "../include/board.h"
 #include "../include/cutscenes.h"
 #include "../include/dzx0.h"
-#include "../include/memmap.h"
 #include "../include/gfx.h"
 #include "../include/hw.h"
-#include "../include/levels.h"
 #include "../include/render.h"
 #include "../include/strings.h"
 #include "../include/vsync.h"
@@ -169,42 +177,3 @@ void render_title(void)
 
 /* A level ended.  player_won says which message to show; the exit is
    handled in handle_input(), which is where the level advances. */
-void render_over(void)
-{
-    render_compose();
-    draw_header(player_won ? TXT_VICTORY : TXT_DEFEAT);
-
-    print_at(1, 10, player_won ? TXT_LEVEL_TAKEN : TXT_LEVEL_LOST);
-    print_num(18, 10, level, 2);
-    print_at(1, 11, TXT_TURNS_TAKEN);
-    print_num(18, 11, turn, 2);
-
-    /* The score is the turns NOT spent -- config_turns() less those
-       elapsed -- so a quick win scores high and one that runs the clock
-       out scores nothing.  Only on a win: there is no score for losing.
-
-       NO CLAMPS.  Both were unreachable once the turn limit became the
-       par: a level score is at most config_turns (20) and the campaign
-       total at most ten of those, so neither can reach the 99 and 999
-       the old code guarded against, and turn cannot reach 100 in a
-       20-turn level.  print_num() shows the low digits of whatever it
-       is given, so an impossible value would be wrong rather than
-       dangerous.  This is the contended window; 39 bytes of guarding
-       against arithmetic that cannot happen is 39 bytes too many. */
-    if (player_won) {
-        print_at(1, 12, TXT_LEVEL_SCORE);
-        print_num(18, 12, level_score(), 2);
-        print_at(1, 13, TXT_TOTAL_SCORE);
-        print_num(17, 13, campaign_score, 3);
-    }
-    set_attr_rect(0, 10, 32, 4, ATTR_TEXT);
-
-    render_hint(player_won ? TXT_SPACE_FOR_THE_NEXT_LEVEL
-                           : TXT_SPACE_TO_RETURN_TO_THE_TITLE);
-    render_show();
-}
-
-/* render_won() stayed in render.c too: with it here, SECTION LOGIC ran 49
-   bytes past the contended window.  Three of the five moved; the window
-   simply has no room for more, which is worth knowing before anyone tries
-   to move a fourth. */
