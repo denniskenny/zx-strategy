@@ -31,8 +31,10 @@
 #include "../include/board.h"
 #include "../include/cutscenes.h"
 #include "../include/dzx0.h"
+#include "../include/memmap.h"
 #include "../include/gfx.h"
 #include "../include/hw.h"
+#include "../include/levels.h"
 #include "../include/render.h"
 #include "../include/strings.h"
 #include "../include/vsync.h"
@@ -175,18 +177,25 @@ void render_over(void)
     print_at(1, 10, player_won ? TXT_LEVEL_TAKEN : TXT_LEVEL_LOST);
     print_num(18, 10, level, 2);
     print_at(1, 11, TXT_TURNS_TAKEN);
-    print_num(18, 11, (uint8_t)(turn > 99 ? 99 : turn), 2);
+    print_num(18, 11, turn, 2);
 
-    /* Score is SCORE_PAR less the turns it took, so a quick win scores
-       high and a long one scores nothing -- never negative, because a
-       level that took longer than par is worth zero rather than a debt.
-       Only on a win: there is no score for losing. */
+    /* The score is the turns NOT spent -- config_turns() less those
+       elapsed -- so a quick win scores high and one that runs the clock
+       out scores nothing.  Only on a win: there is no score for losing.
+
+       NO CLAMPS.  Both were unreachable once the turn limit became the
+       par: a level score is at most config_turns (20) and the campaign
+       total at most ten of those, so neither can reach the 99 and 999
+       the old code guarded against, and turn cannot reach 100 in a
+       20-turn level.  print_num() shows the low digits of whatever it
+       is given, so an impossible value would be wrong rather than
+       dangerous.  This is the contended window; 39 bytes of guarding
+       against arithmetic that cannot happen is 39 bytes too many. */
     if (player_won) {
         print_at(1, 12, TXT_LEVEL_SCORE);
         print_num(18, 12, level_score(), 2);
         print_at(1, 13, TXT_TOTAL_SCORE);
-        print_num(17, 13,
-                  (uint8_t)(campaign_score > 999 ? 999 : campaign_score), 3);
+        print_num(17, 13, campaign_score, 3);
     }
     set_attr_rect(0, 10, 32, 4, ATTR_TEXT);
 

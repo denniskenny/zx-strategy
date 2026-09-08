@@ -42,6 +42,7 @@ ORed with 1): that value is the floating bus sync marker — see
 """
 
 import argparse
+import hashlib
 import os
 import subprocess
 import sys
@@ -181,6 +182,49 @@ def mask_bytes(pixels, cols, tw, th, y0=0):
     return bytes(out)
 
 
+def check_manifest(path, sums, name, bless):
+    """Compare row checksums against the recorded order."""
+    if bless or not os.path.exists(path):
+        with open(path, "w") as f:
+            f.write(f"# {name}: one line per sprite ROW, in id order.\n"
+                    f"# Row order is load-bearing -- unit type ids ARE row\n"
+                    f"# indices.  Regenerate with --bless-tiles when the\n"
+                    f"# artwork changes on purpose.\n")
+            for i, s in enumerate(sums):
+                f.write(f"{i} {s}\n")
+        print(f"{name}: manifest {'blessed' if bless else 'recorded'}, "
+              f"{len(sums)} rows")
+        return
+
+    old = {}
+    for line in open(path):
+        line = line.split("#")[0].split()
+        if len(line) == 2:
+            old[int(line[0])] = line[1]
+
+    if len(old) != len(sums):
+        die(f"{name}: the sheet has {len(sums)} rows and {path} records "
+            f"{len(old)} -- if that is deliberate, --bless-tiles")
+
+    moved = [i for i in range(len(sums)) if old.get(i) != sums[i]]
+    if not moved:
+        return
+
+    # A permutation means the rows were REORDERED, which is the mistake
+    # worth naming precisely rather than reporting as "row 4 changed".
+    where = {s: i for i, s in old.items()}
+    swaps = [(i, where[sums[i]]) for i in moved if sums[i] in where]
+    if len(swaps) == len(moved):
+        detail = "; ".join(f"row {i} now holds what was row {j}"
+                           for i, j in swaps)
+        die(f"{name}: THE SHEET HAS BEEN REORDERED -- {detail}. "
+            f"Unit type ids are row indices, so this silently draws the "
+            f"wrong sprite. Put the rows back, or --bless-tiles and fix "
+            f"the UNIT_* ids in config/game_config.h to match")
+    die(f"{name}: rows {', '.join(str(i) for i in moved)} differ from "
+        f"{path}. If the artwork changed on purpose, --bless-tiles")
+
+
 def check_margin(pixels, x0, tw, th, name, tile, y0=0):
     """Refuse artwork with ink on the outer edge of its cell.
 
@@ -255,6 +299,11 @@ def main():
                     help="full: keep the authored attribute per cell. "
                          "bright: keep only the BRIGHT bit and let the "
                          "runtime supply ink and paper (unit sheets)")
+    ap.add_argument("--manifest", metavar="FILE",
+                    help="a golden master of WHICH SPRITE IS IN WHICH ROW. "
+                         "Checked every build; --bless-tiles to update")
+    ap.add_argument("--bless-tiles", action="store_true",
+                    help="rewrite the manifest from the sheet as it is now")
     ap.add_argument("--zx0", default=os.environ.get("ZX0", "/tmp/ZX0/src/zx0"))
     args = ap.parse_args()
 
@@ -270,6 +319,27 @@ def main():
     tw, th, grid = frames_layout(pixels, args.tiles, args.frames)
     if tw % 8 or th % 8:
         die(f"tile size {tw}x{th} must be a whole number of 8x8 characters")
+
+    # WHICH SPRITE IS IN WHICH ROW -- checked, not assumed.
+    #
+    # Unit type ids ARE row indices, so a sheet whose rows are in the
+    # wrong order draws the wrong unit and NOTHING complains: the cruiser
+    # arrived appended after the explosion and the game would happily
+    # have drawn an explosion where a cruiser stood.  The #errors in
+    # render.c compare constants against constants and cannot see this.
+    #
+    # So: a checksum per row, kept in a manifest beside the sheet.  Any
+    # row that changes is named, and if the rows are a PERMUTATION of the
+    # recorded ones -- the reordering case -- it says exactly which moved
+    # where.  Artwork edits need --bless-tiles, the same bargain as
+    # tests/pixel_hash.py: cheap to accept a change, impossible to make
+    # one silently.
+    if args.manifest:
+        sums = [hashlib.sha1(
+                    b"".join(tile_bytes(pixels, x0, tw, th, y0)
+                             for x0, y0 in grid[t])).hexdigest()[:12]
+                for t in range(args.tiles)]
+        check_manifest(args.manifest, sums, args.name, args.bless_tiles)
 
     # Frame 1 is what every machine gets, and is the sheet as far as the
     # rest of the pipeline is concerned.

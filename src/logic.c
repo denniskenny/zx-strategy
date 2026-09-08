@@ -35,6 +35,7 @@
 #include "../config/app_config.h"
 #include "../config/game_config.h"
 #include "../include/board.h"
+#include "../include/levels.h"
 #include "../include/dzx0.h"
 #define LEVEL_2_DEFINE_DATA
 #define LEVEL_3_DEFINE_DATA
@@ -249,13 +250,49 @@ uint8_t walking;                 /* a unit is walking: no reach shown  */
    level is -- and a par is at least a number the player can beat. */
 uint16_t campaign_score;
 
-/* This level's score: par less the turns spent, and never negative.  A
-   level taken in three turns is worth more than one taken in fifteen,
-   which is the whole point; one that drags past par is worth nothing
-   rather than costing the campaign. */
+/* The turns this level allows, from docs/levels.md via mklevels.py.
+   Clamped so a level past the end of the book still has a limit. */
+uint8_t config_turns(void)
+{
+    uint8_t i = (uint8_t)(level - 1);
+
+    if (i >= LEVEL_BOOK_COUNT) i = LEVEL_BOOK_COUNT - 1;
+    return level_turns[i];
+}
+
+/* This level's mission title, for the ST_PLAY header.  Clamped like
+   config_turns(): a level past the end of the book still has a caption. */
+const char *mission_of(uint8_t lv)
+{
+    uint8_t i = (uint8_t)(lv - 1);
+
+    if (i >= LEVEL_BOOK_COUNT) i = LEVEL_BOOK_COUNT - 1;
+    return level_mission[i];
+}
+
+/* What ST_PLAY shows: turns LEFT, not turns taken.  A countdown says how
+   much rope is left, which is what the player is deciding against.
+   `turn` still counts up internally -- the AI pacing and the walk
+   animation both read it, and a countdown is a worse thing to index
+   with. */
+uint8_t turns_left(void)
+{
+    uint8_t limit = config_turns();
+    uint8_t spent = (uint8_t)(turn ? turn - 1 : 0);
+
+    /* `turn` is ONE-BASED: it is 1 during the first turn, before the
+       player has spent anything.  So the turns ELAPSED are turn - 1, and
+       a fresh level shows the full limit rather than one less.  Getting
+       this wrong put 019 on the panel before the player had moved. */
+    return (uint8_t)(spent >= limit ? 0 : (limit - spent));
+}
+
+/* This level's score: the rope that was not used.  No multiplier -- the
+   limit IS the par, so the score is at most config_turns() and nothing
+   overflows a uint8_t or needs a third digit. */
 uint8_t level_score(void)
 {
-    return (uint8_t)(turn >= SCORE_PAR ? 0 : (SCORE_PAR - turn));
+    return turns_left();
 }
 uint8_t outcome_ready;
 

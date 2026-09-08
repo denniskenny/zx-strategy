@@ -19,9 +19,8 @@ BLANK_2                        = "-                      "
 TURN                           = TURN   :
 TERRAIN                        = TERRAIN:
 COVER                          = COVER
-THE_FIELD                      = THE FIELD
 CAMPAIGN_MAP                   = CAMPAIGN MAP
-QAOP_LOOK_AROUND_ENTER_BACK    = QAOP LOOK AROUND  ENTER BACK
+QAOP_LOOK_AROUND_ENTER_BACK    = QAOP LOOK  ENTER/M BACK
 CAMPAIGN_COMPLETE              = CAMPAIGN COMPLETE
 EVERY_LEVEL_TAKEN              = EVERY LEVEL TAKEN
 LEVELS_WON                     = LEVELS WON     :
@@ -29,7 +28,7 @@ FINAL_SCORE                    = FINAL SCORE    :
 SPACE_FIRE_1                   = SPACE / FIRE 1
 
 # --- title, map, cutscene, result ---
-ZX_STRATEGY                    = ZX STRATEGY
+ZX_STRATEGY                    = Baron Ironblood - Origins
 MACHINE                        = MACHINE :
 T_128K                         = 128K
 T_48K                          = 48K
@@ -37,9 +36,13 @@ KEMPSTON                       = KEMPSTON:
 YES                            = YES
 NO                             = NO
 VSYNC                          = VSYNC   :
-FLOATING_BUS_0X                = FLOATING BUS 0X
+# NOT REDUNDANT, despite looking it: render_title() prints the shared
+# prefix "FLOATING BUS 0X" and then ONE of these four characters at
+# column 26.  Two whole strings would repeat the prefix and cost more
+# than the pair of suffixes.  Removing them broke the build.
 T_40FF                         = 40FF
 T_0FFD                         = 0FFD
+FLOATING_BUS_0X                = FLOATING BUS 
 HALT_FALLBACK                  = "HALT FALLBACK  "
 SCREEN                         = SCREEN  :
 DOUBLE                         = DOUBLE
@@ -63,12 +66,14 @@ SPACE_TO_RETURN_TO_THE_TITLE   = SPACE TO RETURN TO THE TITLE
 # E-INFANTRY is exactly ten and is what sets the width.
 UNIT_INFANTRY                  = "Red Shadow"
 UNIT_TANK                      = "Red Hyena "
-UNIT_CANNON                    = "Las Cannon"
+UNIT_CANNON                    = "Xtrminator"
 UNIT_BASE                      = "Red Base  "
-UNIT_E_INFANTRY                = "E-INFANTRY"
-UNIT_E_TANK                    = "E-TANK    "
-UNIT_E_CANNON                  = "E-CANNON  "
-UNIT_E_BASE                    = "E-BASE    "
+UNIT_CRUISER                   = "Cruiser   "
+UNIT_E_INFANTRY                = "Z-Infantry"
+UNIT_E_TANK                    = "Z-Tank    "
+UNIT_E_CANNON                  = "Whirlwind "
+UNIT_E_BASE                    = "Z-Base    "
+UNIT_E_CRUISER                 = "Cosmic Cru"
 
 # --- the play screen's key legend ---
 # 31 columns, so it overwrites whatever a banner left behind.

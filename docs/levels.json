@@ -1,0 +1,100 @@
+{
+  "_comment": [
+    "The level book.  tools/mklevels.py reads this at build time; nothing",
+    "here is retyped into a header.",
+    "",
+    "mission   replaces \"THE FIELD\" in the ST_PLAY header.  Max 31",
+    "          characters -- the build truncates and says so.",
+    "dateline  shown on ST_BRIEF.  May be empty.",
+    "turns     the limit.  ST_PLAY counts DOWN from it and the level score",
+    "          is whatever is left.  Omit for default_turns.",
+    "player /  the rosters.  Parsed and checked, but populate_map() still",
+    "enemy     takes its armies from config/game_config.h.",
+    "briefing  shown on ST_BRIEF, word-wrapped to 31 columns, up to 14 rows.",
+    "          All ten are ZX0 as ONE block: the repetition worth having is",
+    "          BETWEEN briefings."
+  ],
+  "default_turns": 20,
+  "levels": [
+    {
+      "mission": "'Our Blood is of Iron'",
+      "dateline": "Basel, Switzerland",
+      "turns": 20,
+      "player": "Base, 2xShadows",
+      "enemy": "Base",
+      "briefing": "Marcus Kassels, son of an aristocratic Swiss diplomat, founds the RED SHADOWS to fight the colonial ACTION FORCE. His first step is to take two infantry squads to free his colleague RED JACKAL!"
+    },
+    {
+      "mission": "Hasta la victoria siempre!",
+      "dateline": "Sallanda, South America",
+      "turns": 20,
+      "player": "Base, 2xShadows, 2xHyenas",
+      "enemy": "Base,",
+      "briefing": "The RED SHADOWS join forces with the Sallanda rebels to overthrow the regime. RED JACKAL fields their latest weapon the HYENA TANK."
+    },
+    {
+      "mission": "River Crossing",
+      "dateline": "Sallanda, South America",
+      "turns": 20,
+      "player": "Base, 2xShadows, 2xHyenas",
+      "enemy": "Base",
+      "briefing": "The RED SHADOWS join forces with the Sallanda rebels to overthrow the regime. RED JACKAL fields their latest weapon the HYENA TANK."
+    },
+    {
+      "mission": "Forest Ambush",
+      "dateline": "Sallanda, South America",
+      "turns": 20,
+      "player": "Base, 2xShadows, 2xHyenas",
+      "enemy": "Base,",
+      "briefing": "Beware the fog of war! Enemies can be hidden in the forest."
+    },
+    {
+      "mission": "Mountain Pass",
+      "dateline": "Mt. Aconcagua, South America",
+      "turns": 20,
+      "player": "Base, 2xShadows, 2xHyenas",
+      "enemy": "Base,",
+      "briefing": "Bring your army over the mountains."
+    },
+    {
+      "mission": "Rebels approach the Capital!",
+      "dateline": "Palmas, South America",
+      "turns": 20,
+      "player": "Base, 2xShadows, 2xHyenas",
+      "enemy": "Base,",
+      "briefing": "The campaign is close to victory, RED JACKAL must take the Action Force Base to secure the capital."
+    },
+    {
+      "mission": "Space Force Attack",
+      "dateline": "Secret Base, South America",
+      "turns": 20,
+      "player": "Base, 2xShadows, 2xHyenas",
+      "enemy": "Base, Cosmic Cruiser",
+      "briefing": "BARON IRONBLOOD faces a new threat; SPACE FORCE have launched the fast-moving orbital attack vehicle; the COSMIC CRUISER, piloted by HOT JETS. The RED SHADOWS must recruit RED LASER to come up with a counter weapon."
+    },
+    {
+      "mission": "Red Laser",
+      "dateline": "Secret Base, South America",
+      "turns": 20,
+      "player": "Base, 2xShadows, 2xHyenas",
+      "enemy": "Base, Cosmic Cruiser",
+      "briefing": "RED LASER delivers the LASER EXTERMINATOR to take the battle to SPACE FORCE"
+    },
+    {
+      "mission": "Race Against Time",
+      "dateline": "Action Force Base, South America",
+      "turns": 20,
+      "player": "Base, 5xShadows",
+      "enemy": "10xBase",
+      "briefing": "ACTION FORCE hold an agent who knows the location of their secret base. Find him before he is executed."
+    },
+    {
+      "mission": "Ground Zero",
+      "dateline": "Action Force Base, Secret Location",
+      "turns": 20,
+      "player": "Base, 2xShadows, 2xHyenas",
+      "enemy": "Base, Cosmic Cruiser",
+      "briefing": "The final confrontation with ACTION FORCE."
+    }
+  ]
+}

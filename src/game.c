@@ -29,7 +29,7 @@
  *   ST_TITLE    front end; machine/vsync report, waits for START
  *   ST_PLAY     the game proper: an 8x4 page of the world, flipped when
  *               the cursor walks off its edge
- *   ST_MAP      campaign overview, opened with M from ST_PLAY and
+ *   ST_MAP      campaign overview, opened AND closed with M from ST_PLAY and
  *               dismissed with SPACE; free cursor over the terrain grid
  *   ST_OVER     a level ended: a win loads the next one, a loss quits
  *   ST_WON      the last level was won; the campaign is over
@@ -76,7 +76,8 @@
 #define ACT_RIGHT   0x08
 #define ACT_CANCEL  0x20
 #define ACT_SPACE   0x40
-#define ACT_M       0x80    /* the campaign overview, in ST_PLAY only */
+#define ACT_M       0x80    /* the overview: opens it from ST_PLAY,
+                                   closes it again from ST_MAP        */
 #define ACT_QUIT    0x10    /* X: leave the level.  Its own key, not a
                                rung on the Cancel ladder -- backing out
                                of an order and abandoning the level are
@@ -366,8 +367,35 @@ static void enter_state(uint8_t s)
                twice to get past one picture.  Same shape as splash():
                where a tune blocks until input, the tune IS the wait, and
                nothing after it may wait again. */
+            next_state = ST_BRIEF;
+            break;
+
+        case ST_BRIEF:
+            render_brief();
+
+            /* Held on screen first, for the same reason the cutscene is:
+               render_brief() decompresses and word-wraps, so a player
+               whose press appeared to do nothing would press again and
+               the second press would stop the tune the instant it
+               started.  See CUTSCENE_HOLD. */
+            {
+                uint8_t f;
+
+                for (f = 0; f < CUTSCENE_HOLD; f++)
+                    vsync_wait();
+            }
+            while (any_key()) { }
+
+            /* lowlands RESTARTS here.  The player blocks until a key, so
+               one run cannot span two states that each wait for input:
+               the cutscene's run scores the picture and this one scores
+               the words.  The tune IS the wait -- nothing after it may
+               wait again. */
+            lowlands_play();
+
             next_state = ST_PLAY;
             break;
+
         case ST_WON:
             render_won();
             break;
@@ -584,9 +612,10 @@ static void handle_input(void)
                    screen and enter_state() flushes the keyboard. */
                 busy_on("DEPLOYING...");
                 load_map();
-                /* Through the cutscene on a 128K; a 48K has no bank to
-                   read it from and goes straight to the board. */
-                set_state(is_128k ? ST_CUTSCENE : ST_PLAY);
+                /* Cutscene on a 128K only -- its pictures are in banks.
+                   The BRIEF is for both machines: its text is 633 bytes
+                   of ZX0 that unpack into the compose buffer. */
+                set_state(is_128k ? ST_CUTSCENE : ST_BRIEF);
             }
             break;
 
@@ -607,13 +636,29 @@ static void handle_input(void)
                         set_state(ST_TITLE);
                     } else {
                         end_turn();
-                        /* Hand straight over: the turn counter has
-                           already moved on, so what follows is theirs. */
-                        enemy_begin();
-                        enemy_active = 1;
-                        enemy_beat = ENEMY_BEAT;
-                        render_hint(TXT_ENEMY_TURN);
-                        redraw_status = 1;
+
+                        /* OUT OF TURNS IS A DEFEAT.  A limit with no
+                           consequence is a decoration, and the countdown
+                           on the panel has to mean something when it
+                           reaches zero.
+
+                           HERE, immediately after end_turn(), because
+                           this is the only place the turn counter moves.
+                           Testing it every frame would ask the question
+                           49 times too often. */
+                        if (!turns_left()) {
+                            player_won = 0;
+                            set_state(ST_OVER);
+                        } else {
+                            /* Hand straight over: the turn counter has
+                               already moved on, so what follows is
+                               theirs. */
+                            enemy_begin();
+                            enemy_active = 1;
+                            enemy_beat = ENEMY_BEAT;
+                            render_hint(TXT_ENEMY_TURN);
+                            redraw_status = 1;
+                        }
                     }
                 } else if (edge & ACT_CANCEL) {
                     confirm = CONFIRM_NONE;
@@ -778,8 +823,11 @@ static void handle_input(void)
             break;
 
         case ST_MAP:
-            /* Read-only overview: SPACE (or back) dismisses it. */
-            if (edge & (ACT_GO | ACT_CANCEL))
+            /* Read-only overview.  SPACE, back, OR M AGAIN dismisses it:
+               the key that opened a window is the most obvious key to
+               close it with, and a player who has just pressed M to get
+               here reaches for M to leave. */
+            if (edge & (ACT_GO | ACT_CANCEL | ACT_M))
                 set_state(ST_PLAY);
             break;
 
@@ -796,7 +844,7 @@ static void handle_input(void)
                     turn = 1;
                     busy_on("DEPLOYING...");
                     load_map();
-                    set_state(is_128k ? ST_CUTSCENE : ST_PLAY);
+                    set_state(is_128k ? ST_CUTSCENE : ST_BRIEF);
                 }
             }
             break;
@@ -819,8 +867,12 @@ static void handle_input(void)
             break;
     }
 
-    /* M opens the overview.  It means nothing anywhere else — the tune
-       plays itself when the title screen is entered. */
+    /* M OPENS the overview from the board.  Closing it again is handled
+       in the ST_MAP case above, not here: this runs after the per-state
+       switch, so opening and closing on the same key in one place would
+       toggle twice on a single press.
+
+       It means nothing in any other state. */
     if ((edge & ACT_M) && game_state == ST_PLAY) {
         cur_x = cursor_x;
         cur_y = cursor_y;

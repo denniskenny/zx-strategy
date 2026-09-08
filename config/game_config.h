@@ -106,7 +106,10 @@ static const uint16_t sfx_vary[SFX_VOICES] = { SFX_VARY_MOVE,
  * the turns spent, floored at zero -- so 20 is both the par and the best
  * possible score, and a level dragged past it is worth nothing rather
  * than a negative.  Raise it to be kinder about slow play. */
-#define SCORE_PAR   20
+/* SCORE_PAR is gone: the per-level turn limit IS the par, and it comes
+   from docs/levels.md through tools/mklevels.py as level_turns[].  A
+   single constant was right while every level had the same shape.
+   config_turns() in src/logic.c is the accessor. */
 
 /* --- Unit types ---------------------------------------------------- */
 /* Ids are indices, and the order is load-bearing: it is the sprite
@@ -118,7 +121,8 @@ static const uint16_t sfx_vary[SFX_VOICES] = { SFX_VARY_MOVE,
 #define UNIT_TANK       1
 #define UNIT_CANNON     2
 #define UNIT_BASE       3
-#define UNIT_TYPES      4
+#define UNIT_CRUISER    4   /* the SPACE FORCE cosmic cruiser         */
+#define UNIT_TYPES      5
 
 /* The view sheet carries one sprite that is NOT a unit type: an explosion,
  * used as a transient effect where something died.  It is a sprite index,
@@ -128,8 +132,8 @@ static const uint16_t sfx_vary[SFX_VOICES] = { SFX_VARY_MOVE,
  *
  * The MAP sheet does not have it: an explosion is a moment on the board,
  * and the map view is a schematic of where things are. */
-#define SPRITE_EXPLOSION  4
-#define VIEW_SPRITES      5
+#define SPRITE_EXPLOSION  5
+#define VIEW_SPRITES      6
 
 /* --- Army composition ---------------------------------------------- */
 /* How many of each type a side starts level 1 with, and how many more
@@ -150,6 +154,20 @@ static const uint16_t sfx_vary[SFX_VOICES] = { SFX_VARY_MOVE,
 #define UNITS_TANK_PER_LEVEL     1
 #define UNITS_CANNON_PER_LEVEL   1
 #define UNITS_BASE_PER_LEVEL     0
+
+/* THE CRUISER STARTS AT ZERO ON BOTH SIDES, deliberately.
+ *
+ * docs/levels.json gives it to the ENEMY on levels 7, 8 and 10 -- it is
+ * SPACE FORCE's answer to the RED SHADOWS, so it should not be on the
+ * board before the story introduces it, and the player should not have
+ * one at all.  populate_map() still takes its armies from these counts
+ * rather than from those rosters, so until that is wired up the cruiser
+ * is a type with no automatic spawns.
+ *
+ * Giving it the tank's counts instead would put cruisers on both sides
+ * from level 1, which is not what the book describes. */
+#define UNITS_CRUISER_START      0
+#define UNITS_CRUISER_PER_LEVEL  0
 
 /* Levels the campaign runs to: assets/maps/level_1.tmx .. level_10.tmx,
  * which is also LEVEL_COUNT in src/game.c.  This bounds the unit
@@ -184,14 +202,16 @@ static const uint8_t unit_start_count[UNIT_TYPES] = {
     UNITS_INFANTRY_START,
     UNITS_TANK_START,
     UNITS_CANNON_START,
-    UNITS_BASE_START
+    UNITS_BASE_START,
+    UNITS_CRUISER_START
 };
 
 static const uint8_t unit_level_gain[UNIT_TYPES] = {
     UNITS_INFANTRY_PER_LEVEL,
     UNITS_TANK_PER_LEVEL,
     UNITS_CANNON_PER_LEVEL,
-    UNITS_BASE_PER_LEVEL
+    UNITS_BASE_PER_LEVEL,
+    UNITS_CRUISER_PER_LEVEL
 };
 
 /* --- Unit stats ------------------------------------------------------
@@ -202,10 +222,17 @@ static const uint8_t unit_level_gain[UNIT_TYPES] = {
  *
  * Cannon and Base have Movement 0 — they are placed and never move,
  * which is what makes the stalemate rule in docs/DESIGN.md necessary. */
-static const uint8_t unit_range[UNIT_TYPES]    = {  3,  2,  4,  0 };
-static const uint8_t unit_damage[UNIT_TYPES]   = {  5, 10,  8,  0 };
-static const uint8_t unit_health[UNIT_TYPES]   = { 10, 15, 20, 25 };
-static const uint8_t unit_movement[UNIT_TYPES] = {  3,  2,  0,  0 };
+/*                                       inf  tank  can  base  cruiser */
+static const uint8_t unit_range[UNIT_TYPES]    = {  3,  2,  4,  0,  2 };
+static const uint8_t unit_damage[UNIT_TYPES]   = {  5, 10,  8,  0, 10 };
+static const uint8_t unit_health[UNIT_TYPES]   = { 10, 15, 20, 25, 15 };
+static const uint8_t unit_movement[UNIT_TYPES] = {  3,  2,  0,  0,  2 };
+
+/* THE CRUISER IS A TANK, statistically: same range, damage, health and
+ * movement.  It is a different sprite and a different name, and the
+ * balance pass is where it earns numbers of its own.  Copying a known
+ * row is the safe way to add a type -- it cannot make the game harder
+ * or easier by accident, only different to look at. */
 
 /* The widest movement budget in the roster, which is the number of
  * buckets Dial's algorithm needs (docs/PLAN.md, "Movement range").

@@ -205,7 +205,8 @@ def emit_zx0(args, items, uniq, aliases):
             sys.exit("mktext: the pool does not survive a ZX0 round trip")
 
     at = {ident: off for (ident, _), off in zip(uniq, offs)}
-    rel = os.path.relpath(args.input, os.path.dirname(args.header) or ".")
+    rel = ", ".join(os.path.relpath(f, os.path.dirname(args.header) or ".")
+                    for f in args.input)
     h = [HEADER_WARNING % rel, "",
          "#ifndef _STRINGS_H_", "#define _STRINGS_H_", "",
          "#include <stdint.h>", "",
@@ -226,8 +227,9 @@ def emit_zx0(args, items, uniq, aliases):
             h.append("#define TXT_%-30s TXT_%s" % (ident, target))
     h += ["", "#endif /* _STRINGS_H_ */", ""]
 
-    c = [HEADER_WARNING % os.path.relpath(args.input,
-                                          os.path.dirname(args.source) or "."),
+    c = [HEADER_WARNING % ", ".join(
+             os.path.relpath(f, os.path.dirname(args.source) or ".")
+             for f in args.input),
          "",
          "#include <stdint.h>", "",
          "/* %d bytes of text, ZX0 to %d." % (len(pool), len(blob)),
@@ -248,7 +250,9 @@ def emit_zx0(args, items, uniq, aliases):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("input")
+    ap.add_argument("input", nargs="+",
+                    help="one or more .txt files; later ones may be "
+                         "generated (see tools/mklevels.py)")
     ap.add_argument("--header", required=True)
     ap.add_argument("--source", required=True)
     ap.add_argument("--pack", action="store_true",
@@ -258,14 +262,25 @@ def main():
                     help="ZX0 the whole pool; unpacked once at boot into "
                          "MEM_TEXTPOOL by text_init()")
     ap.add_argument("--dzx0", default=os.path.expanduser("~/z88dk/bin/z88dk-dzx0"))
+    ap.add_argument("--used-in", nargs="*", default=[], metavar="FILE",
+                    help="cross-check TXT_* against these sources: a name "
+                         "used but not defined is fatal, one defined but "
+                         "never used is reported")
     ap.add_argument("--width", type=int, default=32,
                     help="the display is this many characters wide; longer "
                          "strings are a mistake, not a wrap")
     args = ap.parse_args()
 
-    items = parse(args.input)
+    items = []
+    for f in args.input:
+        items += parse(f)
+    seen = {}
+    for ident, _ in items:
+        if ident in seen:
+            sys.exit("mktext: %s is defined in more than one input" % ident)
+        seen[ident] = 1
     if not items:
-        sys.exit("mktext: %s defines nothing" % args.input)
+        sys.exit("mktext: %s define nothing" % ', '.join(args.input))
 
     too_long = [(i, t) for i, t in items if len(t) > args.width]
     if too_long:
@@ -283,12 +298,43 @@ def main():
             first[text] = ident
             uniq.append((ident, text))
 
+    # CROSS-CHECK against the code, before anything is generated.
+    #
+    # Removing a string that LOOKS redundant is a mistake this project
+    # has already made: T_40FF and T_0FFD are four characters each and
+    # look like duplicates of the line above them, but render_title()
+    # prints a shared prefix and then ONE of the two.  Deleting them
+    # failed at the C compiler, several steps away from the file that
+    # caused it, as "undefined identifier".
+    #
+    # Used-but-not-defined is FATAL here so the error names the string
+    # and the file.  Defined-but-unused is only reported: a string may be
+    # written before the code that draws it.
+    if args.used_in:
+        used = set()
+        for f in args.used_in:
+            try:
+                src = open(f).read()
+            except OSError:
+                continue
+            used |= set(re.findall(r"\bTXT_[A-Z0-9_]+", src))
+        defined = set("TXT_" + i for i, _ in items)
+        missing = sorted(used - defined)
+        if missing:
+            sys.exit("mktext: used in the code but not defined in %s:\n    %s"
+                     % (", ".join(args.input), "\n    ".join(missing)))
+        unused = sorted(defined - used)
+        if unused:
+            print("mktext: %d defined but never used: %s"
+                  % (len(unused), ", ".join(u[4:] for u in unused)))
+
     words = build_dict([t for _, t in uniq]) if args.pack else []
 
     if args.zx0:
         return emit_zx0(args, items, uniq, aliases)
 
-    rel = os.path.relpath(args.input, os.path.dirname(args.header) or ".")
+    rel = ", ".join(os.path.relpath(f, os.path.dirname(args.header) or ".")
+                    for f in args.input)
     h = [HEADER_WARNING % rel, "",
          "#ifndef _STRINGS_H_", "#define _STRINGS_H_", ""]
     for ident, text in uniq:
@@ -302,8 +348,9 @@ def main():
 
     raw_total = sum(len(t) + 1 for _, t in uniq)
 
-    c = [HEADER_WARNING % os.path.relpath(args.input,
-                                          os.path.dirname(args.source) or "."),
+    c = [HEADER_WARNING % ", ".join(
+             os.path.relpath(f, os.path.dirname(args.source) or ".")
+             for f in args.input),
          ""]
     if args.pack:
         dict_bytes = sum(len(w) + 1 for w in words)

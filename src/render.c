@@ -37,6 +37,7 @@
 #include "../include/cutscenes.h"
 #include "../include/level_1.h"
 #include "../include/memmap.h"
+#include "../include/levels.h"
 #include "../include/render.h"
 #include "../include/strings.h"
 #include "../include/tiles_map.h"
@@ -406,6 +407,29 @@ static uint8_t dirty_all;
 #define unit_view_mask  ((uint8_t *)MEM_UVIEW_MASK)
 #define unit_view_f2    ((uint8_t *)MEM_UVIEW_F2)
 
+/* THE SHEETS MUST MATCH THE TYPE IDS, and this is the only thing that
+ * checks it.
+ *
+ * Unit type ids ARE sprite row indices: unit_view_tiles + type * stride.
+ * So the types have to occupy rows 0..UNIT_TYPES-1 with nothing else
+ * among them, and a sprite that is not a type -- the explosion -- has to
+ * come after them.
+ *
+ * The cruiser arrived appended AFTER the explosion, which put it at row
+ * 5 with the explosion at 4.  Nothing complained: the game would simply
+ * have drawn an explosion wherever a cruiser stood, and a cruiser for a
+ * corpse.  Three compile-time comparisons would have said so instantly,
+ * and they cost nothing at run time. */
+#if UNITS_VIEW_TILES != VIEW_SPRITES
+#error "the view sheet has a different number of sprites than VIEW_SPRITES in game_config.h -- reorder the sheet or fix the count"
+#endif
+#if SPRITE_EXPLOSION != UNIT_TYPES
+#error "SPRITE_EXPLOSION must be the row straight after the last unit type: types occupy 0..UNIT_TYPES-1 and non-unit sprites follow them"
+#endif
+#if UNITS_MAP_TILES != UNIT_TYPES
+#error "the map sheet must hold exactly one tile per unit type, in UNIT_* order, and no others"
+#endif
+
 #if (TILES_MAP_RAW_SIZE + TILES_VIEW_RAW_SIZE + UNITS_MAP_RAW_SIZE \
      + UNITS_VIEW_RAW_SIZE + UNITS_VIEW_MASK_RAW_SIZE \
      + UNITS_VIEW_F2_RAW_SIZE) > MEM_TILES_SIZE
@@ -469,9 +493,11 @@ static uint8_t dirty_all;
  * here beyond the sixteen bytes of table. */
 static const char *const unit_names[2][UNIT_TYPES] = {
     { TXT_UNIT_INFANTRY,   TXT_UNIT_TANK,
-      TXT_UNIT_CANNON,     TXT_UNIT_BASE   },
+      TXT_UNIT_CANNON,     TXT_UNIT_BASE,
+      TXT_UNIT_CRUISER   },
     { TXT_UNIT_E_INFANTRY, TXT_UNIT_E_TANK,
-      TXT_UNIT_E_CANNON,   TXT_UNIT_E_BASE }
+      TXT_UNIT_E_CANNON,   TXT_UNIT_E_BASE,
+      TXT_UNIT_E_CRUISER }
 };
 
 /* ------------------------------------------------------------ drawing */
@@ -667,8 +693,9 @@ void draw_status(const char *label, uint8_t x, uint8_t y)
 
     draw_unit_line(cell);
 
+    /* TURNS LEFT, not turns taken -- see turns_left(). */
     print_at(1, ROW_TURN, TXT_TURN);
-    print_num(10, ROW_TURN, turn, 3);
+    print_num(10, ROW_TURN, turns_left(), 3);
 
     print_at(1, ROW_COORD, label);
     print_num(10, ROW_COORD, x, 2);
@@ -2126,8 +2153,6 @@ static uint8_t anim_next;
    alone. */
 static void animate(void)
 {
-    uint8_t i;
-
     anim_frame = (uint8_t)!anim_frame;
     anim_next = 0;              /* the repaint starts, and is paid for
                                    a few cells a frame by anim_paint() */
@@ -2260,10 +2285,72 @@ void render_hint(const char *hint)
     hint_row(hint, ATTR_HINT);
 }
 
+/* ST_BRIEF: what this level is, in words.
+ *
+ * The dateline and briefing are ONE ZX0 block for all ten levels,
+ * unpacked into MEM_VBUF.  That buffer is 4 096 bytes, holds nothing
+ * here (the board is not being composed), and entering ST_PLAY calls
+ * render_play(), which rebuilds every cell of it.  So the briefings cost
+ * no RAM, on a 48K as much as a 128K.
+ *
+ * ONE block, not ten: per-level blobs measured worse than not
+ * compressing, because the repetition worth having is BETWEEN briefings.
+ *
+ * THE TEXT ARRIVES PRE-WRAPPED, one NUL-terminated line at a time, with
+ * an empty line ending the briefing.  tools/mklevels.py does the
+ * wrapping.  Doing it here cost ~250 bytes -- a word measure, a column
+ * counter and a print_char per character -- which did not fit this
+ * section and so bought uncontended space, the expensive kind.  The
+ * wrap moved to the generator and this became a loop of print_at.
+ *
+ * IT DOES NOT FIT THE CONTENDED SECTION, and that was measured twice.
+ * At ~250 bytes the linker refused; pre-wrapped it is ~153, and mktap
+ * still reported the block 73 bytes past the stack.  The contended
+ * window is 0x6000-0x7FA0 and the asset block plus SECTION COLD leave
+ * about 80 bytes of it, so this is not a matter of trimming a little
+ * more.
+ *
+ * Evicting something else from COLD to make room is close to zero-sum:
+ * uncontended gains this function's bytes and loses whatever moves out.
+ * Only worth it for something smaller than this, and everything down
+ * there is a whole module. */
+void render_brief(void)
+{
+    const char *p;
+    uint8_t row, i;
+
+    dzx0_decompress(level_brief_zx0, (uint8_t *)MEM_VBUF);
+
+    i = (uint8_t)(level - 1);
+    if (i >= LEVEL_BOOK_COUNT) i = LEVEL_BOOK_COUNT - 1;
+    p = (const char *)(MEM_VBUF + level_brief_off[i]);
+
+    render_compose();
+    draw_header(mission_of(level));
+
+    print_at(1, BRIEF_ROW, p);          /* the dateline */
+    set_attr_rect(0, BRIEF_ROW, 32, 1, ATTR_HINT);
+    while (*p) p++;
+    p++;
+
+    for (row = BRIEF_ROW + 2; *p && row < ROW_HINT; row++) {
+        print_at(1, row, p);
+        while (*p) p++;
+        p++;
+    }
+    set_attr_rect(0, BRIEF_ROW + 2, 32, (uint8_t)(ROW_HINT - BRIEF_ROW - 2),
+                  ATTR_TEXT);
+
+    render_hint(TXT_SPACE_FIRE_1);
+    render_show();
+}
+
 void render_play(void)
 {
     render_compose();
-    draw_header(TXT_THE_FIELD);
+    /* The level's mission title, not a fixed caption.  mklevels.py
+       truncates one that will not fit the header and says so. */
+    draw_header(mission_of(level));
     set_page();
     draw_view();
     render_discard();       /* draw_view() already used the real colours */

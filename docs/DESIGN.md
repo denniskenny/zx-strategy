@@ -70,10 +70,13 @@ so scoring against it needs no second number.
 - **`level_score()` keeps its `uint8_t` and its two-digit field.** The score
   is at most `config_turns`, so nothing widens and nothing overflows -- which
   is the reason for dropping the x10.
-- **Running out of turns needs a meaning.** The natural one is defeat -- a turn
-  limit with no consequence is a decoration -- which routes to `ST_OVER` with
-  `player_won = 0` exactly as losing the base does. **This is not yet decided
-  and it is the one design question in here.**
+- **Running out of turns is a DEFEAT.** A limit with no consequence is a
+  decoration, and the countdown in the panel has to mean something when it
+  reaches zero. It routes to `ST_OVER` with `player_won = 0`, exactly as losing
+  the base does, so there is no score for it and the campaign ends.
+- The check sits where the player **ends a turn**, which is the only place
+  `turn` advances. Not at the top of the frame: a limit tested every frame is a
+  limit tested 49 times too often.
 - **`turn` is currently a count-up and is used elsewhere.** Keep it counting
   up internally and subtract for display, rather than counting down in the
   variable: the AI's pacing and the walk animation both read it, and a
@@ -1558,6 +1561,12 @@ Two things make this conservative:
   refresh the status panel.
 - **Read-only by design**: the overview exists to plan, not to act. Issuing
   orders from here is a candidate for the first rules pass.
+- **Exits**: `SPACE`, `ENTER`/fire 2, **or `M` again**. The key that opened a
+  window is the most obvious key to close it with, and a player who has just
+  pressed `M` reaches for `M` to leave. The legend says `ENTER/M BACK`.
+- Opening and closing are handled in **different places** deliberately:
+  `set_state(ST_MAP)` sits after the per-state switch, so putting the close
+  there too would toggle twice on a single press.
 - **Exits**: `SPACE` (also `X` or fire) returns to `ST_PLAY`. The overview
   cursor is seeded at the play cursor's cell each time it opens.
 

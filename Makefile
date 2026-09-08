@@ -183,15 +183,16 @@ include/tiles_view.h: assets/tiles_view.zxp tools/zxp_tiles_zx0.py
 # is cyan or red according to whose it is, so its ink is not the artist's to
 # choose, but which of its cells are BRIGHT is — that is the sprite's shading,
 # and it is all that survives from the sheet.
-UNIT_COUNT = 4
+UNIT_COUNT = 5      # units on the MAP sheet; VIEW adds the explosion
 # The view sheet carries the units PLUS an explosion effect, and now comes
 # as a 2-frame grid: one column per frame, one row per sprite.  The map
 # sheet is still four units in a strip -- an explosion is a moment, and the
 # map view is a schematic.
-VIEW_SPRITES = 5
+VIEW_SPRITES = 6    # 5 unit types + the explosion; see game_config.h
 
 include/units_map.h: assets/units_map.zxp tools/zxp_tiles_zx0.py
 	$(ZXP_TILES_ZX0) $< $@ --name units_map --tiles $(UNIT_COUNT) \
+	    --manifest assets/units_map.tiles \
 	    --attr-mode bright --zx0 $(ZX0)
 
 # --mask: unit sprites are drawn OVER terrain, so they need one.  The
@@ -215,6 +216,7 @@ $(LOGO_PIX) $(LOGO_ATT): assets/logo.zxp tools/mklogo.py
 
 include/units_view.h: assets/units_view_short.zxp tools/zxp_tiles_zx0.py
 	$(ZXP_TILES_ZX0) $< $@ --name units_view --tiles $(VIEW_SPRITES) \
+	    --manifest assets/units_view.tiles \
 	    --frames 2 --mask --attr-mode bright --zx0 $(ZX0)
 
 # List generated headers here so `make assets` and `make clean` know them.
@@ -280,9 +282,30 @@ assets/music/%_linkable.asm: assets/music/%.asm tools/gen_tritone_module.py incl
 # lives in that one file; identical text is stored once, and the build
 # fails on a string wider than the screen.  See tools/mktext.py for why
 # there is no compression here yet and what it would cost.
-include/strings.h src/strings.c: text/strings.txt tools/mktext.py
-	$(PYTHON) tools/mktext.py $< --header include/strings.h \
-	    --source src/strings.c --width 32 --zx0 $(ZX0)
+# docs/levels.json is the level book: mission titles, datelines, turn
+# limits, rosters and briefings.  mklevels.py reads it at build time so
+# nothing is retyped -- see docs/DESIGN.md section Turns and scoring.
+#
+# JSON rather than the markdown it started as: the markdown needed regular
+# expressions and they were wrong twice, once silently.  json.load reports
+# a line and column instead.
+#
+# Three outputs, because they belong in three different places:
+#   text/levels.txt   mission titles -> the resident string pool
+#   include/levels.h  the turn table and the briefing offsets
+#   src/levels.c      the ZX0 briefing block and the mission pointers
+LEVEL_BOOK = docs/levels.json
+
+text/levels.txt include/levels.h src/levels.c: $(LEVEL_BOOK) tools/mklevels.py
+	$(PYTHON) tools/mklevels.py $(LEVEL_BOOK) --text text/levels.txt \
+	    --header include/levels.h --source src/levels.c --zx0 $(ZX0)
+
+# BOTH inputs: the hand-written strings and the generated mission titles.
+include/strings.h src/strings.c: text/strings.txt text/levels.txt tools/mktext.py
+	$(PYTHON) tools/mktext.py text/strings.txt text/levels.txt \
+	    --header include/strings.h \
+	    --source src/strings.c --width 32 --zx0 $(ZX0) \
+	    --used-in $(wildcard src/*.c) $(wildcard include/*.h)
 
 # A .ch8 font binary -> a C array.  The ROM's font cannot be replaced in
 # place, so print_at() reads this instead; the layout is the ROM's own.
@@ -329,8 +352,8 @@ $(APP)_font.bin: $(FONT_CH8)
 .SECONDARY:
 
 # --- Source files ---
-SRCS = src/main.c src/strings.c src/text.c src/font_rt.c src/game.c src/logic.c src/render.c src/render_screens.c src/music.c src/gfx.c src/input.c src/hw_detect.c \
-       src/vsync.c src/prng.c src/dzx0.c src/no_font64.asm src/assets_low_syms.asm src/logic_org.asm
+SRCS = src/main.c src/strings.c src/levels.c src/text.c src/font_rt.c src/game.c src/logic.c src/render.c src/render_screens.c src/music.c src/gfx.c src/input.c src/hw_detect.c \
+       src/vsync.c src/prng.c src/dzx0.c src/no_font64.asm src/no_console.asm src/assets_low_syms.asm src/logic_org.asm
 
 # The resident font is a source file; the banked one is a tape block, so
 # it must be appended AFTER SRCS is assigned rather than inside the ifeq
@@ -340,7 +363,7 @@ SRCS += src/font.c
 endif
 
 HEADERS = config/app_config.h config/game_config.h include/gfx.h include/input.h include/hw.h \
-          include/strings.h src/font.c \
+          include/strings.h include/levels.h src/font.c \
           include/vsync.h include/prng.h include/game.h include/board.h \
           include/render.h include/dzx0.h \
           include/music.h $(GENERATED_HEADERS)

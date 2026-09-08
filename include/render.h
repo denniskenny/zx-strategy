@@ -170,6 +170,11 @@
    nothing saved: whoever comes next writes over it. */
 #define ROW_HINT    21
 
+/* ST_BRIEF: the dateline goes here, the briefing two rows below, and it
+   wraps until ROW_HINT.  That is 14 rows for the briefing, which is what
+   tools/mklevels.py checks against. */
+#define BRIEF_ROW   3
+
 /* The legends a banner has to be able to put back, each 31 columns so
    it overwrites whatever the banner left.  ST_TITLE keeps its key list
    up at rows 10-11 and leaves this row blank. */
@@ -264,6 +269,7 @@ void render_play(void);
 void render_map(void);
 void render_cutscene(uint8_t idx);  /* level idx's banked screen  */
 void render_over(void);
+void render_brief(void);
 void render_won(void);
 
 /* --- The long-operation banner ---------------------------------------- */

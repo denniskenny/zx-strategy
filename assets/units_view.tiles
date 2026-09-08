@@ -1,0 +1,10 @@
+# units_view: one line per sprite ROW, in id order.
+# Row order is load-bearing -- unit type ids ARE row
+# indices.  Regenerate with --bless-tiles when the
+# artwork changes on purpose.
+0 b3b245b79298
+1 83a2d277f09c
+2 d962f8a74480
+3 5645bf57df1e
+4 e09e9d90966f
+5 e6599d441555

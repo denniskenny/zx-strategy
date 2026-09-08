@@ -19,6 +19,7 @@
 #define ST_OVER     3   /* level ended: win advances, loss returns to title */
 #define ST_WON      4   /* campaign complete: past the last level */
 #define ST_CUTSCENE 5   /* a banked screen and the tune; 128K only    */
+#define ST_BRIEF    6   /* mission, dateline and briefing; both machines */
 
 /* The active state (read-only for callers outside game.c). */
 extern uint8_t game_state;

@@ -79,7 +79,7 @@
  * unit sprites took 640 bytes off this; leaving the old figure would have
  * left that free space stranded between the sheets and MEM_LOGIC, where
  * nothing could reach it. */
-#define MEM_TILES_SIZE  2044
+#define MEM_TILES_SIZE  2280      /* 2280 used: the cruiser joined  */
 
 /* --- src/logic.c: scratch with no deadline on it --- */
 #define MEM_LOGIC       (MEM_TILES + MEM_TILES_SIZE)
@@ -131,7 +131,7 @@
    tools/mktext.py prints the pool size and src/text.c fails the build if
    it outgrows this. */
 #define MEM_TEXTPOOL      (MEM_MUSIC + MEM_MUSIC_SIZE)
-#define MEM_TEXTPOOL_SIZE 800       /* 715 used; room for more strings */
+#define MEM_TEXTPOOL_SIZE 960       /* 947 used; trimmed to buy tile space */
 
 #define MEM_END         (MEM_TEXTPOOL + MEM_TEXTPOOL_SIZE)
 

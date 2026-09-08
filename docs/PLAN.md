@@ -1201,7 +1201,39 @@ much tighter than one frame.
 `vsync_wait()` and checks both screens against VBUF after a beat, which
 is the only coverage the at-rest animation path has ever had.
 
-### Removing the stdio console driver  (~570 bytes, not started)
+### Removing the stdio console driver  ✓ DONE — 892 bytes
+
+`src/no_console.asm`, five lines of it.  **135 bytes free became 1 027.**
+
+The estimate was ~570; the real figure was 878 bytes in 92 symbols, and
+nothing in `src/` ever called stdio.
+
+`CRT_ENABLE_STDIO=0` does NOT remove it -- that was the wrong lever all
+along.  The zx crt0 says
+
+```
+; We use the generic driver by default
+defc    TAR__fputc_cons_generic = 1
+```
+
+and `crt_runtime_selection.inc` then `EXTERN`s `fputc_cons_generic`.
+
+**Satisfy the EXTERN, do not try to suppress it.**  Defining
+`fputc_cons` ourselves plus `-pragma-define:DEFINED_fputc_cons=1` looks
+tidier and fails: the crt reaches `defc _fputc_cons = fputc_cons` with no
+EXTERN for a symbol it assumed it had defined.  Providing
+`fputc_cons_generic` instead resolves the reference from our own module
+and the library one is never pulled off the shelf.
+
+Same bargain as `src/no_font64.asm` and its 768-byte 64-column font: the
+linker is not told to drop something, it is given what it was looking
+for.  **That is now twice; it is the first thing to try when a z88dk
+build carries something it does not use.**
+
+The cost: `printf`/`puts`/`putchar` now print nothing instead of failing
+to link.  Take the module out of `SRCS` to get the driver back.
+
+
 
 `fputc_cons_generic` (438) + `generic_console_printc` (133) are linked into
 every build and never called: the game has `print_at()`.  They are pulled
