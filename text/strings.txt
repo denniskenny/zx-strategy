@@ -15,7 +15,11 @@ QAOP_PICK_SPACE_FIRE_ENTER_B   = QAOP PICK  SPACE FIRE ENTER BACK
 
 # --- the play screen ---
 UNIT                           = UNIT   :
-BLANK_2                        = "-                      "
+# TWENTY-FOUR characters, and the count matters: draw_unit_line() prints
+# this at column 8 to blank the name-and-stats field, which runs to
+# column 31.  One short and the last column keeps whatever the previous
+# unit left there -- the "-ANK" bug, moved to the far end of the row.
+BLANK_2                        = "-                       "
 TURN                           = TURN   :
 TERRAIN                        = TERRAIN:
 COVER                          = COVER

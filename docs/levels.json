@@ -8,8 +8,11 @@
     "dateline  shown on ST_BRIEF.  May be empty.",
     "turns     the limit.  ST_PLAY counts DOWN from it and the level score",
     "          is whatever is left.  Omit for default_turns.",
-    "player /  the rosters.  Parsed and checked, but populate_map() still",
-    "enemy     takes its armies from config/game_config.h.",
+    "player /  THE ROSTER.  One count per unit type; a type left out is",
+    "enemy     zero.  These numbers ARE the army -- there is no formula any",
+    "          more, so a level that wants six infantry says six.",
+    "          _roster_as_written keeps what the prose said before the",
+    "          counts replaced it, so nothing authored is lost.",
     "briefing  shown on ST_BRIEF, word-wrapped to 31 columns, up to 14 rows.",
     "          All ten are ZX0 as ONE block: the repetition worth having is",
     "          BETWEEN briefings."
@@ -20,81 +23,241 @@
       "mission": "'Our Blood is of Iron'",
       "dateline": "Basel, Switzerland",
       "turns": 20,
-      "player": "Base, 2xShadows",
-      "enemy": "Base",
-      "briefing": "Marcus Kassels, son of an aristocratic Swiss diplomat, founds the RED SHADOWS to fight the colonial ACTION FORCE. His first step is to take two infantry squads to free his colleague RED JACKAL!"
+      "player": {
+        "base": 1,
+        "infantry": 3,
+        "tank": 2,
+        "cannon": 1,
+        "cruiser": 0
+      },
+      "enemy": {
+        "base": 1,
+        "infantry": 3,
+        "tank": 2,
+        "cannon": 1,
+        "cruiser": 0
+      },
+      "briefing": "Marcus Kassels, son of an aristocratic Swiss diplomat, founds the RED SHADOWS to fight the colonial ACTION FORCE. His first step is to take two infantry squads to free his colleague RED JACKAL!",
+      "_roster_as_written": [
+        "player: Base, 2xShadows",
+        "enemy: Base"
+      ]
     },
     {
       "mission": "Hasta la victoria siempre!",
       "dateline": "Sallanda, South America",
       "turns": 20,
-      "player": "Base, 2xShadows, 2xHyenas",
-      "enemy": "Base,",
-      "briefing": "The RED SHADOWS join forces with the Sallanda rebels to overthrow the regime. RED JACKAL fields their latest weapon the HYENA TANK."
+      "player": {
+        "base": 1,
+        "infantry": 3,
+        "tank": 2,
+        "cannon": 1,
+        "cruiser": 0
+      },
+      "enemy": {
+        "base": 1,
+        "infantry": 3,
+        "tank": 2,
+        "cannon": 1,
+        "cruiser": 0
+      },
+      "briefing": "The RED SHADOWS join forces with the Sallanda rebels to overthrow the regime. RED JACKAL fields their latest weapon the HYENA TANK.",
+      "_roster_as_written": [
+        "player: Base, 2xShadows, 2xHyenas",
+        "enemy: Base,"
+      ]
     },
     {
       "mission": "River Crossing",
       "dateline": "Sallanda, South America",
       "turns": 20,
-      "player": "Base, 2xShadows, 2xHyenas",
-      "enemy": "Base",
-      "briefing": "The RED SHADOWS join forces with the Sallanda rebels to overthrow the regime. RED JACKAL fields their latest weapon the HYENA TANK."
+      "player": {
+        "base": 1,
+        "infantry": 4,
+        "tank": 3,
+        "cannon": 2,
+        "cruiser": 0
+      },
+      "enemy": {
+        "base": 1,
+        "infantry": 4,
+        "tank": 3,
+        "cannon": 2,
+        "cruiser": 0
+      },
+      "briefing": "The RED SHADOWS join forces with the Sallanda rebels to overthrow the regime. RED JACKAL fields their latest weapon the HYENA TANK.",
+      "_roster_as_written": [
+        "player: Base, 2xShadows, 2xHyenas",
+        "enemy: Base"
+      ]
     },
     {
       "mission": "Forest Ambush",
       "dateline": "Sallanda, South America",
       "turns": 20,
-      "player": "Base, 2xShadows, 2xHyenas",
-      "enemy": "Base,",
-      "briefing": "Beware the fog of war! Enemies can be hidden in the forest."
+      "player": {
+        "base": 1,
+        "infantry": 4,
+        "tank": 3,
+        "cannon": 2,
+        "cruiser": 0
+      },
+      "enemy": {
+        "base": 1,
+        "infantry": 4,
+        "tank": 3,
+        "cannon": 2,
+        "cruiser": 0
+      },
+      "briefing": "Beware the fog of war! Enemies can be hidden in the forest.",
+      "_roster_as_written": [
+        "player: Base, 2xShadows, 2xHyenas",
+        "enemy: Base,"
+      ]
     },
     {
       "mission": "Mountain Pass",
       "dateline": "Mt. Aconcagua, South America",
       "turns": 20,
-      "player": "Base, 2xShadows, 2xHyenas",
-      "enemy": "Base,",
-      "briefing": "Bring your army over the mountains."
+      "player": {
+        "base": 1,
+        "infantry": 5,
+        "tank": 4,
+        "cannon": 3,
+        "cruiser": 0
+      },
+      "enemy": {
+        "base": 1,
+        "infantry": 5,
+        "tank": 4,
+        "cannon": 3,
+        "cruiser": 0
+      },
+      "briefing": "Bring your army over the mountains.",
+      "_roster_as_written": [
+        "player: Base, 2xShadows, 2xHyenas",
+        "enemy: Base,"
+      ]
     },
     {
       "mission": "Rebels approach the Capital!",
       "dateline": "Palmas, South America",
       "turns": 20,
-      "player": "Base, 2xShadows, 2xHyenas",
-      "enemy": "Base,",
-      "briefing": "The campaign is close to victory, RED JACKAL must take the Action Force Base to secure the capital."
+      "player": {
+        "base": 1,
+        "infantry": 5,
+        "tank": 4,
+        "cannon": 3,
+        "cruiser": 0
+      },
+      "enemy": {
+        "base": 1,
+        "infantry": 5,
+        "tank": 4,
+        "cannon": 3,
+        "cruiser": 0
+      },
+      "briefing": "The campaign is close to victory, RED JACKAL must take the Action Force Base to secure the capital.",
+      "_roster_as_written": [
+        "player: Base, 2xShadows, 2xHyenas",
+        "enemy: Base,"
+      ]
     },
     {
       "mission": "Space Force Attack",
       "dateline": "Secret Base, South America",
       "turns": 20,
-      "player": "Base, 2xShadows, 2xHyenas",
-      "enemy": "Base, Cosmic Cruiser",
-      "briefing": "BARON IRONBLOOD faces a new threat; SPACE FORCE have launched the fast-moving orbital attack vehicle; the COSMIC CRUISER, piloted by HOT JETS. The RED SHADOWS must recruit RED LASER to come up with a counter weapon."
+      "player": {
+        "base": 1,
+        "infantry": 6,
+        "tank": 5,
+        "cannon": 4,
+        "cruiser": 0
+      },
+      "enemy": {
+        "base": 1,
+        "infantry": 6,
+        "tank": 5,
+        "cannon": 4,
+        "cruiser": 0
+      },
+      "briefing": "BARON IRONBLOOD faces a new threat; SPACE FORCE have launched the fast-moving orbital attack vehicle; the COSMIC CRUISER, piloted by HOT JETS. The RED SHADOWS must recruit RED LASER to come up with a counter weapon.",
+      "_roster_as_written": [
+        "player: Base, 2xShadows, 2xHyenas",
+        "enemy: Base, Cosmic Cruiser"
+      ]
     },
     {
       "mission": "Red Laser",
       "dateline": "Secret Base, South America",
       "turns": 20,
-      "player": "Base, 2xShadows, 2xHyenas",
-      "enemy": "Base, Cosmic Cruiser",
-      "briefing": "RED LASER delivers the LASER EXTERMINATOR to take the battle to SPACE FORCE"
+      "player": {
+        "base": 1,
+        "infantry": 6,
+        "tank": 5,
+        "cannon": 4,
+        "cruiser": 0
+      },
+      "enemy": {
+        "base": 1,
+        "infantry": 6,
+        "tank": 5,
+        "cannon": 4,
+        "cruiser": 0
+      },
+      "briefing": "RED LASER delivers the LASER EXTERMINATOR to take the battle to SPACE FORCE",
+      "_roster_as_written": [
+        "player: Base, 2xShadows, 2xHyenas",
+        "enemy: Base, Cosmic Cruiser"
+      ]
     },
     {
       "mission": "Race Against Time",
       "dateline": "Action Force Base, South America",
       "turns": 20,
-      "player": "Base, 5xShadows",
-      "enemy": "10xBase",
-      "briefing": "ACTION FORCE hold an agent who knows the location of their secret base. Find him before he is executed."
+      "player": {
+        "base": 1,
+        "infantry": 7,
+        "tank": 6,
+        "cannon": 5,
+        "cruiser": 0
+      },
+      "enemy": {
+        "base": 1,
+        "infantry": 7,
+        "tank": 6,
+        "cannon": 5,
+        "cruiser": 0
+      },
+      "briefing": "ACTION FORCE hold an agent who knows the location of their secret base. Find him before he is executed.",
+      "_roster_as_written": [
+        "player: Base, 5xShadows",
+        "enemy: 10xBase"
+      ]
     },
     {
       "mission": "Ground Zero",
       "dateline": "Action Force Base, Secret Location",
       "turns": 20,
-      "player": "Base, 2xShadows, 2xHyenas",
-      "enemy": "Base, Cosmic Cruiser",
-      "briefing": "The final confrontation with ACTION FORCE."
+      "player": {
+        "base": 1,
+        "infantry": 7,
+        "tank": 6,
+        "cannon": 5,
+        "cruiser": 0
+      },
+      "enemy": {
+        "base": 1,
+        "infantry": 7,
+        "tank": 6,
+        "cannon": 5,
+        "cruiser": 0
+      },
+      "briefing": "The final confrontation with ACTION FORCE.",
+      "_roster_as_written": [
+        "player: Base, 2xShadows, 2xHyenas",
+        "enemy: Base, Cosmic Cruiser"
+      ]
     }
   ]
 }

@@ -1317,6 +1317,39 @@ The screen caps a single briefing at ~434 characters, which bites first.
   cutscene's run scores the picture and the brief's run scores the words.
 - ~~`level_score()` widens~~  **Settled: no multiplier, so nothing widens.**
 
+### P13 — populate_map() reads the rosters  (not started)
+
+The data moved first: `docs/levels.json` now carries a `player` and an
+`enemy` roster per level, `tools/mklevels.py` validates them, and
+`docs/DESIGN.md` section Army composition describes them as the source
+of truth.  Nothing reads them yet -- `populate_map()` still uses
+`UNITS_AT_LEVEL` -- so the campaign is unchanged.
+
+#### The work
+
+1. `mklevels.py` emits the rosters into `include/levels.h`: two tables of
+   `UNIT_TYPES` bytes per level.  10 x 2 x 5 = **100 bytes**, which the
+   855 free will take.
+2. `populate_map()` indexes them instead of calling `UNITS_AT_LEVEL`.
+3. Delete `UNITS_*_START`, `UNITS_*_PER_LEVEL` and `UNITS_AT_LEVEL` --
+   but NOT `UNITS_PER_SIDE_MAX` until something else sizes the arrays.
+
+#### The one that will bite
+
+**`UNITS_PER_SIDE_MAX` sizes the runtime unit arrays**, and it is derived
+from the formula.  Once the rosters are free to say anything, a level
+that exceeds it overruns those arrays with no warning at all.  So:
+
+- `mklevels.py` must emit the largest roster it saw and `render.c` must
+  `#error` if it exceeds `UNITS_PER_SIDE_MAX` -- the same shape as the
+  three sheet guards.
+- The largest today is **19 a side**, which is what the formula produced
+  at level 9.
+
+Both sides may now differ, which the old design forbade.  The AI reads
+`unit_count` and the occupancy grid rather than any assumption of
+symmetry, so nothing there should care -- worth a look, not a rewrite.
+
 ### P6 — Balance and polish
 
 Weights, a level indicator in the status panel, and whatever the ten maps

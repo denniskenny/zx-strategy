@@ -12,7 +12,7 @@
    constant, costing one `ld hl,nn` at the call site -- the same
    as the plain array it replaced. */
 #define TEXT_COUNT      66
-#define TEXT_POOL_SIZE  947
+#define TEXT_POOL_SIZE  948
 
 void text_init(void);
 
@@ -22,65 +22,65 @@ void text_init(void);
 #define TXT_BLANK                          ((const char *)(MEM_TEXTPOOL + 35))   /* '' */
 #define TXT_QAOP_PICK_SPACE_FIRE_ENTER_B   ((const char *)(MEM_TEXTPOOL + 36))   /* 'QAOP PICK  SPACE FIRE ENTER BACK' */
 #define TXT_UNIT                           ((const char *)(MEM_TEXTPOOL + 69))   /* 'UNIT   :' */
-#define TXT_BLANK_2                        ((const char *)(MEM_TEXTPOOL + 78))   /* '-                      ' */
-#define TXT_TURN                           ((const char *)(MEM_TEXTPOOL + 102))   /* 'TURN   :' */
-#define TXT_TERRAIN                        ((const char *)(MEM_TEXTPOOL + 111))   /* 'TERRAIN:' */
-#define TXT_COVER                          ((const char *)(MEM_TEXTPOOL + 120))   /* 'COVER' */
-#define TXT_CAMPAIGN_MAP                   ((const char *)(MEM_TEXTPOOL + 126))   /* 'CAMPAIGN MAP' */
-#define TXT_QAOP_LOOK_AROUND_ENTER_BACK    ((const char *)(MEM_TEXTPOOL + 139))   /* 'QAOP LOOK  ENTER/M BACK' */
-#define TXT_CAMPAIGN_COMPLETE              ((const char *)(MEM_TEXTPOOL + 163))   /* 'CAMPAIGN COMPLETE' */
-#define TXT_EVERY_LEVEL_TAKEN              ((const char *)(MEM_TEXTPOOL + 181))   /* 'EVERY LEVEL TAKEN' */
-#define TXT_LEVELS_WON                     ((const char *)(MEM_TEXTPOOL + 199))   /* 'LEVELS WON     :' */
-#define TXT_FINAL_SCORE                    ((const char *)(MEM_TEXTPOOL + 216))   /* 'FINAL SCORE    :' */
-#define TXT_SPACE_FIRE_1                   ((const char *)(MEM_TEXTPOOL + 233))   /* 'SPACE / FIRE 1' */
-#define TXT_ZX_STRATEGY                    ((const char *)(MEM_TEXTPOOL + 248))   /* 'Baron Ironblood - Origins' */
-#define TXT_MACHINE                        ((const char *)(MEM_TEXTPOOL + 274))   /* 'MACHINE :' */
-#define TXT_T_128K                         ((const char *)(MEM_TEXTPOOL + 284))   /* '128K' */
-#define TXT_T_48K                          ((const char *)(MEM_TEXTPOOL + 289))   /* '48K' */
-#define TXT_KEMPSTON                       ((const char *)(MEM_TEXTPOOL + 293))   /* 'KEMPSTON:' */
-#define TXT_YES                            ((const char *)(MEM_TEXTPOOL + 303))   /* 'YES' */
-#define TXT_NO                             ((const char *)(MEM_TEXTPOOL + 307))   /* 'NO' */
-#define TXT_VSYNC                          ((const char *)(MEM_TEXTPOOL + 310))   /* 'VSYNC   :' */
-#define TXT_T_40FF                         ((const char *)(MEM_TEXTPOOL + 320))   /* '40FF' */
-#define TXT_T_0FFD                         ((const char *)(MEM_TEXTPOOL + 325))   /* '0FFD' */
-#define TXT_FLOATING_BUS_0X                ((const char *)(MEM_TEXTPOOL + 330))   /* 'FLOATING BUS ' */
-#define TXT_HALT_FALLBACK                  ((const char *)(MEM_TEXTPOOL + 344))   /* 'HALT FALLBACK  ' */
-#define TXT_SCREEN                         ((const char *)(MEM_TEXTPOOL + 360))   /* 'SCREEN  :' */
-#define TXT_DOUBLE                         ((const char *)(MEM_TEXTPOOL + 370))   /* 'DOUBLE' */
-#define TXT_SINGLE                         ((const char *)(MEM_TEXTPOOL + 377))   /* 'SINGLE' */
-#define TXT_SPACE_FIRE_1_START             ((const char *)(MEM_TEXTPOOL + 384))   /* 'SPACE / FIRE 1   START' */
-#define TXT_QAOP_KEMPSTON_MOVE             ((const char *)(MEM_TEXTPOOL + 407))   /* 'QAOP / KEMPSTON  MOVE' */
-#define TXT_SPACE_FIRE_1_DO                ((const char *)(MEM_TEXTPOOL + 429))   /* 'SPACE / FIRE 1   DO' */
-#define TXT_ENTER_FIRE_2_BACK              ((const char *)(MEM_TEXTPOOL + 449))   /* 'ENTER / FIRE 2   BACK' */
-#define TXT_VICTORY                        ((const char *)(MEM_TEXTPOOL + 471))   /* 'VICTORY' */
-#define TXT_DEFEAT                         ((const char *)(MEM_TEXTPOOL + 479))   /* 'DEFEAT' */
-#define TXT_LEVEL_TAKEN                    ((const char *)(MEM_TEXTPOOL + 486))   /* 'LEVEL TAKEN    :' */
-#define TXT_LEVEL_LOST                     ((const char *)(MEM_TEXTPOOL + 503))   /* 'LEVEL LOST     :' */
-#define TXT_TURNS_TAKEN                    ((const char *)(MEM_TEXTPOOL + 520))   /* 'TURNS TAKEN    :' */
-#define TXT_LEVEL_SCORE                    ((const char *)(MEM_TEXTPOOL + 537))   /* 'LEVEL SCORE    :' */
-#define TXT_TOTAL_SCORE                    ((const char *)(MEM_TEXTPOOL + 554))   /* 'TOTAL SCORE    :' */
-#define TXT_SPACE_FOR_THE_NEXT_LEVEL       ((const char *)(MEM_TEXTPOOL + 571))   /* 'SPACE FOR THE NEXT LEVEL' */
-#define TXT_SPACE_TO_RETURN_TO_THE_TITLE   ((const char *)(MEM_TEXTPOOL + 596))   /* 'SPACE TO RETURN TO THE TITLE' */
-#define TXT_UNIT_INFANTRY                  ((const char *)(MEM_TEXTPOOL + 625))   /* 'Red Shadow' */
-#define TXT_UNIT_TANK                      ((const char *)(MEM_TEXTPOOL + 636))   /* 'Red Hyena ' */
-#define TXT_UNIT_CANNON                    ((const char *)(MEM_TEXTPOOL + 647))   /* 'Xtrminator' */
-#define TXT_UNIT_BASE                      ((const char *)(MEM_TEXTPOOL + 658))   /* 'Red Base  ' */
-#define TXT_UNIT_CRUISER                   ((const char *)(MEM_TEXTPOOL + 669))   /* 'Cruiser   ' */
-#define TXT_UNIT_E_INFANTRY                ((const char *)(MEM_TEXTPOOL + 680))   /* 'Z-Infantry' */
-#define TXT_UNIT_E_TANK                    ((const char *)(MEM_TEXTPOOL + 691))   /* 'Z-Tank    ' */
-#define TXT_UNIT_E_CANNON                  ((const char *)(MEM_TEXTPOOL + 702))   /* 'Whirlwind ' */
-#define TXT_UNIT_E_BASE                    ((const char *)(MEM_TEXTPOOL + 713))   /* 'Z-Base    ' */
-#define TXT_UNIT_E_CRUISER                 ((const char *)(MEM_TEXTPOOL + 724))   /* 'Cosmic Cru' */
-#define TXT_PLAY_HINT                      ((const char *)(MEM_TEXTPOOL + 735))   /* 'SPACE ORDER  ENTER BACK  M MAP' */
-#define TXT_MISSION_1                      ((const char *)(MEM_TEXTPOOL + 766))   /* "'Our Blood is of Iron'" */
-#define TXT_MISSION_2                      ((const char *)(MEM_TEXTPOOL + 789))   /* 'Hasta la victoria siempre!' */
-#define TXT_MISSION_3                      ((const char *)(MEM_TEXTPOOL + 816))   /* 'River Crossing' */
-#define TXT_MISSION_4                      ((const char *)(MEM_TEXTPOOL + 831))   /* 'Forest Ambush' */
-#define TXT_MISSION_5                      ((const char *)(MEM_TEXTPOOL + 845))   /* 'Mountain Pass' */
-#define TXT_MISSION_6                      ((const char *)(MEM_TEXTPOOL + 859))   /* 'Rebels approach the Capital!' */
-#define TXT_MISSION_7                      ((const char *)(MEM_TEXTPOOL + 888))   /* 'Space Force Attack' */
-#define TXT_MISSION_8                      ((const char *)(MEM_TEXTPOOL + 907))   /* 'Red Laser' */
-#define TXT_MISSION_9                      ((const char *)(MEM_TEXTPOOL + 917))   /* 'Race Against Time' */
-#define TXT_MISSION_10                     ((const char *)(MEM_TEXTPOOL + 935))   /* 'Ground Zero' */
+#define TXT_BLANK_2                        ((const char *)(MEM_TEXTPOOL + 78))   /* '-                       ' */
+#define TXT_TURN                           ((const char *)(MEM_TEXTPOOL + 103))   /* 'TURN   :' */
+#define TXT_TERRAIN                        ((const char *)(MEM_TEXTPOOL + 112))   /* 'TERRAIN:' */
+#define TXT_COVER                          ((const char *)(MEM_TEXTPOOL + 121))   /* 'COVER' */
+#define TXT_CAMPAIGN_MAP                   ((const char *)(MEM_TEXTPOOL + 127))   /* 'CAMPAIGN MAP' */
+#define TXT_QAOP_LOOK_AROUND_ENTER_BACK    ((const char *)(MEM_TEXTPOOL + 140))   /* 'QAOP LOOK  ENTER/M BACK' */
+#define TXT_CAMPAIGN_COMPLETE              ((const char *)(MEM_TEXTPOOL + 164))   /* 'CAMPAIGN COMPLETE' */
+#define TXT_EVERY_LEVEL_TAKEN              ((const char *)(MEM_TEXTPOOL + 182))   /* 'EVERY LEVEL TAKEN' */
+#define TXT_LEVELS_WON                     ((const char *)(MEM_TEXTPOOL + 200))   /* 'LEVELS WON     :' */
+#define TXT_FINAL_SCORE                    ((const char *)(MEM_TEXTPOOL + 217))   /* 'FINAL SCORE    :' */
+#define TXT_SPACE_FIRE_1                   ((const char *)(MEM_TEXTPOOL + 234))   /* 'SPACE / FIRE 1' */
+#define TXT_ZX_STRATEGY                    ((const char *)(MEM_TEXTPOOL + 249))   /* 'Baron Ironblood - Origins' */
+#define TXT_MACHINE                        ((const char *)(MEM_TEXTPOOL + 275))   /* 'MACHINE :' */
+#define TXT_T_128K                         ((const char *)(MEM_TEXTPOOL + 285))   /* '128K' */
+#define TXT_T_48K                          ((const char *)(MEM_TEXTPOOL + 290))   /* '48K' */
+#define TXT_KEMPSTON                       ((const char *)(MEM_TEXTPOOL + 294))   /* 'KEMPSTON:' */
+#define TXT_YES                            ((const char *)(MEM_TEXTPOOL + 304))   /* 'YES' */
+#define TXT_NO                             ((const char *)(MEM_TEXTPOOL + 308))   /* 'NO' */
+#define TXT_VSYNC                          ((const char *)(MEM_TEXTPOOL + 311))   /* 'VSYNC   :' */
+#define TXT_T_40FF                         ((const char *)(MEM_TEXTPOOL + 321))   /* '40FF' */
+#define TXT_T_0FFD                         ((const char *)(MEM_TEXTPOOL + 326))   /* '0FFD' */
+#define TXT_FLOATING_BUS_0X                ((const char *)(MEM_TEXTPOOL + 331))   /* 'FLOATING BUS ' */
+#define TXT_HALT_FALLBACK                  ((const char *)(MEM_TEXTPOOL + 345))   /* 'HALT FALLBACK  ' */
+#define TXT_SCREEN                         ((const char *)(MEM_TEXTPOOL + 361))   /* 'SCREEN  :' */
+#define TXT_DOUBLE                         ((const char *)(MEM_TEXTPOOL + 371))   /* 'DOUBLE' */
+#define TXT_SINGLE                         ((const char *)(MEM_TEXTPOOL + 378))   /* 'SINGLE' */
+#define TXT_SPACE_FIRE_1_START             ((const char *)(MEM_TEXTPOOL + 385))   /* 'SPACE / FIRE 1   START' */
+#define TXT_QAOP_KEMPSTON_MOVE             ((const char *)(MEM_TEXTPOOL + 408))   /* 'QAOP / KEMPSTON  MOVE' */
+#define TXT_SPACE_FIRE_1_DO                ((const char *)(MEM_TEXTPOOL + 430))   /* 'SPACE / FIRE 1   DO' */
+#define TXT_ENTER_FIRE_2_BACK              ((const char *)(MEM_TEXTPOOL + 450))   /* 'ENTER / FIRE 2   BACK' */
+#define TXT_VICTORY                        ((const char *)(MEM_TEXTPOOL + 472))   /* 'VICTORY' */
+#define TXT_DEFEAT                         ((const char *)(MEM_TEXTPOOL + 480))   /* 'DEFEAT' */
+#define TXT_LEVEL_TAKEN                    ((const char *)(MEM_TEXTPOOL + 487))   /* 'LEVEL TAKEN    :' */
+#define TXT_LEVEL_LOST                     ((const char *)(MEM_TEXTPOOL + 504))   /* 'LEVEL LOST     :' */
+#define TXT_TURNS_TAKEN                    ((const char *)(MEM_TEXTPOOL + 521))   /* 'TURNS TAKEN    :' */
+#define TXT_LEVEL_SCORE                    ((const char *)(MEM_TEXTPOOL + 538))   /* 'LEVEL SCORE    :' */
+#define TXT_TOTAL_SCORE                    ((const char *)(MEM_TEXTPOOL + 555))   /* 'TOTAL SCORE    :' */
+#define TXT_SPACE_FOR_THE_NEXT_LEVEL       ((const char *)(MEM_TEXTPOOL + 572))   /* 'SPACE FOR THE NEXT LEVEL' */
+#define TXT_SPACE_TO_RETURN_TO_THE_TITLE   ((const char *)(MEM_TEXTPOOL + 597))   /* 'SPACE TO RETURN TO THE TITLE' */
+#define TXT_UNIT_INFANTRY                  ((const char *)(MEM_TEXTPOOL + 626))   /* 'Red Shadow' */
+#define TXT_UNIT_TANK                      ((const char *)(MEM_TEXTPOOL + 637))   /* 'Red Hyena ' */
+#define TXT_UNIT_CANNON                    ((const char *)(MEM_TEXTPOOL + 648))   /* 'Xtrminator' */
+#define TXT_UNIT_BASE                      ((const char *)(MEM_TEXTPOOL + 659))   /* 'Red Base  ' */
+#define TXT_UNIT_CRUISER                   ((const char *)(MEM_TEXTPOOL + 670))   /* 'Cruiser   ' */
+#define TXT_UNIT_E_INFANTRY                ((const char *)(MEM_TEXTPOOL + 681))   /* 'Z-Infantry' */
+#define TXT_UNIT_E_TANK                    ((const char *)(MEM_TEXTPOOL + 692))   /* 'Z-Tank    ' */
+#define TXT_UNIT_E_CANNON                  ((const char *)(MEM_TEXTPOOL + 703))   /* 'Whirlwind ' */
+#define TXT_UNIT_E_BASE                    ((const char *)(MEM_TEXTPOOL + 714))   /* 'Z-Base    ' */
+#define TXT_UNIT_E_CRUISER                 ((const char *)(MEM_TEXTPOOL + 725))   /* 'Cosmic Cru' */
+#define TXT_PLAY_HINT                      ((const char *)(MEM_TEXTPOOL + 736))   /* 'SPACE ORDER  ENTER BACK  M MAP' */
+#define TXT_MISSION_1                      ((const char *)(MEM_TEXTPOOL + 767))   /* "'Our Blood is of Iron'" */
+#define TXT_MISSION_2                      ((const char *)(MEM_TEXTPOOL + 790))   /* 'Hasta la victoria siempre!' */
+#define TXT_MISSION_3                      ((const char *)(MEM_TEXTPOOL + 817))   /* 'River Crossing' */
+#define TXT_MISSION_4                      ((const char *)(MEM_TEXTPOOL + 832))   /* 'Forest Ambush' */
+#define TXT_MISSION_5                      ((const char *)(MEM_TEXTPOOL + 846))   /* 'Mountain Pass' */
+#define TXT_MISSION_6                      ((const char *)(MEM_TEXTPOOL + 860))   /* 'Rebels approach the Capital!' */
+#define TXT_MISSION_7                      ((const char *)(MEM_TEXTPOOL + 889))   /* 'Space Force Attack' */
+#define TXT_MISSION_8                      ((const char *)(MEM_TEXTPOOL + 908))   /* 'Red Laser' */
+#define TXT_MISSION_9                      ((const char *)(MEM_TEXTPOOL + 918))   /* 'Race Against Time' */
+#define TXT_MISSION_10                     ((const char *)(MEM_TEXTPOOL + 936))   /* 'Ground Zero' */
 
 #endif /* _STRINGS_H_ */

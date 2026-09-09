@@ -94,15 +94,66 @@ rather than that anybody retypes it into a header.
 
 The global starting values for each unit type are defined in `config/game_config.h`.
 
-A populate_map() function creates a friendly base and an enemy base at opposite corners of the map. It takes the level as a parameter, reads that level's roster from `config/game_config.h`, and places the created units within N tiles of the base (N = `UNITS_PLACE_RADIUS`, currently 4) but not on impassable tiles.
+A populate_map() function creates a friendly base and an enemy base at opposite corners of the map. It takes the level as a parameter, reads that level's roster from **`docs/levels.json`**, and places the created units within N tiles of the base (N = `UNITS_PLACE_RADIUS`, currently 4) but not on impassable tiles.
 
-That block does not always hold enough land: level 8's enemy corner is most of a lake, leaving 10 free cells for a 15-unit roster. The overflow is then placed on the nearest free land outward from the base rather than dropped, because **both sides always field the same army** — the map is meant to decide the advantage, not the roster. A corner with no land at all is impossible, since the converter already requires both corners passable.
+That block does not always hold enough land: level 8's enemy corner is most of a lake, leaving 10 free cells for a 15-unit roster. The overflow is then placed on the nearest free land outward from the base rather than dropped. A corner with no land at all is impossible, since the converter already requires both corners passable.
 
 Because the bases sit in opposite corners, every map has to keep those corners passable and joined by a land path — otherwise a base is unreachable and the level cannot be won. The map converter checks both.
 
 The initial local view will be centered on the player's base.
 
-Each subsequent odd-numbered level will have an additional unit of each type.
+### Army composition
+
+**The roster is written down per level, not calculated.** `docs/levels.json`
+gives each level a `player` and an `enemy` object of counts:
+
+```json
+"player": { "base": 1, "infantry": 6, "tank": 5, "cannon": 4, "cruiser": 0 },
+"enemy":  { "base": 1, "infantry": 6, "tank": 5, "cannon": 4, "cruiser": 1 }
+```
+
+A type left out is zero. `tools/mklevels.py` validates every name against the
+`UNIT_*` ids and rejects prose, an unknown unit, or a side without exactly one
+base — the base is the win condition, so a level with two or none is not a
+level.
+
+**The sides no longer have to match.** The old rule was that both fielded the
+same army and the map decided the advantage; that was the right rule while one
+formula generated both, and it made the story impossible to tell. SPACE FORCE
+gets the Cosmic Cruiser on levels 7, 8 and 10 because the briefing says so, and
+the player never gets one.
+
+#### What replaced the formula
+
+Until now both armies came from `config/game_config.h`:
+
+```c
+#define UNITS_AT_LEVEL(start, gain, level) \
+    ((start) + (gain) * (((level) - 1) / 2))
+```
+
+— three infantry, two tanks, one cannon and a base at level 1, with one more of
+each on every odd-numbered level. Ten levels of it:
+
+| level | base | infantry | tank | cannon | total |
+|---|---|---|---|---|---|
+| 1–2 | 1 | 3 | 2 | 1 | 7 |
+| 3–4 | 1 | 4 | 3 | 2 | 10 |
+| 5–6 | 1 | 5 | 4 | 3 | 13 |
+| 7–8 | 1 | 6 | 5 | 4 | 16 |
+| 9–10 | 1 | 7 | 6 | 5 | 19 |
+
+**`levels.json` currently holds exactly those numbers**, so the campaign is
+unchanged until someone edits them — which is the point of writing them down
+first. A formula is a good way to fill ten levels quickly and a bad way to
+design them: it cannot say "this one is a fighting retreat with four infantry
+and no armour", and every level it produces is the same shape as its
+neighbours.
+
+`UNITS_AT_LEVEL` and the `UNITS_*_START` / `_PER_LEVEL` constants stay in
+`config/game_config.h` until `populate_map()` reads the rosters; `UNITS_PER_SIDE_MAX`
+still sizes the runtime arrays from them, and that is the one number the JSON
+must not exceed.
 
 ### Action and Cancel
 

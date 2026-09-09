@@ -655,21 +655,30 @@ static void draw_unit_line(uint8_t cell)
     uint8_t u = occupancy[cell];
     uint8_t t;
 
-    print_at(1, ROW_UNIT, TXT_UNIT);
+    print_at(0, ROW_UNIT, TXT_UNIT);
 
     if (u == NO_UNIT) {
-        /* Blank the WHOLE field, columns 10..31, not just the first
+        /* Blank the WHOLE field, columns 8..31, not just the first
            character.  A bare "-" left the tail of the previous unit
            behind: stepping the cursor off a TANK showed "-ANK", and off
            INFANTRY "-NFANTRY".  The comment above this function already
            promised it blanked the field; only now does it. */
-        print_at(9, ROW_UNIT, TXT_BLANK_2);
+        print_at(8, ROW_UNIT, TXT_BLANK_2);
         set_attr_rect(0, ROW_UNIT, 32, 1, ATTR_TEXT);
         return;
     }
 
     t = u_type[u];
-    print_at(9, ROW_UNIT, unit_names[(u_flags[u] & U_SIDE) ? 1 : 0][t]);
+    /* The name field is TEN columns, 8..17, and the stats start at 19 so
+       a full-width name is not touched by its own health:
+
+           UNIT   :Red Shadow 010/010 R3 M3
+           0123456789...                 ^^ column 31
+
+       That last column exists because the overlay moved to column 0.
+       Before that the row ran 1..31 with the stats hard against the
+       name, and there was nowhere to put the space. */
+    print_at(8, ROW_UNIT, unit_names[(u_flags[u] & U_SIDE) ? 1 : 0][t]);
     print_num(19, ROW_UNIT, u_hp[u], 3);
     print_char(22, ROW_UNIT, '/');
     print_num(23, ROW_UNIT, unit_health[t], 3);
@@ -694,19 +703,19 @@ void draw_status(const char *label, uint8_t x, uint8_t y)
     draw_unit_line(cell);
 
     /* TURNS LEFT, not turns taken -- see turns_left(). */
-    print_at(1, ROW_TURN, TXT_TURN);
-    print_num(10, ROW_TURN, turns_left(), 3);
+    print_at(0, ROW_TURN, TXT_TURN);
+    print_num(9, ROW_TURN, turns_left(), 3);
 
-    print_at(1, ROW_COORD, label);
-    print_num(10, ROW_COORD, x, 2);
-    print_char(12, ROW_COORD, ',');
-    print_num(13, ROW_COORD, y, 2);
+    print_at(0, ROW_COORD, label);
+    print_num(9, ROW_COORD, x, 2);
+    print_char(11, ROW_COORD, ',');
+    print_num(12, ROW_COORD, y, 2);
 
-    print_at(1, ROW_TERRAIN, TXT_TERRAIN);
-    print_at(10, ROW_TERRAIN, level_1_terrain_names[t]);
-    print_at(19, ROW_TERRAIN, TXT_COVER);
-    print_num(25, ROW_TERRAIN, terrain_cover[t], 2);
-    print_char(27, ROW_TERRAIN, '%');
+    print_at(0, ROW_TERRAIN, TXT_TERRAIN);
+    print_at(9, ROW_TERRAIN, level_1_terrain_names[t]);
+    print_at(18, ROW_TERRAIN, TXT_COVER);
+    print_num(24, ROW_TERRAIN, terrain_cover[t], 2);
+    print_char(26, ROW_TERRAIN, '%');
 
     set_attr_rect(0, ROW_TURN, 32, PANEL_ROWS - 1, ATTR_TEXT);
 }
@@ -2158,6 +2167,8 @@ static void animate(void)
                                    a few cells a frame by anim_paint() */
 
 #if DEBUG_DIAG
+    uint8_t i;      /* only this build walks cells rather than units */
+
     /* DIAGNOSTIC: repaint the WHOLE view, not just the occupied cells.
      *
      * A ghost sprite is a cell holding a picture nothing believes is
@@ -2271,9 +2282,14 @@ void render_busy(const char *msg)
    next one would erase all of the last — up to thirty bytes of spaces
    each, in a build that has to fit in sixteen kilobytes.  The banner and
    the legend differ only in the colour they wash the row with. */
+/* COLUMN 0, like the panel above it.  The overlay used to start at 1 and
+   leave the leftmost column of every row empty, which cost a column on
+   the widest thing here -- the unit line ran 1..31 with nothing to
+   spare.  There is no reason for the gap: the Spectrum shows all 32
+   columns, and the border is outside them. */
 static void hint_row(const char *s, uint8_t attr)
 {
-    uint8_t col = 1;
+    uint8_t col = 0;
 
     while (*s && col < 32) print_char(col++, ROW_HINT, *s++);
     while (col < 32)       print_char(col++, ROW_HINT, ' ');

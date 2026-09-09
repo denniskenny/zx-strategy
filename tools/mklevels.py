@@ -101,6 +101,11 @@ def printable(s, where):
 
 KNOWN = ('mission', 'dateline', 'turns', 'player', 'enemy', 'briefing')
 
+# The unit types a roster may name, in UNIT_* id order.  Must match
+# config/game_config.h -- a name here that the game does not have would
+# put units on the board that cannot be drawn.
+UNIT_NAMES = ('infantry', 'tank', 'cannon', 'base', 'cruiser')
+
 
 def parse(path):
     """[{n, mission, dateline, turns, player, enemy, briefing}] in order."""
@@ -136,6 +141,33 @@ def parse(path):
                 sys.exit('mklevels: level %d has no "%s"' % (i, key))
             return default
 
+        # THE ROSTERS.  Counts per unit type, replacing the formula in
+        # config/game_config.h -- see docs/DESIGN.md section Army
+        # composition.  Validated here and not yet emitted: populate_map()
+        # still uses the formula, and this phase is the data moving first.
+        rosters = {}
+        for side in ('player', 'enemy'):
+            r = lv.get(side, {})
+            if isinstance(r, str):
+                sys.exit('mklevels: level %d "%s" is still prose (%r). '
+                         'Rosters are counts now: {"infantry": 3, ...}'
+                         % (i, side, r))
+            if not isinstance(r, dict):
+                sys.exit('mklevels: level %d "%s" must be an object' % (i, side))
+            for k, v in r.items():
+                if k not in UNIT_NAMES:
+                    sys.exit('mklevels: level %d "%s" names an unknown unit '
+                             '%r (known: %s)'
+                             % (i, side, k, ', '.join(UNIT_NAMES)))
+                if not isinstance(v, int) or v < 0:
+                    sys.exit('mklevels: level %d "%s" %s is %r, wanted a '
+                             'count' % (i, side, k, v))
+            if r.get('base', 0) != 1:
+                sys.exit('mklevels: level %d "%s" has %d bases -- the base '
+                         'is the win condition, so each side needs exactly '
+                         'one' % (i, side, r.get('base', 0)))
+            rosters[side] = {n: r.get(n, 0) for n in UNIT_NAMES}
+
         turns = lv.get('turns', default_turns)
         if not isinstance(turns, int) or turns < 1:
             sys.exit('mklevels: level %d has a bad "turns": %r' % (i, turns))
@@ -145,8 +177,8 @@ def parse(path):
             'mission': field('mission', NO_MISSION),
             'dateline': field('dateline', ''),
             'turns': turns,
-            'player': field('player', ''),
-            'enemy': field('enemy', ''),
+            'player': rosters['player'],
+            'enemy': rosters['enemy'],
             'briefing': field('briefing'),
         })
     if not out:
@@ -330,6 +362,10 @@ def main():
               % ', '.join('%r->%r' % (c, r) for c, r in seen))
 
     longest = max(len(x['briefing']) for x in lv)
+    biggest = max(sum(x[side].values()) for x in lv for side in ('player','enemy'))
+    print('mklevels: armies %d..%d a side, largest %d'
+          % (min(sum(x['player'].values()) for x in lv),
+             max(sum(x['player'].values()) for x in lv), biggest))
     print('mklevels: %d levels, turns %s;  briefings %d chars, block %d -> %d '
           'ZX0, round trip ok'
           % (len(lv), '/'.join(str(x['turns']) for x in lv),

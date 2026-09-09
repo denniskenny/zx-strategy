@@ -371,6 +371,28 @@ HEADERS = config/app_config.h config/game_config.h include/gfx.h include/input.h
 # --- Top-level targets ---
 all: $(APP).tap
 
+# EVERY BUILD CONFIGURATION MUST COMPILE.
+#
+# DEBUG_DIAG=1 was broken and nothing noticed: removing an "unreferenced
+# variable" warning from animate() deleted the loop counter its
+# diagnostic block uses.  Nothing in tests/ builds the variants, so a
+# switch nobody sets is a switch that quietly rots.
+#
+# Seconds to run, and worth doing before a push.
+.PHONY: buildmatrix
+buildmatrix:
+	@fail=; for cfg in "" "DEBUG_KEYS=0" "DEBUG_DIAG=1" "FONT=resident" \
+	            "FREEZE_ANIM=1" "DEBUG_KEYS=0 DEBUG_DIAG=1"; do \
+	    rm -f $(APP) $(APP).tap $(APP).map; \
+	    if $(MAKE) -s $$cfg $(APP).tap >/dev/null 2>&1; then \
+	        echo "  ok    make $$cfg"; \
+	    else \
+	        echo "  FAIL  make $$cfg"; fail=1; \
+	    fi; \
+	done; \
+	rm -f $(APP) $(APP).tap $(APP).map; \
+	test -z "$$fail"
+
 .PHONY: all assets run map probe dzx0check clean
 
 run: $(APP).tap
