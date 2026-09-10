@@ -153,7 +153,6 @@ static uint8_t scan_actions(void)
     return a;
 }
 
-#if DEBUG_STATE_WALK
 /* State walk: CAPS SHIFT + W wins the level, CAPS SHIFT + L loses it.
    Kept out of the action byte — every bit of it is taken.
 
@@ -162,7 +161,8 @@ static uint8_t scan_actions(void)
    brushes while reaching for Q/A/O/P, and either one ends the level
    instantly; nobody presses CAPS SHIFT and W together by accident.  The
    cost of having them always available is one extra port read per frame
-   and about a dozen bytes. */
+   and about 110 bytes.  They are not behind a flag: see the Skip keys
+   note in config/app_config.h for why they are permanent. */
 #define DBG_WIN     0x01
 #define DBG_LOSE    0x02
 
@@ -184,7 +184,6 @@ static void poll_debug(void)
     dbg_edge = (uint8_t)(stable & ~dbg_prev);
     dbg_prev = stable;
 }
-#endif
 
 /* An action counts only when the same bit is seen in two consecutive
    frames, then fires on its rising edge: held keys act once, and a
@@ -207,10 +206,8 @@ static void flush_input(void)
     last_acts = prev_stable = 0xFF;
     edge = 0;
     nav_delay = NAV_DELAY;
-#if DEBUG_STATE_WALK
     dbg_last = dbg_prev = 0xFF;
     dbg_edge = 0;
-#endif
 }
 
 /* True if any key on the whole keyboard, or the joystick, is down.
@@ -813,13 +810,13 @@ static void handle_input(void)
                 if (player_won) campaign_score += level_score();
                 set_state(ST_OVER);
             }
-#if DEBUG_STATE_WALK
-            /* Stand in for the win check until P4 gives us one. */
+            /* The skip keys, ALONGSIDE the real win check above rather
+               than instead of it: losing your base still ends the level
+               on its own. */
             if (dbg_edge & (DBG_WIN | DBG_LOSE)) {
                 player_won = (uint8_t)((dbg_edge & DBG_WIN) ? 1 : 0);
                 set_state(ST_OVER);
             }
-#endif
             break;
 
         case ST_MAP:
@@ -949,9 +946,7 @@ void game_run(void)
         update_state();
 
         poll_input();
-#if DEBUG_STATE_WALK
         poll_debug();
-#endif
 
         /* The border marks work the PLAYER asked for: selecting a unit,
            ordering a move, ending a turn, changing screen.  Gated on a

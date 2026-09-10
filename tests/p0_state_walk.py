@@ -1,7 +1,7 @@
 """P0 acceptance: walk the whole campaign, verify every level loads.
 
 Drives the built .tap through title -> play -> ST_OVER -> next level ->
-... -> ST_WON -> title using the DEBUG_STATE_WALK keys (W wins a level,
+... -> ST_WON -> title using the skip keys (CAPS SHIFT + W wins a level,
 L loses it), and checks terrain[] against the .tmx at levels 1, 5 and 10.
 
     make map                      # the state-walk keys are standard now
@@ -26,7 +26,7 @@ anything.
 clock otherwise.  No sleep is needed before starting — the script waits
 for the title screen to appear by itself.
 
-Retire this with DEBUG_STATE_WALK in P4.  See docs/PLAN.md.
+Retire this with permanent -- see the Skip keys note in config/app_config.h.
 
 --- On being fast ---------------------------------------------------
 

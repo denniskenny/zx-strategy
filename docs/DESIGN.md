@@ -807,61 +807,59 @@ make the enemy *passive* when raised, so an easier game is a bigger
 number, and neither makes it cleverer.
 
 ### Units
-Units have an attack range and damage value. They have a health value and can be killed. They also have a movement range
 
-**Health fits in a byte**, so no unit may have more than 255 HP. Damage is
-subtracted from it directly and 0 is death; nothing in the game needs a 16-bit
-quantity per unit.
+**This table is the source of truth.** `docs/levels.json` carries these numbers
+and `tools/mklevels.py` generates the config from them; nothing is retyped, and
+a change here is a change to the file the build reads.
 
-**One unit per tile.** A tile holding a unit is impassable to every other unit,
-friendly or enemy alike, so units block movement exactly as water does — the
-difference is that terrain is impassable for the whole level while a unit's
-tile frees up when it moves or dies. Movement range therefore has to be
-recalculated per unit, at the moment it is selected, not cached for the turn.
+| # | unit | health | damage | range | movement |
+|---|---|---|---|---|---|
+| 0 | infantry | 10 | 5 | 3 | 3 |
+| 1 | tank | 15 | 10 | 2 | 2 |
+| 2 | cannon | 20 | 8 | 4 | 0 |
+| 3 | base | 25 | 0 | 0 | 0 |
+| 4 | cruiser | 15 | 5 | 2 | 4 |
 
-Art: `assets/units_view.zxp` (32x32 sprites, `ST_PLAY`) and
-`assets/units_map.zxp` (16x16, `ST_MAP`), one sprite column per unit in the
-order below. Both sides share a sprite; the runtime picks the ink per side.
+The `#` column is load-bearing: ids **are** indices, into the stat rows above
+and into the sprite sheets. See § Sprite masks and animation.
 
-**What the sheet contributes to a unit's colour is its BRIGHT flags, and
-nothing else.** Ink and paper are not the artist's to choose — a unit is green
-or red according to whose it is — but *which character cells are lit* is, and
-that is the sprite's shading. The build strips ink and paper at conversion
-(`--attr-mode bright`) and the runtime ORs the side's colour over what is left.
+**Cannon and base have movement 0** — they are placed and never move, which is
+what makes the stalemate rule necessary. **Base has damage 0**: it is the win
+condition, not a combatant.
 
-One asymmetry falls out of the hardware: **enemy units are always flat.**
-Non-bright red on black is `0x02`, and `0x02 | 1` is the floating bus sync
-marker, so the enemy's ink has to carry BRIGHT already and the sheet cannot dim
-it. Shading therefore reads on the player's units only — which is no loss,
-since it is the player's units the player has to tell apart. A spent player
-unit is flattened to dim for the same reason it always was.
+#### Per-level overrides
 
-#### Infantry
+A level may change a unit's **movement, range or damage** for that level only.
+Health is deliberately not overridable — see below.
 
-Range : 3
-Damage : 10
-Health : 100
-Movement : 3
+```json
+"units": { "cruiser": { "movement": 6 }, "infantry": { "damage": 7 } }
+```
 
-#### Tank 
+The stats above are the defaults; an override replaces one number for one type
+for the duration of one level, and the defaults come back when it ends. This
+is how a level says "the cruisers are running hot today" without inventing a
+unit type, and how a scenario can be tuned without touching every other level.
 
-Range : 2
-Damage : 20
-Health : 150
-Movement : 2
+**Health is excluded on purpose.** It is written into `u_hp[]` when a unit is
+created, so changing it mid-campaign would mean deciding what happens to units
+already on the board — and a level that changes maximum health is really a
+different unit. The other three are read fresh from the table every time they
+are used, so an override is just a different number in the same place.
 
-#### Cannon
+#### What each unit is for
 
-Range : 4
-Damage : 30
-Health : 200
-Movement : 0
-
-#### Base 
-Range : 0
-Damage : 0
-Health : 255
-Movement : 0
+- **Infantry** — cheap reach. The longest legs but the weakest hit; it takes
+  ground rather than holding it.
+- **Tank** — the trade. Twice the infantry's damage and half its movement.
+- **Cannon** — the threat. Range 4 and movement 0: it cannot chase, so it
+  makes an area expensive instead.
+- **Base** — 25 health and no offence. Losing it loses the level.
+- **Cruiser** — movement 4, the cannon's *range*, and further than anything
+  else on the board moves; damage 5, the infantry's, the weakest there is.
+  Fast and thin: it arrives anywhere and cannot trade. **Movement 4 against a
+  cannon's range 4 is deliberate** — it is the only unit that can cross a
+  cannon's threatened ring in one move.
 
 ### Selection and highlighting
 

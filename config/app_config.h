@@ -43,22 +43,18 @@
  * holds a known NON-marker value.  Attr row 23, col 0. */
 #define VSYNC_PRELOAD_ADDR 0x5AE0
 
-/* --- Debug: P0 state walk ------------------------------------------
- * There is no combat yet, so nothing can win or lose a level and
- * ST_OVER / ST_WON are unreachable.  With this set, ST_PLAY takes two
- * extra keys — W wins the level, L loses it — so the whole campaign
- * loop (play → ST_OVER → next level → ... → ST_WON → title) can be
- * walked and tested before a single unit exists.
+/* --- Skip keys ------------------------------------------------------
+ * CAPS SHIFT + W wins the level, CAPS SHIFT + L loses it, in ST_PLAY.
  *
- * DELETE THIS, and the code it guards, in P4 when the real win check
- * over the loser's roster replaces it.  See docs/PLAN.md. */
-/* Overridable from the Makefile: the 128k target builds without it.
-   That build has a hard 16 KB ceiling and the debug keys are the one
-   thing in here that is not the game.  tests/p0_state_walk.py drives
-   the campaign through them, so the 48k build — the one the tests
-   use — keeps them. */
-#ifndef DEBUG_STATE_WALK
-#define DEBUG_STATE_WALK 1
-#endif
+ * PERMANENT, and no longer behind a flag.  They began as P0 scaffolding
+ * -- there was no combat, so nothing could win or lose and ST_OVER and
+ * ST_WON were unreachable -- but they earned a place: they are how the
+ * campaign loop is walked end to end, by tests/p0_state_walk.py and by
+ * anyone who needs to see level nine without playing eight.
+ *
+ * CAPS SHIFT is what makes them safe to ship.  Unshifted W and L sit
+ * next to the movement keys and either would end a level by accident;
+ * nobody presses CAPS SHIFT and W together without meaning it.  See
+ * poll_debug() in src/game.c. */
 
 #endif /* _APP_CONFIG_H_ */

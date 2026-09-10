@@ -31,25 +31,18 @@ APP        = zxstrategy
 ORG_DEF    = -zorg=32768
 USR_ADDR   = 32768
 
-# IN THE STANDARD BUILD.  The state-walk keys are CAPS SHIFT + W (win)
-# and CAPS SHIFT + L (lose); the shift is what makes them safe to ship,
-# because unshifted W and L sit next to the movement keys and either one
-# would end a level by accident.
-#
-# DEBUG_KEYS=0 still removes them, for a build that must not be able to
-# skip a level at all.
-DEBUG_KEYS ?= 1
 
-# The DIAGNOSTICS are a separate switch, and default OFF.
+# The RENDER DIAGNOSTICS: a whole-view repaint every animation beat and
+# a red border when the dirty list overflows.  Default OFF; never ship it.
 #
-# They used to share DEBUG_KEYS, which was harmless while that flag was
-# only ever set for a test run.  Putting the keys in the standard build
-# made it harmful: DEBUG_DIAG also makes animate() repaint the WHOLE view
-# every beat instead of the cells units occupy, which is a per-beat cost
-# no shipping build should carry.  tests/pixel_hash.py caught it -- the
-# extra repaint changed the screen.
+# It used to share a switch with the state-walk keys, which was harmless
+# only while that switch was set for test runs alone.  Once the keys went
+# into the standard build the diagnostics came with them, and
+# tests/pixel_hash.py caught the extra repaint.  A switch that gates two
+# unrelated things is one switch too few.
 #
-# A switch that gates two unrelated things is one switch too few.
+# The keys themselves have no switch any more -- see the Skip keys note
+# in config/app_config.h.
 DEBUG_DIAG ?= 0
 
 # FREEZE_ANIM=1 stops the at-rest sprite animation.  For tests/pixel_hash.py
@@ -60,7 +53,7 @@ DEBUG_DIAG ?= 0
 # neither test suite reads pixels, and a blit that writes the wrong pixels
 # with the right attributes passes both of them.
 FREEZE_ANIM ?= 0
-TARGET_DEF = -DDEBUG_STATE_WALK=$(DEBUG_KEYS) -DDEBUG_DIAG=$(DEBUG_DIAG) \
+TARGET_DEF = -DDEBUG_DIAG=$(DEBUG_DIAG) \
              -DFREEZE_ANIM=$(FREEZE_ANIM)
 
 # The state-walk debug keys cost 99 bytes and the shipping tap has 5
@@ -68,9 +61,9 @@ TARGET_DEF = -DDEBUG_STATE_WALK=$(DEBUG_KEYS) -DDEBUG_DIAG=$(DEBUG_DIAG) \
 # them explicitly:
 #     make map
 #
-# ONE CEILING FOR BOTH.  The debug tap used to be 94 bytes over 0xC000
-# and therefore 48K-only, so the limit was relaxed when DEBUG_KEYS was
-# set.  It is not over any more -- compressing the tunes and the strings
+# ONE CEILING FOR BOTH.  The debug tap was once 94 bytes over 0xC000 and
+# therefore 48K-only, so the limit used to be relaxed for it.  It is not
+# over any more -- compressing the tunes and the strings
 # freed more than it needs -- and a build that cannot run on a 128K is
 # not a build worth testing with.
 MEM_LIMIT  = 0xC000
@@ -381,8 +374,8 @@ all: $(APP).tap
 # Seconds to run, and worth doing before a push.
 .PHONY: buildmatrix
 buildmatrix:
-	@fail=; for cfg in "" "DEBUG_KEYS=0" "DEBUG_DIAG=1" "FONT=resident" \
-	            "FREEZE_ANIM=1" "DEBUG_KEYS=0 DEBUG_DIAG=1"; do \
+	@fail=; for cfg in "" "DEBUG_DIAG=1" "FONT=resident" "FONT=bank" \
+	            "FREEZE_ANIM=1" "DEBUG_DIAG=1 FREEZE_ANIM=1"; do \
 	    rm -f $(APP) $(APP).tap $(APP).map; \
 	    if $(MAKE) -s $$cfg $(APP).tap >/dev/null 2>&1; then \
 	        echo "  ok    make $$cfg"; \
@@ -404,7 +397,7 @@ run: $(APP).tap
 # above it would vanish.  See tools/checkmem.py.
 map:
 	$(MAKE) clean
-	$(MAKE) USER_CFLAGS="-m" DEBUG_KEYS=$(DEBUG_KEYS)
+	$(MAKE) USER_CFLAGS="-m"
 	$(PYTHON) tools/checkmem.py $(APP).map --limit $(MEM_LIMIT)
 	@$(PYTHON) tools/checkmem.py $(APP).map --free --limit $(MEM_LIMIT)
 

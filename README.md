@@ -28,9 +28,8 @@ make FONT=resident       swap the ROM font for assets/fonts/*.ch8 (+768 bytes)
 make DEBUG_DIAG=1        render diagnostics: a whole-view repaint every
                          animation beat, and a red border when the dirty
                          list overflows.  Never ship this.
-make DEBUG_KEYS=0        remove the state-walk keys (they are IN by default:
-                         CAPS SHIFT + W wins a level, CAPS SHIFT + L loses it)
 make FREEZE_ANIM=1       stop the sprite animation, for tests/pixel_hash.py
+make buildmatrix         check every build configuration still compiles
 make map                 rebuild with a link map, enforce the 0xC000
                          ceiling, and print free memory per region
 ```

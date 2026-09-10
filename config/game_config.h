@@ -224,15 +224,24 @@ static const uint8_t unit_level_gain[UNIT_TYPES] = {
  * which is what makes the stalemate rule in docs/DESIGN.md necessary. */
 /*                                       inf  tank  can  base  cruiser */
 static const uint8_t unit_range[UNIT_TYPES]    = {  3,  2,  4,  0,  2 };
-static const uint8_t unit_damage[UNIT_TYPES]   = {  5, 10,  8,  0, 10 };
+static const uint8_t unit_damage[UNIT_TYPES]   = {  5, 10,  8,  0,  5 };
 static const uint8_t unit_health[UNIT_TYPES]   = { 10, 15, 20, 25, 15 };
-static const uint8_t unit_movement[UNIT_TYPES] = {  3,  2,  0,  0,  2 };
+static const uint8_t unit_movement[UNIT_TYPES] = {  3,  2,  0,  0,  4 };
 
-/* THE CRUISER IS A TANK, statistically: same range, damage, health and
- * movement.  It is a different sprite and a different name, and the
- * balance pass is where it earns numbers of its own.  Copying a known
- * row is the safe way to add a type -- it cannot make the game harder
- * or easier by accident, only different to look at. */
+/* THE CRUISER IS NO LONGER A TANK.  It arrived as a copy of the tank's
+ * row, which was the safe way to add a type; it now has numbers of its
+ * own and they describe something different:
+ *
+ *     movement 4 -- the cannon's RANGE, and further than anything else
+ *                   on the board moves.  It is an orbital attack
+ *                   vehicle; reach is the whole point of it.
+ *     damage 5   -- the INFANTRY's, the weakest on the board.  Fast and
+ *                   thin: it arrives anywhere and cannot trade.
+ *     range 2, health 15 unchanged from the tank.
+ *
+ * Movement 4 against a cannon's range 4 is deliberate: the cruiser can
+ * cross a cannon's threatened ring in one move, which is the only unit
+ * that can. */
 
 /* The widest movement budget in the roster, which is the number of
  * buckets Dial's algorithm needs (docs/PLAN.md, "Movement range").

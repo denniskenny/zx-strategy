@@ -14,7 +14,7 @@ The game today places two armies on any of the ten maps, scrolls a pinned-cursor
 view over the board, lets the player pick a unit up, shows what it can reach,
 moves it, spends its action and ends the turn. It runs on 48K, 128K and +3.
 What it cannot do is shoot — so nothing can win except through the
-`DEBUG_STATE_WALK` keys, and the enemy never moves.
+skip keys (CAPS SHIFT + W / L), and the enemy never moves.
 
 Two smaller things remain open and neither blocks P4:
 
@@ -225,9 +225,10 @@ emulator with `.claude/skills/zesarux-test`.
 
 ### P0 — Walk every state (no rules)  ✓ done
 
-`ST_OVER` and `ST_WON` are implemented but unreachable. Add a temporary
-`DEBUG_STATE_WALK` in `config/app_config.h` that, in `ST_PLAY`, maps two keys
-to "win this level" and "lose this level" (set `player_won`, enter `ST_OVER`).
+`ST_OVER` and `ST_WON` are implemented but unreachable. Add keys in `ST_PLAY`
+for "win this level" and "lose this level" (set `player_won`, enter
+`ST_OVER`). Intended as temporary scaffolding; they turned out to be worth
+keeping and are now permanent -- CAPS SHIFT + W and CAPS SHIFT + L.
 
 - **Deliverable**: title → play → win → level 2 loads → … → level 10 → win →
   `ST_WON` → title, all reachable by hand.
@@ -372,9 +373,11 @@ roster → `ST_OVER` with `player_won` set for real.
 - the enemy scores whole exchanges (`gain - counter * AI_W_COUNTER`) rather
   than damage dealt, and refuses trades below `AI_MIN_TRADE`.
 
-The P0 debug keys are still there, behind `DEBUG_KEYS=1`, because
-`tests/p0_state_walk.py` needs them. They cost 99 bytes and are out of the
-shipping tap.
+The P0 skip keys are still there and are now **permanent and unconditional**:
+CAPS SHIFT + W wins the level, CAPS SHIFT + L loses it. They cost about 110
+bytes and ship. `DEBUG_KEYS` is gone -- there is no build without them. The
+shift is what makes that safe; see the Skip keys note in
+`config/app_config.h`.
 
 **Untested: balance.** Every rule works and both suites pass, but nobody
 has played ten levels through with the snowball and the counter-attacks in
@@ -1349,6 +1352,67 @@ that exceeds it overruns those arrays with no warning at all.  So:
 Both sides may now differ, which the old design forbade.  The AI reads
 `unit_count` and the occupancy grid rather than any assumption of
 symmetry, so nothing there should care -- worth a look, not a rewrite.
+
+### P14 — Unit stats from the book, and per-level overrides  (not started)
+
+Design: `docs/DESIGN.md` section Units.  The table there is the source of
+truth; this phase makes the build read it.
+
+#### Part 1 — the stats move to levels.json
+
+`unit_defaults` at the top of `docs/levels.json`, one row per type, and
+`mklevels.py` emits the four tables into `include/levels.h`.  The
+`unit_*[]` arrays leave `config/game_config.h`.
+
+Memory: neutral.  The same 20 bytes, generated instead of typed.
+
+#### Part 2 — the overrides
+
+**Mutability is FREE, which is what makes this cheap.**  Measured: making
+the four tables non-const changed the build by **0 bytes** -- 843 clear
+either way.  A tape-loaded target has no separate initialised-data copy,
+so a writable table costs exactly what a `const` one did.  Everything
+else follows from that:
+
+```
+20  a const master of the defaults, to restore from
+ 2  per override, packed
+~40 the apply loop
+```
+
+Roughly **80 bytes for ten overrides**, and nothing at the 15 call sites:
+they already index `unit_range[u_type[u]]`, and a writable array indexes
+the same way.
+
+The packing, two bytes an override:
+
+```
+byte 0   level 1..15 (4 bits) | unit type 0..7 (3 bits)
+byte 1   stat 0..2 (2 bits)   | value 0..63 (6 bits)
+0xFF     terminates the list
+```
+
+Six bits is ample: movement, range and damage are all under 20 and the
+screen fields are one digit.  Health is NOT overridable -- it is copied
+into `u_hp[]` at creation, so it is not a lookup and the same trick does
+not work.
+
+One flat list rather than a per-level index: most levels override
+nothing, so a linear scan of a short list beats a 10-entry offset table
+it would mostly read zeroes from.
+
+Where it runs: `load_map()`, which is cold and already in the contended
+window.  Restore the defaults, then scan and patch -- in that order, so
+an override never compounds across levels.
+
+#### The thing to get right
+
+**Restore before patch, every level, including the first.**  A stat left
+patched from the previous level is the kind of bug that looks like bad
+balance rather than a fault, and it would survive every test in tests/
+because they all start at level 1.  Worth a check in
+tests/p0_state_walk.py: walk to a level with an override, walk past it,
+and assert the default is back.
 
 ### P6 — Balance and polish
 
