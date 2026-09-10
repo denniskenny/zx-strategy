@@ -120,11 +120,6 @@ static uint8_t confirm;
 #define HINT_TURN "END TURN? Y=SPACE N=ENTER"
 #define HINT_QUIT "QUIT? Y=SPACE N=ENTER"
 
-/* The eight keyboard half-rows, in the usual port order. */
-static const uint16_t key_rows[8] = {
-    0xFEFE, 0xFDFE, 0xFBFE, 0xF7FE, 0xEFFE, 0xDFFE, 0xBFFE, 0x7FFE
-};
-
 /* --------------------------------------------------------------- input */
 
 static uint8_t scan_actions(void)

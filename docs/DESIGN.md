@@ -31,6 +31,37 @@ When all the player's units have been moved or used their action, the player can
 
 The enemy units will then take their turn. Enemy units are red, player units are green.
 
+### The status panel
+
+Four rows under the view, plus the hint row, and **every one starts at column
+0**. The overlay used to start at column 1 and leave the leftmost column of
+each row empty for no reason anyone recorded; the Spectrum displays all 32
+columns and the border is outside them.
+
+That column was not spare. The unit row is the widest thing on screen and now
+uses all 32:
+
+```
+UNIT   :Red Shadow 010/010 R3 M3
+0        8         19  23  27 30
+```
+
+- **columns 0-7** the label
+- **8-17** the unit name, exactly ten characters — `TXT_UNIT_*` are padded to
+  ten and `Z-INFANTRY` is what sets the width
+- **19-25** health and maximum, with the gap at 18 so a full-width name is not
+  touched by its own health
+- **27-31** range and movement
+
+**There is no slack left in this row.** An eleven-character name, or a
+two-digit range or movement, runs off the end. The generator's width check
+guards the whole screen at 32 columns but knows nothing about this row's
+internal budget.
+
+`TXT_BLANK_2` blanks the field when the cursor steps onto empty ground and is
+**twenty-four characters**, sized to cover columns 8-31 exactly. One short and
+the last column keeps whatever the previous unit left there.
+
 ### Turns and scoring
 
 **A level has a turn limit, and the counter runs DOWN.**
@@ -230,6 +261,20 @@ Three habits had accumulated, each defensible alone:
 The rule is worth more than any of them: **one gesture, one meaning,
 everywhere.** A player who learns two keys on the title screen has
 learned the whole game.
+
+### The skip keys
+
+**CAPS SHIFT + W wins the level. CAPS SHIFT + L loses it.** In `ST_PLAY`, on
+every build — there is no flag and no build without them.
+
+They began as scaffolding for walking the campaign before combat existed, and
+stayed because they are how anyone reaches level nine without playing eight,
+and how `tests/p0_state_walk.py` drives the whole loop.
+
+**The shift is the design.** Unshifted `W` and `L` sit beside the movement keys
+and either would end a level by accident; nobody presses CAPS SHIFT and W
+together without meaning to. They sit *alongside* the real win check rather
+than replacing it — losing your base still ends the level on its own.
 
 ### Cursor and movement
 
@@ -861,6 +906,28 @@ are used, so an override is just a different number in the same place.
   cannon's range 4 is deliberate** — it is the only unit that can cross a
   cannon's threatened ring in one move.
 
+### Fog of war
+
+**PLANNED, not built** — `docs/PLAN.md` P15. Level 4's briefing already
+promises it.
+
+**An enemy standing on FOREST is not drawn, and cannot be selected, inspected
+or shot at, until one of the player's units is orthogonally adjacent to it.**
+
+- Only **enemies** hide, and only on **forest**. The player's units are always
+  visible.
+- **The AI sees the whole board.** It is the side doing the hiding; a
+  symmetric handicap is a different feature and a much larger one.
+- Firing reveals: an enemy that attacks from hiding is spotted, whatever it is
+  standing on.
+- Spotted stays spotted for the rest of the level.
+
+The distinction the implementation turns on is worth stating here because it
+is a design idea, not a coding one: **`occupancy[]` is what is on the board;
+`visible_unit()` is what the player may know about.** Placement, movement,
+combat resolution and the AI read the first. Everything that draws, names,
+targets or selects reads the second.
+
 ### Selection and highlighting
 
 The interaction model. **Built**, and it replaces the `O`/`P` cycling
@@ -868,6 +935,14 @@ described under § Attack Range.
 
 "Clicking" here means putting the cursor on a cell and pressing `SPACE`;
 there is no mouse.
+
+**The selection wash covers the SPRITE HALF of the cell, not the whole cell.**
+A view cell is 32 pixel rows and a resting sprite occupies the lower 16, so the
+top half keeps the terrain's own colours. Washing the whole cell read as the
+*ground* being selected rather than the unit standing on it, and it hid the
+tile the player needs in order to judge the move — cover and movement cost are
+terrain properties. The target wash still takes the whole cell, deliberately:
+that marks a place to shoot *at*, which is a statement about the ground.
 
 **Selecting one of your units highlights two things at once:**
 
@@ -1177,8 +1252,15 @@ armies, occupancy, the movement costs — and rendering reads it. The rule that
 keeps the split honest runs both ways:
 
 - **Logic never draws.** It changes the board and says what is now stale:
-  `mark_dirty()`, `recolour_page()`, `start_page_flip()`. It does not know or
+  `mark_dirty()`, `recolour_page()`, `dirty_view()`. It does not know or
   care when that gets painted.
+- **The dirty list can OVERFLOW, and that is a designed path rather than a
+  failure.** `mark_dirty()` records up to `DIRTY_MAX` cells; past that
+  `dirty_all` is set and the next `render_tick()` repaints the whole view once
+  and forgets the individual marks. A list that overflowed cannot be paid off
+  cell by cell because it no longer knows which cells they were, and every
+  cell is covered by a full repaint by definition. Cheaper than growing the
+  list for a case that happens on a scroll.
 - **Rendering never changes the game.** `attr_view_cell()` decides a cell's
   colour by reading `occupancy`, `selected` and `cost`; it writes none of them.
 
@@ -1670,6 +1752,6 @@ stay pixel-blank** (the floating bus sync marker lives in its attributes), and
 no attribute anywhere may be `0x03`.
 
 Row 21 is also where a long operation puts its banner, so a state that runs one
-should keep its legend to a single named string it can restore — `PLAY_HINT` in
+should keep its legend to a single named string it can restore — `TXT_PLAY_HINT` in
 `src/game.c` is the example.
 

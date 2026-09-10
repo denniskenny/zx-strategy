@@ -1414,6 +1414,146 @@ because they all start at level 1.  Worth a check in
 tests/p0_state_walk.py: walk to a level with an override, walk past it,
 and assert the default is back.
 
+### Measured and REJECTED: a cell -> row lookup table
+
+`cell / GRID_COLS` appears 23 times across game.c, logic.c and render.c,
+and a Z80 has no divide instruction, so it looks like 23 library calls
+waiting to be replaced by a 98-byte table beside `col_of[]`.
+
+**Built it, measured it: 859 bytes free became 782.  Seventy-seven bytes
+WORSE.**
+
+SDCC compiles division by a CONSTANT into a multiply-and-shift, not a
+call -- so the 23 sites were already cheap and the table bought nothing
+but its own 98 bytes.  The signed division routine in the map is there
+for something else.
+
+Do not try this again without measuring first, and note the general
+point: "a Z80 has no divide instruction" is true and irrelevant when the
+divisor is a literal.
+
+### P15 — Fog of war  (not started)
+
+**An enemy unit standing on FOREST is not drawn, and cannot be selected,
+inspected or shot at, until one of the player's units is orthogonally
+adjacent to it.**  Level 4's briefing already promises this: "Beware the
+fog of war!  Enemies can be hidden in the forest."
+
+Only enemies hide, only on forest.  The player's own units are always
+visible, and the AI sees the whole board -- it is the side doing the
+hiding, and giving it a symmetric handicap is a different feature.
+
+#### What it costs
+
+Two measurements make this cheap:
+
+- **`u_flags` uses bits 0 and 1 of eight.**  `U_SEEN` is bit 2 and costs
+  **zero bytes** -- no new array, no new RAM.
+- **Of 24 reads of `occupancy[]`, only 8 can leak.**  The rest are
+  placement, movement bookkeeping, combat resolution and the AI's own
+  pathing, all of which must keep seeing everything.
+
+```
+  0   U_SEEN, a spare bit in u_flags
+ ~25  visible_unit(), the single rule
+ ~50  the reveal scan
+ ~40  eight call sites, an indexed load becoming a call
+=====
+ ~115 bytes, against 859 free
+```
+
+#### The one function
+
+```c
+/* What the PLAYER can see in this cell.  occupancy[] is what is
+   actually there; everything the player is shown goes through here. */
+uint8_t visible_unit(uint8_t cell);
+```
+
+Returns `NO_UNIT` for a hidden enemy.  The eight sites that switch to it:
+
+| file | function | why it would leak |
+|---|---|---|
+| render.c | `cell_layers` / `draw_cell` | draws the sprite |
+| render.c | `compose_view_attr` | colours the cell |
+| render.c | `draw_unit_line` | names it in the panel |
+| render.c | `attr_map_cell` | shows it on the overview |
+| render.c | `present_cell` | the cursor wash |
+| logic.c | `is_target` | offers it as a target |
+| logic.c | `attack` | lets it be shot |
+| game.c | `handle_input` | lets it be selected |
+
+`spawn`, `place_side`, `nearest_free_cell`, `populate_map`, `walk_to`,
+`move_selected_to`, `strike` and `ai_move` keep reading `occupancy[]`
+directly.  **The split is the design: what is there, against what the
+player can see.**
+
+#### When the scan runs
+
+`reveal_scan()` sets `U_SEEN` on any hidden enemy orthogonally adjacent
+to a player unit.  Four moments, and missing any one of them is a bug:
+
+1. **After `populate_map()`** -- a unit can spawn adjacent.
+2. **After a player unit finishes a walk** -- the obvious one.
+3. **After an enemy finishes a walk** -- an enemy that steps next to you
+   has revealed itself.
+4. **When a hidden enemy attacks** -- firing gives away the position,
+   whatever the terrain.
+
+Cost: for one moved unit, at most `unit_count` adjacency tests through
+`is_adjacent()`, which already exists.  Per move, not per frame.
+
+#### Two decisions to make before writing any of it
+
+**1.  Does a hidden unit BLOCK movement?**
+
+- *It blocks* (what the code does today, no change): the reach highlight
+  has a hole in it where the hidden unit stands, which is a visible tell.
+  Free.
+- *It does not block*: the reach looks clean, and walking onto the cell
+  has to become an ambush -- the walk stops short and the enemy appears.
+  Mid-walk interruption is real work in `walk_to()`, which is already
+  the most delicate function in the project.
+
+**Recommend it blocks for a first cut.**  Forest is high-cost terrain, so
+the hole is small and reads as "expensive" rather than "something is in
+there".  Revisit if it is obvious in play.
+
+**2.  Does a spotted unit stay spotted?**
+
+- *Sticky* (recommended): `U_SEEN` is set once and cleared only when the
+  level ends.  A unit that retreats into forest stays visible.  Simple,
+  and no recomputation.
+- *Live*: visibility is recomputed as the player moves away, so units
+  disappear again.  More realistic, more code, and it makes the board
+  flicker as the cursor's owner walks past.
+
+#### The trap
+
+**`U_SEEN` must be cleared by `populate_map()`, with the rest of
+`u_flags`.**  A flag surviving into the next level would show every
+forest enemy from the start and look exactly like the feature not
+working.  The same shape as the P14 override trap, and the same fix:
+clear on load, and have the test walk past a level to prove it.
+
+#### Tests
+
+`tests/fog.py`, or an addition to `p0_state_walk.py`:
+
+- an enemy on forest with no player adjacent is **not** in the composed
+  cell -- compare `occupancy[]` against what `cell_layers()` produced
+- the status panel does not name it while the cursor is on its cell
+- `is_target()` refuses it
+- move a player unit adjacent: it appears, and the panel names it
+- **walk to the next level and confirm the next forest enemy is hidden
+  again** -- the `U_SEEN` trap above
+
+#### If this is not wanted
+
+Change level 4's briefing.  "Forest Ambush" works as a name for terrain
+that gives heavy cover, and the feature costs ~115 bytes of 859 plus the
+two decisions above.
+
 ### P6 — Balance and polish
 
 Weights, a level indicator in the status panel, and whatever the ten maps
